@@ -1,0 +1,25 @@
+name: kgnn_mac
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - numpy
+  - scipy
+  - pandas
+  - matplotlib
+  - networkx
+  - tqdm
+  - jupyter
+  - scikit-learn
+  - pip
+  - pip:
+    - jax
+    - jaxlib
+    - jax-metal
+    - flax
+    - optax
+    - jaxopt
+    - jraph
+    - e3nn-jax
+    - wandb
