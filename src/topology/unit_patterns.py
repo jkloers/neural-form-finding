@@ -29,20 +29,20 @@ unit_RDQK_0 = UnitPattern(
     ],
 
     internal_hinges=[
-        {'face1': 0, 'face2': 1, 'vertex1': 1, 'vertex2': 4, 'rest_angle': np.pi/4, 'stiffness': 1.0},
-        {'face1': 1, 'face2': 2, 'vertex1': 7, 'vertex2': 8, 'rest_angle': np.pi/4, 'stiffness': 1.0},
-        {'face1': 2, 'face2': 3, 'vertex1': 11, 'vertex2': 14, 'rest_angle': np.pi/4, 'stiffness': 1.0},
-        {'face1': 3, 'face2': 0, 'vertex1': 13, 'vertex2': 2, 'rest_angle': np.pi/4, 'stiffness': 1.0}
+        {'face1': 0, 'face2': 1, 'vertex1': 1, 'vertex2': 4, 'vertex_adjacent1': 2, 'vertex_adjacent2': 7, 'angle': np.pi/4, 'stiffness': 1.0},
+        {'face1': 1, 'face2': 2, 'vertex1': 7, 'vertex2': 8, 'vertex_adjacent1': 6, 'vertex_adjacent2': 9, 'angle': np.pi/4, 'stiffness': 1.0},
+        {'face1': 2, 'face2': 3, 'vertex1': 11, 'vertex2': 14, 'vertex_adjacent1': 8, 'vertex_adjacent2': 13, 'angle': np.pi/4, 'stiffness': 1.0},
+        {'face1': 3, 'face2': 0, 'vertex1': 13, 'vertex2': 2, 'vertex_adjacent1': 12, 'vertex_adjacent2': 3, 'angle': np.pi/4, 'stiffness': 1.0}
 
     ],
 
     shift_vectors=None,
 
     external_hinges=[
-        {'type': 'x', 'face1': 1, 'face2_offset': -1, 'vertex1': 6, 'vertex2_offset': -3},
-        {'type': 'x', 'face1': 2, 'face2_offset': 1, 'vertex1': 9, 'vertex2_offset': 3},
-        {'type': 'y', 'face1': 2, 'face2_offset': -1, 'vertex1': 10, 'vertex2_offset': -5},
-        {'type': 'y', 'face1': 3, 'face2_offset': 1, 'vertex1': 15, 'vertex2_offset': -15}
+        {'type': 'x', 'face1': 1, 'face2_offset': -1, 'vertex1': 6, 'vertex_adjacent1': 5, 'vertex2_offset': -3, 'vertex_adjacent2_offset': -6},
+        {'type': 'x', 'face1': 2, 'face2_offset': 1, 'vertex1': 9, 'vertex_adjacent1': 10, 'vertex2_offset': 3, 'vertex_adjacent2_offset': 6},
+        {'type': 'y', 'face1': 2, 'face2_offset': -1, 'vertex1': 10, 'vertex_adjacent1': 11, 'vertex2_offset': -5, 'vertex_adjacent2_offset': -6},
+        {'type': 'y', 'face1': 3, 'face2_offset': 1, 'vertex1': 15, 'vertex_adjacent1': 14, 'vertex2_offset': -15, 'vertex_adjacent2_offset': -14}
     ]
 )
 
@@ -71,20 +71,20 @@ unit_RDQK_D = UnitPattern(
         [12, 13, 14, 15]  # Face 3
     ],
     internal_hinges=[
-        {'face1': 0, 'face2': 1, 'vertex1': 1, 'vertex2': 4, 'rest_angle': np.pi/4, 'stiffness': 1.0},
-        {'face1': 1, 'face2': 2, 'vertex1': 7, 'vertex2': 8, 'rest_angle': np.pi/4, 'stiffness': 1.0},
-        {'face1': 2, 'face2': 3, 'vertex1': 11, 'vertex2': 14, 'rest_angle': np.pi/4, 'stiffness': 1.0},
-        {'face1': 3, 'face2': 0, 'vertex1': 13, 'vertex2': 2, 'rest_angle': np.pi/4, 'stiffness': 1.0}
+        {'face1': 0, 'face2': 1, 'vertex1': 1, 'vertex2': 4, 'vertex_adjacent1': 2, 'vertex_adjacent2': 7, 'angle': np.pi/4, 'stiffness': 1.0},
+        {'face1': 1, 'face2': 2, 'vertex1': 7, 'vertex2': 8, 'vertex_adjacent1': 6, 'vertex_adjacent2': 9, 'angle': np.pi/4, 'stiffness': 1.0},
+        {'face1': 2, 'face2': 3, 'vertex1': 11, 'vertex2': 14, 'vertex_adjacent1': 8, 'vertex_adjacent2': 13, 'angle': np.pi/4, 'stiffness': 1.0},
+        {'face1': 3, 'face2': 0, 'vertex1': 13, 'vertex2': 2, 'vertex_adjacent1': 12, 'vertex_adjacent2': 3, 'angle': np.pi/4, 'stiffness': 1.0}
 
     ],
 
     shift_vectors=None,
 
     external_hinges=[
-        {'type': 'x', 'face1': 1, 'face2_offset': -1, 'vertex1': 6, 'vertex2_offset': -3},
-        {'type': 'x', 'face1': 2, 'face2_offset': 1, 'vertex1': 9, 'vertex2_offset': 3},
-        {'type': 'y', 'face1': 2, 'face2_offset': -1, 'vertex1': 10, 'vertex2_offset': -5},
-        {'type': 'y', 'face1': 3, 'face2_offset': 1, 'vertex1': 15, 'vertex2_offset': -15}
+        {'type': 'x', 'face1': 1, 'face2_offset': -1, 'vertex1': 6, 'vertex_adjacent1': 5, 'vertex2_offset': -3, 'vertex_adjacent2_offset': -6},
+        {'type': 'x', 'face1': 2, 'face2_offset': 1, 'vertex1': 9, 'vertex_adjacent1': 10, 'vertex2_offset': 3, 'vertex_adjacent2_offset': 6},
+        {'type': 'y', 'face1': 2, 'face2_offset': -1, 'vertex1': 10, 'vertex_adjacent1': 11, 'vertex2_offset': -5, 'vertex_adjacent2_offset': -6},
+        {'type': 'y', 'face1': 3, 'face2_offset': 1, 'vertex1': 15, 'vertex_adjacent1': 14, 'vertex2_offset': -15, 'vertex_adjacent2_offset': -14}
     ]
 )
 

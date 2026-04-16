@@ -26,23 +26,25 @@ class IndexedFace:
     def __repr__(self):
         return f"IndexedFace(id={self.id}, vertices={self.vertex_indices.tolist()})"
 
-@dataclass
 class Hinge:
     """A hinge defined by two faces and two vertex indices."""
 
-    face1: int
-    face2: int
-    vertex1: int # Index of the vertex in face1 that defines the hinge
-    vertex2: int
-    rest_angle: float = 0.0
-    stiffness: float = 1.0
-    id: any = None
+    def __init__(self, face1: int, face2: int, vertex1: int, vertex2: int, vertex_adjacent1: int, vertex_adjacent2: int, angle: float = 0.0, stiffness: float = 1.0, id: any = None):
+        self.face1 = face1
+        self.face2 = face2
+        self.vertex1 = vertex1
+        self.vertex2 = vertex2
+        self.vertex_adjacent1 = vertex_adjacent1 # The vertex adjacent to vertex1 in face1 along the hinge closing edge
+        self.vertex_adjacent2 = vertex_adjacent2 # The vertex adjacent to vertex2 in face2 along the hinge closing edge
+        self.angle = angle
+        self.stiffness = stiffness
+        self.id = id
 
     def __repr__(self):
         return (
             f"Hinge(id={self.id}, face1={self.face1}, face2={self.face2}, "
             f"vertex1={self.vertex1}, vertex2={self.vertex2}, "
-            f"rest_angle={self.rest_angle}, stiffness={self.stiffness})"
+            f"angle={self.angle}, stiffness={self.stiffness})"
         )
     
 
@@ -101,7 +103,9 @@ class Tessellation:
                     face2=hinge.face2,
                     vertex1=hinge.vertex1,
                     vertex2=hinge.vertex2,
-                    rest_angle=hinge.rest_angle,
+                    vertex_adjacent1=hinge.vertex_adjacent1,
+                    vertex_adjacent2=hinge.vertex_adjacent2,
+                    angle=hinge.angle,
                     stiffness=hinge.stiffness,
                     id=hinge.id,
 
@@ -122,8 +126,8 @@ class Tessellation:
         self.faces.append(face)
         return face
 
-    def add_hinge(self, face1, face2, vertex1, vertex2, rest_angle=0.0, stiffness=1.0, id=None):
-        hinge = Hinge(face1, face2, vertex1, vertex2, rest_angle, stiffness, id)
+    def add_hinge(self, face1, face2, vertex1, vertex2, vertex_adjacent1, vertex_adjacent2, angle=0.0, stiffness=1.0, id=None):
+        hinge = Hinge(face1, face2, vertex1, vertex2, vertex_adjacent1, vertex_adjacent2, angle, stiffness, id)
         self.hinges.append(hinge)
         return hinge
 
@@ -178,7 +182,9 @@ class Tessellation:
             hinge_face2 = np.array([hinge.face2 for hinge in self.hinges], dtype=int)
             hinge_vertex1 = np.array([hinge.vertex1 for hinge in self.hinges], dtype=int)
             hinge_vertex2 = np.array([hinge.vertex2 for hinge in self.hinges], dtype=int)
-            hinge_rest_angle = np.array([hinge.rest_angle for hinge in self.hinges], dtype=float)
+            hinge_vertex_adjacent1 = np.array([hinge.vertex_adjacent1 for hinge in self.hinges], dtype=int)
+            hinge_vertex_adjacent2 = np.array([hinge.vertex_adjacent2 for hinge in self.hinges], dtype=int)
+            hinge_angle = np.array([hinge.angle for hinge in self.hinges], dtype=float)
             hinge_stiffness = np.array([hinge.stiffness for hinge in self.hinges], dtype=float)
             senders = hinge_face1
             receivers = hinge_face2
@@ -187,7 +193,9 @@ class Tessellation:
             hinge_face2 = np.zeros((0,), dtype=int)
             hinge_vertex1 = np.zeros((0,), dtype=int)
             hinge_vertex2 = np.zeros((0,), dtype=int)
-            hinge_rest_angle = np.zeros((0,), dtype=float)
+            hinge_vertex_adjacent1 = np.zeros((0,), dtype=int)
+            hinge_vertex_adjacent2 = np.zeros((0,), dtype=int)
+            hinge_angle = np.zeros((0,), dtype=float)
             hinge_stiffness = np.zeros((0,), dtype=float)
             senders = np.zeros((0,), dtype=int)
             receivers = np.zeros((0,), dtype=int)
@@ -201,7 +209,9 @@ class Tessellation:
             "hinge_face2": hinge_face2,
             "hinge_vertex1": hinge_vertex1,
             "hinge_vertex2": hinge_vertex2,
-            "hinge_rest_angle": hinge_rest_angle,
+            "hinge_vertex_adjacent1": hinge_vertex_adjacent1,
+            "hinge_vertex_adjacent2": hinge_vertex_adjacent2,
+            "hinge_angle": hinge_angle,
             "hinge_stiffness": hinge_stiffness,
             "graph_senders": senders,
             "graph_receivers": receivers,
