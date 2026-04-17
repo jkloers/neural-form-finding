@@ -14,6 +14,9 @@ def plot_tessellation(tessellation, ax=None):
     Plots the tessellation using a discrete architectural palette,
     procedural hatching based on face geometry, and emphasized topological hinges.
     """
+
+    print(f"Plotting tessellation with {len(tessellation.vertices)} vertices, {len(tessellation.faces)} faces, and {len(tessellation.hinges)} hinges.")
+
     if ax is None:
         # Utilisation d'un fond "papier" (off-white) pour un style plus graphique
         fig, ax = plt.subplots(figsize=(10, 10), facecolor='#F4F4F0')
@@ -82,12 +85,3 @@ def plot_tessellation(tessellation, ax=None):
     ax.axis('off') # La suppression des axes renforce l'aspect purement artistique
 
     return ax
-
-if __name__ == "__main__":
-
-    initial_tessellation = build_tessellation(unit_RDQK_D, nx=2, ny=2)
-    mapped_tessellation = compute_initial_map(initial_tessellation, ('circle', [0.0, 0.0], 1.0), map_type='elliptical_grip')
-
-    plot_tessellation(mapped_tessellation)
-
-    plt.show()

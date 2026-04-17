@@ -111,12 +111,9 @@ class Tessellation:
 
                 )
 
+        # Version optimisée pour l'allocation
     def add_vertex(self, vertex):
-        vertex = np.asarray(vertex, dtype=float)
-        if vertex.shape != (self.vertices.shape[1],):
-            raise ValueError(f"Vertex must have shape ({self.vertices.shape[1]},)")
-        self.vertices = np.vstack([self.vertices, vertex])
-        return len(self.vertices) - 1  # Return the index of the new vertex
+        self._vertices_list.append(vertex)
 
     def add_face(self, vertex_indices, id=None):
         if isinstance(vertex_indices, IndexedFace):
@@ -161,61 +158,47 @@ class Tessellation:
         if centroids.size == 0:
             return np.zeros((0, self.dim + 1), dtype=float)
         return np.concatenate([centroids, areas], axis=1)
+    
+    def anchor_points(self):
+        """Returns the points not involved in any hinge connections, which can be used as anchors for optimization."""
+        hinge_vertices = set()
+        for hinge in self.hinges:
+            hinge_vertices.update([hinge.vertex1, hinge.vertex2, hinge.vertex_adjacent1, hinge.vertex_adjacent2])
+        return [i for i in range(len(self.vertices)) if i not in hinge_vertices]
+    
 
-    def to_jax_state(self, pad_faces=False, pad_value=-1):
+    def to_jax_state(self):
+
+        # Convert vertices (N, dim)
         X = np.asarray(self.vertices, dtype=float)
-        num_faces = len(self.faces)
-        face_vertex_counts = np.array([face.num_vertices for face in self.faces], dtype=int)
 
-        if pad_faces:
-            max_length = int(np.max(face_vertex_counts)) if num_faces > 0 else 0
-            F_idx = np.full((num_faces, max_length), pad_value, dtype=int)
-            for face_idx, face in enumerate(self.faces):
-                F_idx[face_idx, : face.num_vertices] = face.vertex_indices
-            face_ptrs = None
-        else:
-            face_ptrs = np.concatenate([[0], np.cumsum(face_vertex_counts, dtype=int)]) if num_faces > 0 else np.array([0], dtype=int)
-            F_idx = np.concatenate([face.vertex_indices for face in self.faces], dtype=int) if num_faces > 0 else np.array([], dtype=int)
+        # Convert faces (N_faces, max_vertices_per_face) - assuming quads for now, with padding if necessary
+        F_idx = np.array([face.vertex_indices for face in self.faces], dtype=np.int32) 
 
-        if self.hinges:
-            hinge_face1 = np.array([hinge.face1 for hinge in self.hinges], dtype=int)
-            hinge_face2 = np.array([hinge.face2 for hinge in self.hinges], dtype=int)
-            hinge_vertex1 = np.array([hinge.vertex1 for hinge in self.hinges], dtype=int)
-            hinge_vertex2 = np.array([hinge.vertex2 for hinge in self.hinges], dtype=int)
-            hinge_vertex_adjacent1 = np.array([hinge.vertex_adjacent1 for hinge in self.hinges], dtype=int)
-            hinge_vertex_adjacent2 = np.array([hinge.vertex_adjacent2 for hinge in self.hinges], dtype=int)
-            hinge_angle = np.array([hinge.angle for hinge in self.hinges], dtype=float)
-            hinge_stiffness = np.array([hinge.stiffness for hinge in self.hinges], dtype=float)
-            senders = hinge_face1
-            receivers = hinge_face2
-        else:
-            hinge_face1 = np.zeros((0,), dtype=int)
-            hinge_face2 = np.zeros((0,), dtype=int)
-            hinge_vertex1 = np.zeros((0,), dtype=int)
-            hinge_vertex2 = np.zeros((0,), dtype=int)
-            hinge_vertex_adjacent1 = np.zeros((0,), dtype=int)
-            hinge_vertex_adjacent2 = np.zeros((0,), dtype=int)
-            hinge_angle = np.zeros((0,), dtype=float)
-            hinge_stiffness = np.zeros((0,), dtype=float)
-            senders = np.zeros((0,), dtype=int)
-            receivers = np.zeros((0,), dtype=int)
+        # Adjacent edge vertices (N_hinges, 2, 2) - vertex indices of the adjacent vertices along the hinge closing edge
+        E_adjacent = np.array([[[hinge.vertex1, hinge.vertex_adjacent1], [hinge.vertex2, hinge.vertex_adjacent2]] for hinge in self.hinges], dtype=np.int32)
+
+        # Rest angles for hinges (N_hinges,)
+        A_rest = np.array([hinge.angle for hinge in self.hinges], dtype=float)
+
+        # Hinge properties (N_hinges,) - stiffness values for each hinge
+        H_stiffness = np.array([hinge.stiffness for hinge in self.hinges], dtype=float)
+
+        # Topological vertex connectivity (N_hinges, 2) - vertex indices of the hinge connections
+        V_connect = np.array([[hinge.vertex1, hinge.vertex2] for hinge in self.hinges], dtype=np.int32)
+
+        # Anchor indices (N_anchors,) - vertex indices of anchor points not involved in any hinge connections
+        Anch_indices = np.array(self.anchor_points(), dtype=np.int32)
+
 
         return {
-            "vertices": X,
-            "face_ptrs": face_ptrs,
-            "face_vertex_indices": F_idx,
-            "face_vertex_counts": face_vertex_counts,
-            "hinge_face1": hinge_face1,
-            "hinge_face2": hinge_face2,
-            "hinge_vertex1": hinge_vertex1,
-            "hinge_vertex2": hinge_vertex2,
-            "hinge_vertex_adjacent1": hinge_vertex_adjacent1,
-            "hinge_vertex_adjacent2": hinge_vertex_adjacent2,
-            "hinge_angle": hinge_angle,
-            "hinge_stiffness": hinge_stiffness,
-            "graph_senders": senders,
-            "graph_receivers": receivers,
-            "face_features": self.face_features(),
+            'vertices': X,
+            'faces': F_idx,
+            'hinge_adjacent_vertices': E_adjacent,
+            'angles_rest': A_rest,
+            'hinge_stiffness': H_stiffness,
+            'hinge_vertex_connections': V_connect,
+            'anchor_indices': Anch_indices,
         }
 
     def __repr__(self):
