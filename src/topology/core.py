@@ -235,8 +235,8 @@ class Tessellation:
         return {
             'vertices': X,
             'faces': F_idx,
-            'hinge_adjacent_vertices': E_adjacent,
-            'void_opposite_vertices': E_opp,
+            'hinge_adjacent_edges': E_adjacent,
+            'void_opposite_edges': E_opp,
             'angles_rest': A_rest,
             'hinge_stiffness': H_stiffness,
             'hinge_vertex_connections': V_hinge,

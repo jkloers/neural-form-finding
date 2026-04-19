@@ -26,8 +26,8 @@ def create_jax_state(tess_dict):
     return TessellationState(
         X=jnp.array(tess_dict['vertices']),
         F_idx=jnp.array(tess_dict['faces']),
-        E_adjacent=jnp.array(tess_dict['hinge_adjacent_vertices']),
-        E_opp=jnp.array(tess_dict['void_opposite_vertices']),
+        E_adjacent=jnp.array(tess_dict['hinge_adjacent_edges']),
+        E_opp=jnp.array(tess_dict['void_opposite_edges']),
         A_rest=jnp.array(tess_dict['angles_rest']),
         H_stiffness=jnp.array(tess_dict['hinge_stiffness']),
         V_connect=jnp.array(tess_dict['hinge_vertex_connections']),

@@ -16,12 +16,13 @@ from topology.builder import build_tessellation
 from geometry.make_initial_map import compute_initial_map
 from utils.visualization import plot_tessellation
 from jax_backend.pytrees import create_jax_state
+from optimization.solver import solve_form_finding
 
 # --- Configuration ---
 @dataclass
 class ExperimentConfig:
     width: int = 2
-    height: int = 1
+    height: int = 2
     pattern: callable = unit_RDQK_D
     initial_map_type: str = 'elliptical_grip'
     fix_contracted_boundary: bool = True
@@ -66,15 +67,22 @@ if __name__ == "__main__":
     print("Anchor Indices (Anch_indices):", tessellation_state.Anch_indices.shape)
     print("Opposite Edges (E_opp):", tessellation_state.E_opp.shape)
 
-    # # Visualization
-    # plt.figure(figsize=(10, 10))
-    # plot_tessellation(mapped_tessellation)
-    # plt.show()
+    # Définition des paramètres cibles
+    target_params = {
+        'radius': 1.0
+    }
 
-
-
-
-
+    print("\nStarting optimization...")
+    # Optimisation
+    optimized_state, result = solve_form_finding(tessellation_state, target_params, max_iter=500)
+    print("Optimization finished.")
+    
+    # Visualization
+    plt.figure(figsize=(10, 10))
+    # On met à jour l'objet Tessellation avec les nouvelles positions optimisées
+    mapped_tessellation.update_vertices(optimized_state.X)
+    plot_tessellation(mapped_tessellation)
+    plt.show()
     
     # Prochaines étapes :
     # energy = compute_total_energy(state)
