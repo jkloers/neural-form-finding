@@ -47,9 +47,17 @@ def plot_tessellation(tessellation, ax=None):
         )
         ax.add_patch(polygon)
 
+        # Affichage du numéro de la face
+        centroid = vertices.mean(axis=0)
+        ax.text(centroid[0], centroid[1], str(i), color='black', fontsize=12, ha='center', va='center', weight='bold', zorder=20)
+
+    # # Affichage des numéros des sommets
+    # for i, v in enumerate(tessellation.vertices):
+    #     ax.text(v[0], v[1], f"v{i}", color='red', fontsize=10, ha='right', va='bottom', weight='bold', zorder=21)
+
     # 3. Représentation mécanique/topologique des charnières
     num_faces = len(tessellation.faces)
-    for hinge in tessellation.hinges:
+    for i, hinge in enumerate(tessellation.hinges):
         # Vérification des indices de face valides
         if hinge.face1 < 0 or hinge.face1 >= num_faces or hinge.face2 < 0 or hinge.face2 >= num_faces:
             print(f"Warning: Hinge with face indices out of bounds: face1={hinge.face1}, face2={hinge.face2}, num_faces={num_faces}")
@@ -76,6 +84,9 @@ def plot_tessellation(tessellation, ax=None):
         
         # Marqueur au centre de la charnière
         ax.scatter(midpoint[0], midpoint[1], color='#F1FAEE', edgecolor="#000000", s=50, linewidth=2.0, zorder=14)
+
+        # Affichage du numéro de la charnière
+        ax.text(midpoint[0], midpoint[1] + 0.05, f"h{i}", color='blue', fontsize=10, ha='center', va='bottom', weight='bold', zorder=22)
 
     #plot target shape for reference
     circle = plt.Circle((0.0, 0.0), 1.0, color="#D6A400", fill=False, linestyle='--', linewidth=2.0, zorder=5)

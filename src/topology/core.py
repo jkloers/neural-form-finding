@@ -44,6 +44,7 @@ class Hinge:
         return (
             f"Hinge(id={self.id}, face1={self.face1}, face2={self.face2}, "
             f"vertex1={self.vertex1}, vertex2={self.vertex2}, "
+            f"vertex_adj1={self.vertex_adjacent1}, vertex_adj2={self.vertex_adjacent2}, "
             f"angle={self.angle}, stiffness={self.stiffness})"
         )
     
@@ -79,7 +80,7 @@ class UnitPattern:
 class Tessellation:
     """Indexed tessellation builder for JAX-ready kirigami topology."""
 
-    def __init__(self, vertices=None, faces=None, hinges=None, dim=2, tolerance=1e-6):
+    def __init__(self, vertices=None, faces=None, hinges=None, voids=None, dim=2, tolerance=1e-6):
         if vertices is None:
             self.vertices = np.zeros((0, dim), dtype=float)
         else:
@@ -91,6 +92,9 @@ class Tessellation:
         self.faces = []
         self.hinges = []
         self.tolerance = float(tolerance)
+        self.voids = []  # List of opposite hinge pair indices that define voids in the tessellation (assuming RDQK-like patterns)
+        if voids is not None:
+            self.voids = list(voids)
 
         if faces is not None:
             for face in faces:
@@ -113,7 +117,7 @@ class Tessellation:
 
         # Version optimisée pour l'allocation
     def add_vertex(self, vertex):
-        self._vertices_list.append(vertex)
+        self.vertices = np.vstack([self.vertices, vertex])
 
     def add_face(self, vertex_indices, id=None):
         if isinstance(vertex_indices, IndexedFace):
@@ -124,9 +128,45 @@ class Tessellation:
         return face
 
     def add_hinge(self, face1, face2, vertex1, vertex2, vertex_adjacent1, vertex_adjacent2, angle=0.0, stiffness=1.0, id=None):
+        if id is None:
+            id = len(self.hinges)
         hinge = Hinge(face1, face2, vertex1, vertex2, vertex_adjacent1, vertex_adjacent2, angle, stiffness, id)
         self.hinges.append(hinge)
         return hinge
+
+    def build_primary_to_hinges(self):
+        """Build a map from primary vertices to their incident hinges."""
+        primary_to_hinges = {}
+        for hinge in self.hinges:
+            primary_to_hinges.setdefault(hinge.vertex1, []).append(hinge.id)
+            primary_to_hinges.setdefault(hinge.vertex2, []).append(hinge.id)
+        return primary_to_hinges
+    
+    def build_adjacents_to_hinge(self):
+        """Build a map from hinge side vertices to the hinge id."""
+        adjacents_to_hinge = {}
+        for hinge in self.hinges:
+            pair = frozenset([hinge.vertex_adjacent1, hinge.vertex_adjacent2])
+            adjacents_to_hinge[pair] = hinge.id
+        return adjacents_to_hinge
+    
+    def add_void(self, hinge1_id, hinge2_id):
+        """Add a void defined by a pair of opposite hinges."""
+        self.voids.append((hinge1_id, hinge2_id))
+
+    def build_void_opposite_edges(self):
+        """Build the opposite edges of the voids."""
+        void_opposite_edges = []
+        for h1_id, h2_id in self.voids:
+            e1 = [self.hinges[h1_id].vertex1, self.hinges[h1_id].vertex_adjacent1]
+            e2 = [self.hinges[h2_id].vertex1, self.hinges[h2_id].vertex_adjacent1]
+            void_opposite_edges.append([e1, e2])
+
+            e3 = [self.hinges[h1_id].vertex2, self.hinges[h1_id].vertex_adjacent2]
+            e4 = [self.hinges[h2_id].vertex2, self.hinges[h2_id].vertex_adjacent2]
+            void_opposite_edges.append([e3, e4])
+            
+        return void_opposite_edges
 
     def update_vertices(self, vertices):
         vertices = np.asarray(vertices, dtype=float)
@@ -161,10 +201,9 @@ class Tessellation:
     
     def anchor_points(self):
         """Returns the points not involved in any hinge connections, which can be used as anchors for optimization."""
-        hinge_vertices = set()
-        for hinge in self.hinges:
-            hinge_vertices.update([hinge.vertex1, hinge.vertex2, hinge.vertex_adjacent1, hinge.vertex_adjacent2])
-        return [i for i in range(len(self.vertices)) if i not in hinge_vertices]
+        vertices = set(range(len(self.vertices)))
+        hinge_vertices = self.build_primary_to_hinges().keys()
+        return list(vertices - hinge_vertices)
     
 
     def to_jax_state(self):
@@ -185,24 +224,21 @@ class Tessellation:
         H_stiffness = np.array([hinge.stiffness for hinge in self.hinges], dtype=float)
 
         # Topological vertex connectivity (N_hinges, 2) - vertex indices of the hinge connections
-        V_connect = np.array([[hinge.vertex1, hinge.vertex2] for hinge in self.hinges], dtype=np.int32)
+        V_hinge = np.array([[hinge.vertex1, hinge.vertex2] for hinge in self.hinges], dtype=np.int32)
 
         # Anchor indices (N_anchors,) - vertex indices of anchor points not involved in any hinge connections
         Anch_indices = np.array(self.anchor_points(), dtype=np.int32)
 
+        # Opposite edges (2*N_voids, 2, 2) - vertex indices of the opposite edges
+        E_opp = np.array(self.build_void_opposite_edges(), dtype=np.int32)
 
         return {
             'vertices': X,
             'faces': F_idx,
             'hinge_adjacent_vertices': E_adjacent,
+            'void_opposite_vertices': E_opp,
             'angles_rest': A_rest,
             'hinge_stiffness': H_stiffness,
-            'hinge_vertex_connections': V_connect,
+            'hinge_vertex_connections': V_hinge,
             'anchor_indices': Anch_indices,
         }
-
-    def __repr__(self):
-        return (
-            f"Tessellation(vertices={len(self.vertices)}, faces={len(self.faces)}, "
-            f"hinges={len(self.hinges)}, dim={self.dim})"
-        )

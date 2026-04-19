@@ -10,4 +10,6 @@ def target_circle(p, center, radius):
         return center + np.array([radius, 0.0])
     return center + (v / n) * radius
 
+unit_circle = target_circle()
+
 

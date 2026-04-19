@@ -116,5 +116,6 @@ def compute_initial_map(
         vertices=mapped_vertices,
         faces=[face.vertex_indices for face in tessellation.faces],
         hinges=tessellation.hinges,
+        voids=tessellation.voids,
     )
 

@@ -9,15 +9,15 @@ class TessellationState(NamedTuple):
     # (Topologie)
     F_idx: jnp.ndarray
     E_adjacent: jnp.ndarray
+    E_opp: jnp.ndarray
     A_rest: jnp.ndarray
     H_stiffness: jnp.ndarray
     V_connect: jnp.ndarray
     Anch_indices: jnp.ndarray
-    #Anch_targets: jnp.ndarray  #Placeholder for anchor target positions, not defined in the current implementation
 
 jax.tree_util.register_pytree_node(
     TessellationState,
-    lambda state: ((state.X,), (state.F_idx, state.E_adjacent, state.A_rest, state.H_stiffness, state.V_connect, state.Anch_indices)),
+    lambda state: ((state.X,), (state.F_idx, state.E_adjacent, state.E_opp, state.A_rest, state.H_stiffness, state.V_connect, state.Anch_indices)),
     lambda aux, dynamic: TessellationState(dynamic[0], *aux)
 )
 
@@ -27,6 +27,7 @@ def create_jax_state(tess_dict):
         X=jnp.array(tess_dict['vertices']),
         F_idx=jnp.array(tess_dict['faces']),
         E_adjacent=jnp.array(tess_dict['hinge_adjacent_vertices']),
+        E_opp=jnp.array(tess_dict['void_opposite_vertices']),
         A_rest=jnp.array(tess_dict['angles_rest']),
         H_stiffness=jnp.array(tess_dict['hinge_stiffness']),
         V_connect=jnp.array(tess_dict['hinge_vertex_connections']),
