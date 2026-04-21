@@ -29,7 +29,7 @@ class IndexedFace:
 class Hinge:
     """A hinge defined by two faces and two vertex indices."""
 
-    def __init__(self, face1: int, face2: int, vertex1: int, vertex2: int, vertex_adjacent1: int, vertex_adjacent2: int, angle: float = 0.0, stiffness: float = 1.0, id: any = None):
+    def __init__(self, face1: int, face2: int, vertex1: int, vertex2: int, vertex_adjacent1: int, vertex_adjacent2: int, angle: float = 0.0, properties: dict = None, id: any = None):
         self.face1 = face1
         self.face2 = face2
         self.vertex1 = vertex1
@@ -37,7 +37,7 @@ class Hinge:
         self.vertex_adjacent1 = vertex_adjacent1 # The vertex adjacent to vertex1 in face1 along the hinge closing edge
         self.vertex_adjacent2 = vertex_adjacent2 # The vertex adjacent to vertex2 in face2 along the hinge closing edge
         self.angle = angle
-        self.stiffness = stiffness
+        self.properties = properties if properties is not None else {}
         self.id = id
 
     def __repr__(self):
@@ -45,7 +45,7 @@ class Hinge:
             f"Hinge(id={self.id}, face1={self.face1}, face2={self.face2}, "
             f"vertex1={self.vertex1}, vertex2={self.vertex2}, "
             f"vertex_adj1={self.vertex_adjacent1}, vertex_adj2={self.vertex_adjacent2}, "
-            f"angle={self.angle}, stiffness={self.stiffness})"
+            f"angle={self.angle}, properties={self.properties})"
         )
     
 
@@ -110,12 +110,32 @@ class Tessellation:
                     vertex_adjacent1=hinge.vertex_adjacent1,
                     vertex_adjacent2=hinge.vertex_adjacent2,
                     angle=hinge.angle,
-                    stiffness=hinge.stiffness,
+                    properties=hinge.properties,
                     id=hinge.id,
 
                 )
+    
+    def copy(self):
+        """Create a deep copy of the tessellation."""
+        new_tess = Tessellation(
+            vertices=self.vertices.copy(),
+            faces=[IndexedFace(f.vertex_indices.copy(), f.id) for f in self.faces],
+            hinges=[
+                Hinge(
+                    h.face1, h.face2, h.vertex1, h.vertex2,
+                    h.vertex_adjacent1, h.vertex_adjacent2,
+                    h.angle, h.properties.copy(), h.id
+                ) for h in self.hinges
+            ],
+            voids=self.voids.copy(),
+            tolerance=self.tolerance
+        )
+        return new_tess
+    
+    def update_vertices(self, new_vertices):
+        """Update the vertex positions in the tessellation."""
+        self.vertices = np.asarray(new_vertices, dtype=float)
 
-        # Version optimisée pour l'allocation
     def add_vertex(self, vertex):
         self.vertices = np.vstack([self.vertices, vertex])
 
@@ -127,10 +147,10 @@ class Tessellation:
         self.faces.append(face)
         return face
 
-    def add_hinge(self, face1, face2, vertex1, vertex2, vertex_adjacent1, vertex_adjacent2, angle=0.0, stiffness=1.0, id=None):
+    def add_hinge(self, face1, face2, vertex1, vertex2, vertex_adjacent1, vertex_adjacent2, angle=0.0, properties=None, id=None):
         if id is None:
             id = len(self.hinges)
-        hinge = Hinge(face1, face2, vertex1, vertex2, vertex_adjacent1, vertex_adjacent2, angle, stiffness, id)
+        hinge = Hinge(face1, face2, vertex1, vertex2, vertex_adjacent1, vertex_adjacent2, angle, properties, id)
         self.hinges.append(hinge)
         return hinge
 
@@ -199,8 +219,8 @@ class Tessellation:
             return np.zeros((0, self.dim + 1), dtype=float)
         return np.concatenate([centroids, areas], axis=1)
     
-    def anchor_points(self):
-        """Returns the points not involved in any hinge connections, which can be used as anchors for optimization."""
+    def boundary_points(self):
+        """Returns the points not involved in any hinge connections, which can be used as boundarys for optimization."""
         vertices = set(range(len(self.vertices)))
         hinge_vertices = self.build_primary_to_hinges().keys()
         return list(vertices - hinge_vertices)
@@ -221,13 +241,14 @@ class Tessellation:
         A_rest = np.array([hinge.angle for hinge in self.hinges], dtype=float)
 
         # Hinge properties (N_hinges,) - stiffness values for each hinge
-        H_stiffness = np.array([hinge.stiffness for hinge in self.hinges], dtype=float)
+        H_angular_stiffness = np.array([hinge.properties.get('angular_stiffness', 1.0) for hinge in self.hinges], dtype=float)
+        H_linear_stiffness = np.array([hinge.properties.get('linear_stiffness', 1.0) for hinge in self.hinges], dtype=float)
 
         # Topological vertex connectivity (N_hinges, 2) - vertex indices of the hinge connections
         V_hinge = np.array([[hinge.vertex1, hinge.vertex2] for hinge in self.hinges], dtype=np.int32)
 
-        # Anchor indices (N_anchors,) - vertex indices of anchor points not involved in any hinge connections
-        Anch_indices = np.array(self.anchor_points(), dtype=np.int32)
+        # boundary indices (N_boundarys,) - vertex indices of boundary points not involved in any hinge connections
+        Boundary_indices = np.array(self.boundary_points(), dtype=np.int32)
 
         # Opposite edges (2*N_voids, 2, 2) - vertex indices of the opposite edges
         E_opp = np.array(self.build_void_opposite_edges(), dtype=np.int32)
@@ -238,7 +259,8 @@ class Tessellation:
             'hinge_adjacent_edges': E_adjacent,
             'void_opposite_edges': E_opp,
             'angles_rest': A_rest,
-            'hinge_stiffness': H_stiffness,
+            'hinge_angular_stiffness': H_angular_stiffness,
+            'hinge_linear_stiffness': H_linear_stiffness,
             'hinge_vertex_connections': V_hinge,
-            'anchor_indices': Anch_indices,
+            'boundary_indices': Boundary_indices,
         }

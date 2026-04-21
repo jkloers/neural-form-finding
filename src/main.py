@@ -16,7 +16,9 @@ from topology.builder import build_tessellation
 from geometry.make_initial_map import compute_initial_map
 from utils.visualization import plot_tessellation
 from jax_backend.pytrees import create_jax_state
-from optimization.solver import solve_form_finding
+from optimization.solver import solve_form_finding_deployed, solve_form_finding_contracted
+from geometry.target_shape import DEFAULT_TARGET
+from geometry.get_contracted_shape import get_contracted_shape
 
 # --- Configuration ---
 @dataclass
@@ -27,33 +29,46 @@ class ExperimentConfig:
     initial_map_type: str = 'elliptical_grip'
     fix_contracted_boundary: bool = True
     rectangular_ratio: float = 1.0
-    target_boundary: tuple = ('circle', [0.0, 0.0], 1.0)
+    target_boundary: tuple = (DEFAULT_TARGET['type'], DEFAULT_TARGET['center'], DEFAULT_TARGET['radius'])
 
-# --- Builder ---
-def setup_kirigami_problem(config: ExperimentConfig):
+
+if __name__ == "__main__":
+
+    config = ExperimentConfig()
 
     print(f"Building tessellation ({config.width}x{config.height})...")
     tessellation = build_tessellation(config.pattern, config.width, config.height)
     print(f"-> {len(tessellation.vertices)} vertices, {len(tessellation.faces)} faces, {len(tessellation.hinges)} hinges, {len(tessellation.voids)} voids.")
+
+
+    # Plot the initial tessellation
+    plot_tessellation(tessellation, 
+        title="Initial Tessellation", 
+        show_target=False,
+        show_indices=False, 
+        show_vertices=False, 
+        show_hinges=False)
+    plt.show()
+
 
     print(f"Applying initial map: {config.initial_map_type}...")
     mapped_tessellation = compute_initial_map(
         tessellation, 
         config.target_boundary, 
         map_type=config.initial_map_type, 
-        scale_factor=1.0
-    )
-    return mapped_tessellation
+        scale_factor=1.0)
+
+        # Plot the initial tessellation
+    plot_tessellation(mapped_tessellation, 
+        title="Mapped Tessellation", 
+        show_target=True,
+        show_indices=False, 
+        show_vertices=False, 
+        show_hinges=False)
+    plt.show()
 
 
-if __name__ == "__main__":
-    # Initialisation de la configuration
-    config = ExperimentConfig()
-
-    # Génération
-    mapped_tessellation = setup_kirigami_problem(config)
-
-    # Conversion JAX
+    # JAX PyTree state for optimization
     print("\nCreating JAX PyTree state for optimization...")
     tess_dict = mapped_tessellation.to_jax_state()
     tessellation_state = create_jax_state(tess_dict)
@@ -62,28 +77,47 @@ if __name__ == "__main__":
     print("Face Indices (F_idx):", tessellation_state.F_idx.shape)
     print("Hinge Adjacent Vertices (E_adjacent):", tessellation_state.E_adjacent.shape)
     print("Rest Angles (A_rest):", tessellation_state.A_rest.shape)
-    print("Hinge Stiffness (H_stiffness):", tessellation_state.H_stiffness.shape)
+    print("Hinge Angular Stiffness (H_ang):", tessellation_state.H_angular_stiffness.shape)
+    print("Hinge Linear Stiffness (H_lin):", tessellation_state.H_linear_stiffness.shape)
     print("Hinge Vertex Connections (V_connect):", tessellation_state.V_connect.shape)
-    print("Anchor Indices (Anch_indices):", tessellation_state.Anch_indices.shape)
+    print("boundary Indices (Boundary_indices):", tessellation_state.Boundary_indices.shape)
     print("Opposite Edges (E_opp):", tessellation_state.E_opp.shape)
 
-    # Définition des paramètres cibles
+    # Définition des paramètres cibles basés sur la config centrale
     target_params = {
-        'radius': 1.0
+        'radius': DEFAULT_TARGET['radius']
     }
 
     print("\nStarting optimization...")
     # Optimisation
-    optimized_state, result = solve_form_finding(tessellation_state, target_params, max_iter=500)
-    print("Optimization finished.")
-    
-    # Visualization
-    plt.figure(figsize=(10, 10))
-    # On met à jour l'objet Tessellation avec les nouvelles positions optimisées
+    optimized_state, result = solve_form_finding_deployed(tessellation_state, target_params, max_iter=500)
     mapped_tessellation.update_vertices(optimized_state.X)
-    plot_tessellation(mapped_tessellation)
+    print("Optimization finished.")
+
+    # Visualisation de la forme déployée (optimisée)
+    plot_tessellation(mapped_tessellation, 
+        title="Deployed Shape", 
+        show_target=True, 
+        show_indices=False, 
+        show_vertices=False, 
+        show_hinges=False,
+        color_faces='#2ECC71')
     plt.show()
+
+    print("\nCalculating contracted shape using optimization...")
+    # On repart de l'état déployé pour trouver la forme contractée
+    contracted_state, result = solve_form_finding_contracted(optimized_state, target_params, max_iter=500)
     
-    # Prochaines étapes :
-    # energy = compute_total_energy(state)
-    # optimized_state = run_optimization(state)
+    contracted_tessellation = mapped_tessellation.copy()
+    contracted_tessellation.update_vertices(contracted_state.X)
+    print("Contraction finished.")
+
+    # Visualisation de la forme contractée (plus épurée)
+    plot_tessellation(contracted_tessellation, 
+        title="Contracted Shape", 
+        show_target=False, 
+        show_indices=False, 
+        show_vertices=False, 
+        show_hinges=False,
+        color_faces='#2ECC71')
+    plt.show()

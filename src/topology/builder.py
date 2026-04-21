@@ -51,8 +51,8 @@ def build_tessellation(pattern: UnitPattern, nx: int, ny: int) -> Tessellation:
                     vertex2=h_i['vertex2'] + vertex_offset,
                     vertex_adjacent1=h_i['vertex_adjacent1'] + vertex_offset,
                     vertex_adjacent2=h_i['vertex_adjacent2'] + vertex_offset,
-                    angle=h_i.get('angle', 0.0),
-                    stiffness=h_i.get('stiffness', 1.0)
+                    angle=h_i.get('angle', np.pi/4),
+                    properties=h_i.get('properties', {})
                 )
 
     # ---------------------------------------------------------
@@ -89,8 +89,8 @@ def build_tessellation(pattern: UnitPattern, nx: int, ny: int) -> Tessellation:
                             vertex2=vertex2,
                             vertex_adjacent1=vertex_adjacent1,
                             vertex_adjacent2=vertex_adjacent2,
-                            angle=h_e.get('angle', 0.0),
-                            stiffness=h_e.get('stiffness', 1.0)
+                            angle=h_e.get('angle', np.pi/4),
+                            properties=h_e.get('properties', {})
                         )
 
             if i < nx - 1:  # Connect to cell to the right
@@ -116,8 +116,8 @@ def build_tessellation(pattern: UnitPattern, nx: int, ny: int) -> Tessellation:
                             vertex2=vertex2,
                             vertex_adjacent1=vertex_adjacent1,
                             vertex_adjacent2=vertex_adjacent2,
-                            angle=h_e.get('angle', 0.0),
-                            stiffness=h_e.get('stiffness', 1.0)
+                            angle=h_e.get('angle', np.pi/4),
+                            properties=h_e.get('properties', {})
                         )
 
     # ---------------------------------------------------------
