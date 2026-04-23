@@ -79,6 +79,8 @@ unit_RDQK_D = UnitPattern(
 
     shift_vectors=None,
 
+    border_edges = {'bottom': [[0,1],[4,5]], 'top': [[10,11], [14,15]], 'right': [[5,6],[9,10]], 'left': [[15,12],[3,0]]},
+
     external_hinges=[
         {'type': 'x', 'face1': 1, 'face2_offset': 3, 'vertex1': 6, 'vertex_adjacent1': 5, 'vertex2_offset': -3, 'vertex_adjacent2_offset': -6, 'properties': {'angular_stiffness': 1.0, 'linear_stiffness':  1.0}},
         {'type': 'x', 'face1': 2, 'face2_offset': 5, 'vertex1': 9, 'vertex_adjacent1': 10, 'vertex2_offset': 3, 'vertex_adjacent2_offset': 6, 'properties': {'angular_stiffness': 1.0, 'linear_stiffness':  1.0}},

@@ -4,21 +4,21 @@ from .pytrees import TessellationState
 from geometry.target_shape import DEFAULT_TARGET, get_target_points
 
 def faces_rigidity_constraint(state: TessellationState):
-    """Pénalise la déformation des quads par rapport à leurs longueurs initiales (Isométrie)."""
+    """Penalizes deformation of quads relative to their initial rest lengths (Isometry)."""
     X, F_idx, F_rest = state.X, state.F_idx, state.F_rest_lengths_sq
     
-    # Points actuels des faces
+    # Current points of the faces
     p0, p1, p2, p3 = X[F_idx[:, 0]], X[F_idx[:, 1]], X[F_idx[:, 2]], X[F_idx[:, 3]]
     
-    # Calcul des longueurs actuelles (4 arêtes + 2 diagonales)
+    # Calculate current lengths (4 edges + 2 diagonals)
     edges = [p0-p1, p1-p2, p2-p3, p3-p0, p0-p2, p1-p3]
     lengths_sq = jnp.stack([jnp.sum(e**2, axis=-1) for e in edges], axis=1)
     
-    # Énergie : Différence quadratique par rapport aux longueurs de repos fixes
+    # Energy: Squared difference compared to fixed rest lengths
     return jnp.sum((lengths_sq - F_rest)**2)
 
 def opposite_edges_length_constraint(state: TessellationState):
-    """Maintient la symétrie des bords des vides."""
+    """Maintains symmetry of the opposite edges in the voids."""
     X, E_opp = state.X, state.E_opp
     if E_opp.shape[0] == 0:
         return 0.0
@@ -32,7 +32,7 @@ def opposite_edges_length_constraint(state: TessellationState):
     return jnp.sum((l1_sq - l2_sq)**2)
 
 def opposite_edges_collinearity_constraint(state: TessellationState):
-    """Force la colinéarité des bords opposés dans les vides."""
+    """Forces opposite edges in the voids to be collinear."""
     X, E_opp = state.X, state.E_opp
     if E_opp.shape[0] == 0:
         return 0.0
@@ -47,7 +47,7 @@ def opposite_edges_collinearity_constraint(state: TessellationState):
     return jnp.sum(cross_prod**2)
 
 def hinge_connectivity_constraint(state: TessellationState):
-    """Énergie élastique linéaire (maintient les pivots connectés)."""
+    """Linear elastic energy to keep pivots connected."""
     X, V_pairs = state.X, state.V_connect
     k_linear = state.H_linear_stiffness
     
@@ -56,7 +56,7 @@ def hinge_connectivity_constraint(state: TessellationState):
     return jnp.sum(k_linear * sq_dist)
 
 def hinge_non_intersection_constraint(state: TessellationState, margin: float = 1e-3):
-    """Empêche l'inversion locale des faces au niveau des charnières."""
+    """Prevents local inversion of faces at the hinges (negative angles)."""
     X, E_adj = state.X, state.E_adjacent
     
     pivot = X[E_adj[:, 0, 0]]
@@ -76,7 +76,7 @@ def hinge_non_intersection_constraint(state: TessellationState, margin: float = 
     return jnp.sum(violations**2)
 
 def hinge_target_angle_constraint(state: TessellationState, target_sin: float = 0.0):
-    """Pénalise l'écart par rapport à un angle cible (ex: 0 pour le repliement)."""
+    """Penalizes deviation from a target angle (e.g. 0 for folding)."""
     X, E_adj = state.X, state.E_adjacent
     k_angular = state.H_angular_stiffness
     
@@ -96,35 +96,59 @@ def hinge_target_angle_constraint(state: TessellationState, target_sin: float = 
 
 def boundary_points_hinge_arm_symmetry_constraint(state: TessellationState):
     """
-    Force l'égalité des longueurs des bras pour les charnières situées au bord.
+    Forces the hinge arms located on the boundary to have equal lengths.
     """
     X, E_adj = state.X, state.E_adjacent
     boundary_indices = state.Boundary_indices
 
-    # On vérifie si l'UN des sommets adjacents (b1 ou b2) est sur la bordure (masque 0/1)
+    # Check if either adjacent vertex (b1 or b2) is on the boundary (0/1 mask)
     is_b1_boundary = jnp.isin(E_adj[:, 0, 1], boundary_indices)
     is_b2_boundary = jnp.isin(E_adj[:, 1, 1], boundary_indices)
     
-    # Masque float (1.0 si bordure, 0.0 sinon)
+    # Float mask (1.0 if boundary, 0.0 otherwise)
     mask = (is_b1_boundary | is_b2_boundary).astype(jnp.float32)
     
-    # Calcul pour TOUTES les charnières
+    # Calculate for ALL hinges
     p1, b1 = X[E_adj[:, 0, 0]], X[E_adj[:, 0, 1]]
     p2, b2 = X[E_adj[:, 1, 0]], X[E_adj[:, 1, 1]]
     
     l1_sq = jnp.sum((p1 - b1)**2, axis=-1)
     l2_sq = jnp.sum((p2 - b2)**2, axis=-1)
     
-    # On applique le masque avant la somme finale
+    # Apply mask before final sum
     return jnp.sum(mask * (l1_sq - l2_sq)**2)
 
+def border_edges_length_constraint(state: TessellationState):
+    """
+    Constrains the length of border edges to remain equal to their rest length.
+    This prevents the borders from stretching abnormally.
+    """
+    X = state.X
+    Border_edges = state.Border_edges
+    rest_lengths_sq = state.Border_edges_rest_lengths_sq
+    
+    total_penalty = 0.0
+    for group, edges in Border_edges.items():
+        if edges.shape[0] == 0:
+            continue
+            
+        p0 = X[edges[:, 0]]
+        p1 = X[edges[:, 1]]
+        
+        l_sq = jnp.sum((p1 - p0)**2, axis=-1)
+        target_l_sq = rest_lengths_sq[group]
+        
+        total_penalty += jnp.sum((l_sq - target_l_sq)**2)
+        
+    return total_penalty
+
 def boundary_shape_constraint(state: TessellationState, boundary_vertices: jnp.ndarray, boundary_set: jnp.ndarray):
-    """Pénalise la distance entre les sommets de bordure et le nuage de points cible."""
+    """Penalizes the distance between boundary vertices and the target point cloud."""
     X = state.X
     pts_boundary = X[boundary_vertices]
     
-    # Distance de Chamfer codée en JAX pour être différentiable
-    # Distance de chaque point de bordure vers le point le plus proche de la cible
+    # Differentiable Chamfer Distance
+    # Distance from each boundary point to the closest point in the target
     dist_matrix = jnp.sum((pts_boundary[:, None, :] - boundary_set[None, :, :])**2, axis=-1)
     min_dist_to_target = jnp.min(dist_matrix, axis=1)
     min_dist_to_boundary = jnp.min(dist_matrix, axis=0)
@@ -136,7 +160,8 @@ def boundary_shape_constraint(state: TessellationState, boundary_vertices: jnp.n
 #####################################################################################
 
 def compute_objective_deployed(X, state: TessellationState, target_params):
-    """Objectif pour la forme déployée (Fitting + Rigidité)."""
+    """Objective for the deployed shape (Fitting + Rigidity)."""
+
     current_state = state._replace(X=X)
     
     e_faces = faces_rigidity_constraint(current_state)
@@ -145,34 +170,38 @@ def compute_objective_deployed(X, state: TessellationState, target_params):
     e_void_c = opposite_edges_collinearity_constraint(current_state)
     e_non_inv = hinge_non_intersection_constraint(current_state)
     e_boundary_hinge = boundary_points_hinge_arm_symmetry_constraint(current_state)
+    e_border_length = border_edges_length_constraint(current_state)
     
-    # Filling Cible via Chamfer Distance sur la bordure
+    # Target fitting via Chamfer Distance on the boundary
     boundary_indices = state.Boundary_indices
     target_cloud = jnp.array(get_target_points(n_points=100))
     e_target = boundary_shape_constraint(current_state, boundary_indices, target_cloud)
     
     e_reg = jnp.sum(X**2) * 1e-4
 
-    return (1.0 * e_faces +    # RIGIDITÉ
-            1000.0 * e_hinge +    # CONNECTIVITÉ
-            1000.0 * e_non_inv +  # ORIENTATION
-            10000.0 * e_void_l +   
-            10000.0 * e_void_c + 
-            1.0    * e_target +   # Fitting Cible
-            100.0    * e_boundary_hinge +   # Boundary Hinge Symmetry
+    return (10.0 * e_faces +        # RIGIDITY
+            1000.0 * e_hinge +      # CONNECTIVITY
+            1000.0 * e_non_inv +    # ORIENTATION (no intersection)
+            1000.0 * e_void_l +     # VOID EDGE LENGTH
+            1000.0 * e_void_c +     # VOID COLLINEARITY
+            1.0    * e_target +     # TARGET FITTING
+            100.0  * e_boundary_hinge + # HINGE ARM SYMMETRY
+            1000.0 * e_border_length +  # BORDER LENGTHS
             e_reg)
 
 def compute_objective_contracted(X, state: TessellationState, target_params):
-    """Objectif pour la forme contractée."""
+    """Objective for the contracted (folded) shape."""
     current_state = state._replace(X=X)
     
     e_faces = faces_rigidity_constraint(current_state)
     e_hinge = hinge_connectivity_constraint(current_state)
     e_target_angle = hinge_target_angle_constraint(current_state, target_sin=0.0)
+    e_non_inv = hinge_non_intersection_constraint(current_state, margin=1e-3)
     
     e_reg = jnp.sum(X**2) * 1e-4
 
-    return (10000.0 * e_faces + 
-            1000.0 * e_hinge + 
-            1.0  * e_target_angle + 
+    return (1000.0 * e_faces + 
+            500.0 * e_hinge + 
+            1  * e_target_angle + 
+            1000.0 * e_non_inv + 
             e_reg)

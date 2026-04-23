@@ -136,9 +136,6 @@ def build_tessellation(pattern: UnitPattern, nx: int, ny: int) -> Tessellation:
         h0 = tessellation.hinges[h_id]
         a1, a2 = h0.vertex_adjacent1, h0.vertex_adjacent2
         
-        # 1. Looking for the opposite hinge to form a void
-        # Looking for h_opp such that h0 -> a1 -> h_side1 -> p1 and h0 -> a2 -> h_side2 -> p2
-        # and h_opp has {p1, p2} as adjacent vertices.
         for hs1_id in primary_to_hinges.get(a1, []):
             if hs1_id == h_id: continue
             hs1 = tessellation.hinges[hs1_id]
@@ -160,7 +157,6 @@ def build_tessellation(pattern: UnitPattern, nx: int, ny: int) -> Tessellation:
                             tessellation.add_void(h_id, h_opp_id)   
                         break
 
-        # 2. Exploring neighboring hinges (connected by vertices)
         for v in [h0.vertex1, h0.vertex2, h0.vertex_adjacent1, h0.vertex_adjacent2]:
             for next_h_id in primary_to_hinges.get(v, []):
                 find_voids_recursive(next_h_id, unvisited, discovered_voids)
@@ -172,5 +168,36 @@ def build_tessellation(pattern: UnitPattern, nx: int, ny: int) -> Tessellation:
     while unvisited_hinges:
         start_id = next(iter(unvisited_hinges))
         find_voids_recursive(start_id, unvisited_hinges, all_voids)
-         
+    # ---------------------------------------------------------
+    # Extract border edges from the global tessellation
+    # ---------------------------------------------------------
+    if hasattr(pattern, 'border_edges'):
+        global_borders = {'bottom': [], 'top': [], 'left': [], 'right': []}
+        for j in range(ny):
+            for i in range(nx):
+                cell_offset_index = j * nx + i
+                vertex_offset = cell_offset_index * num_v_per_cell
+                
+                # Bottom border (j == 0)
+                if j == 0 and 'bottom' in pattern.border_edges:
+                    for edge in pattern.border_edges['bottom']:
+                        global_borders['bottom'].append([edge[0] + vertex_offset, edge[1] + vertex_offset])
+                
+                # Top border (j == ny - 1)
+                if j == ny - 1 and 'top' in pattern.border_edges:
+                    for edge in pattern.border_edges['top']:
+                        global_borders['top'].append([edge[0] + vertex_offset, edge[1] + vertex_offset])
+                        
+                # Left border (i == 0)
+                if i == 0 and 'left' in pattern.border_edges:
+                    for edge in pattern.border_edges['left']:
+                        global_borders['left'].append([edge[0] + vertex_offset, edge[1] + vertex_offset])
+                        
+                # Right border (i == nx - 1)
+                if i == nx - 1 and 'right' in pattern.border_edges:
+                    for edge in pattern.border_edges['right']:
+                        global_borders['right'].append([edge[0] + vertex_offset, edge[1] + vertex_offset])
+                        
+        tessellation.border_edges = global_borders
+
     return tessellation

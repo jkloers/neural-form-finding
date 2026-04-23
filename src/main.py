@@ -10,11 +10,11 @@ sys.path.append(os.path.abspath('.'))
 import matplotlib.pyplot as plt
 from dataclasses import dataclass
 
-# Imports locaux
+# Local imports
 from topology.unit_patterns import unit_RDQK_D, unit_RDQK_0
 from topology.builder import build_tessellation
 from geometry.make_initial_map import compute_initial_map
-from utils.visualization import plot_tessellation
+from utils.visualization import plot_tessellation, animate_tessellation
 from jax_backend.pytrees import create_jax_state
 from optimization.solver import solve_form_finding_deployed, solve_form_finding_contracted
 from geometry.target_shape import DEFAULT_TARGET
@@ -23,13 +23,14 @@ from geometry.get_contracted_shape import get_contracted_shape
 # --- Configuration ---
 @dataclass
 class ExperimentConfig:
-    width: int = 2
-    height: int = 2
+    width: int = 3
+    height: int = 3
     pattern: callable = unit_RDQK_D
     initial_map_type: str = 'elliptical_grip'
     fix_contracted_boundary: bool = True
     rectangular_ratio: float = 1.0
     target_boundary: tuple = (DEFAULT_TARGET['type'], DEFAULT_TARGET['center'], DEFAULT_TARGET['radius'])
+    animate_contraction: bool = True
 
 
 if __name__ == "__main__":
@@ -39,16 +40,14 @@ if __name__ == "__main__":
     print(f"Building tessellation ({config.width}x{config.height})...")
     tessellation = build_tessellation(config.pattern, config.width, config.height)
     print(f"-> {len(tessellation.vertices)} vertices, {len(tessellation.faces)} faces, {len(tessellation.hinges)} hinges, {len(tessellation.voids)} voids.")
-
-
     # Plot the initial tessellation
-    plot_tessellation(tessellation, 
-        title="Initial Tessellation", 
-        show_target=False,
-        show_indices=False, 
-        show_vertices=False, 
-        show_hinges=False)
-    plt.show()
+    # plot_tessellation(tessellation, 
+    #     title="Initial Tessellation", 
+    #     show_target=False,
+    #     show_indices=False, 
+    #     show_vertices=False, 
+    #     show_hinges=False)
+    # plt.show()
 
 
     print(f"Applying initial map: {config.initial_map_type}...")
@@ -57,20 +56,30 @@ if __name__ == "__main__":
         config.target_boundary, 
         map_type=config.initial_map_type, 
         scale_factor=1.0)
-
-        # Plot the initial tessellation
-    plot_tessellation(mapped_tessellation, 
-        title="Mapped Tessellation", 
-        show_target=True,
-        show_indices=False, 
-        show_vertices=False, 
-        show_hinges=False)
-    plt.show()
+        # Plot the mapped tessellation
+    # plot_tessellation(mapped_tessellation, 
+    #     title="Mapped Tessellation", 
+    #     show_target=True,
+    #     show_indices=False, 
+    #     show_vertices=False, 
+    #     show_hinges=False)
+    # plt.show()
 
 
     # JAX PyTree state for optimization
     print("\nCreating JAX PyTree state for optimization...")
     tess_dict = mapped_tessellation.to_jax_state()
+    
+    # Calculate border edge rest lengths from the UNMAPPED initial tessellation
+    # Proportionality rule: global scaling is inversely proportional 
+    # to grid size so the mesh fits in the same target shape.
+    # Calibrated with base_alpha (e.g. 1.0 gives 0.5 for a 2x2 grid)
+    base_alpha = 0.65
+    alpha_border = base_alpha / max(config.width, config.height)
+    print(f"Dynamically calculated alpha_border: {alpha_border} (base_alpha={base_alpha}, grid={config.width}x{config.height})")
+    
+    tess_dict['border_edges_rest_lengths_sq'] = tessellation.compute_border_edges_lengths_sq(alpha=alpha_border)
+    
     tessellation_state = create_jax_state(tess_dict)
     print("Tessellation State Dimensions:")
     print("Vertices (X):", tessellation_state.X.shape)
@@ -83,41 +92,71 @@ if __name__ == "__main__":
     print("boundary Indices (Boundary_indices):", tessellation_state.Boundary_indices.shape)
     print("Opposite Edges (E_opp):", tessellation_state.E_opp.shape)
 
-    # Définition des paramètres cibles basés sur la config centrale
+    # Define target parameters based on the central configuration
     target_params = {
         'radius': DEFAULT_TARGET['radius']
     }
 
     print("\nStarting optimization...")
-    # Optimisation
+    # Optimization
     optimized_state, result = solve_form_finding_deployed(tessellation_state, target_params, max_iter=500)
     mapped_tessellation.update_vertices(optimized_state.X)
     print("Optimization finished.")
-
-    # Visualisation de la forme déployée (optimisée)
+    # Visualization of the deployed shape (optimized)
     plot_tessellation(mapped_tessellation, 
         title="Deployed Shape", 
         show_target=True, 
         show_indices=False, 
         show_vertices=False, 
-        show_hinges=False,
+        show_hinges=True,
         color_faces='#2ECC71')
     plt.show()
 
+
     print("\nCalculating contracted shape using optimization...")
-    # On repart de l'état déployé pour trouver la forme contractée
-    contracted_state, result = solve_form_finding_contracted(optimized_state, target_params, max_iter=500)
+    # VERY IMPORTANT: Update face rest lengths so that 
+    # the contracted solver tries to maintain the DEPLOYED shape, not the mapped shape.
+    from jax_backend.pytrees import compute_face_lengths_sq
+    new_F_rest = compute_face_lengths_sq(optimized_state.X, optimized_state.F_idx)
+    optimized_state = optimized_state._replace(F_rest_lengths_sq=new_F_rest)
     
+    contracted_state, result, history = solve_form_finding_contracted(optimized_state, target_params, max_iter=500)
     contracted_tessellation = mapped_tessellation.copy()
     contracted_tessellation.update_vertices(contracted_state.X)
     print("Contraction finished.")
 
-    # Visualisation de la forme contractée (plus épurée)
+    if config.animate_contraction:
+        print("\nCreating animation of the closing process...")
+        animate_tessellation(
+            contracted_tessellation, 
+            history['states'], 
+            filepath="closing_animation.gif", 
+            fps=15,
+            show_target=False, 
+            show_indices=False, 
+            show_vertices=False, 
+            show_hinges=True,
+            color_faces='orange'
+        )
+
+    # Visualization of the contracted shape
     plot_tessellation(contracted_tessellation, 
         title="Contracted Shape", 
         show_target=False, 
         show_indices=False, 
         show_vertices=False, 
-        show_hinges=False,
+        show_hinges=True,
         color_faces='#2ECC71')
+    plt.show()
+
+    # Plotting Energy History
+    plt.figure(figsize=(8, 5))
+    plt.plot(history['energy'], label='Total Energy', color='blue', linewidth=2)
+    plt.xlabel('Iteration')
+    plt.ylabel('Objective / Energy')
+    plt.title('Energy of the Structure during Closing Process')
+    plt.yscale('log')
+    plt.grid(True, which="both", ls="--", alpha=0.7)
+    plt.legend()
+    plt.tight_layout()
     plt.show()

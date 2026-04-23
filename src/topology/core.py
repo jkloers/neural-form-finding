@@ -50,7 +50,7 @@ class Hinge:
     
 
 class UnitPattern:
-    def __init__(self, vertices, faces, internal_hinges, external_hinges, shift_vectors=None):
+    def __init__(self, vertices, faces, internal_hinges, external_hinges, shift_vectors=None, border_edges=None):
         """
         Defines a unit pattern for tessellation, including vertices, faces, internal hinges, and optional shift vectors for tiling.
         """
@@ -62,6 +62,7 @@ class UnitPattern:
         else:
             self.shift_vectors = np.asarray(shift_vectors, dtype=float)
         self.external_hinges = external_hinges  # Connections between unit cells
+        self.border_edges = border_edges if border_edges is not None else {}
 
     def _get_shift_vectors(self):
         """Calculate shift vectors based on the bounding box of the vertices, assuming a rectangular tiling pattern."""
@@ -80,7 +81,7 @@ class UnitPattern:
 class Tessellation:
     """Indexed tessellation builder for JAX-ready kirigami topology."""
 
-    def __init__(self, vertices=None, faces=None, hinges=None, voids=None, dim=2, tolerance=1e-6):
+    def __init__(self, vertices=None, faces=None, hinges=None, voids=None, border_edges=None, dim=2, tolerance=1e-6):
         if vertices is None:
             self.vertices = np.zeros((0, dim), dtype=float)
         else:
@@ -95,6 +96,7 @@ class Tessellation:
         self.voids = []  # List of opposite hinge pair indices that define voids in the tessellation (assuming RDQK-like patterns)
         if voids is not None:
             self.voids = list(voids)
+        self.border_edges = border_edges if border_edges is not None else {}
 
         if faces is not None:
             for face in faces:
@@ -128,6 +130,7 @@ class Tessellation:
                 ) for h in self.hinges
             ],
             voids=self.voids.copy(),
+            border_edges={k: [e.copy() for e in v] for k, v in self.border_edges.items()},
             tolerance=self.tolerance
         )
         return new_tess
@@ -224,6 +227,24 @@ class Tessellation:
         vertices = set(range(len(self.vertices)))
         hinge_vertices = self.build_primary_to_hinges().keys()
         return list(vertices - hinge_vertices)
+        
+    def compute_border_edges_lengths_sq(self, alpha=1.0):
+        """
+        Compute the squared lengths of the border edges based on the current vertices of this Tessellation.
+        This should be called on the unmapped Tessellation to get the true rest lengths.
+        The alpha parameter allows scaling these rest lengths to account for mapping transformations.
+        """
+        rest_lengths_sq = {}
+        for group, edges in self.border_edges.items():
+            if not edges:
+                continue
+            edges_arr = np.array(edges)
+            p0 = self.vertices[edges_arr[:, 0]]
+            p1 = self.vertices[edges_arr[:, 1]]
+            lengths_sq = np.sum((p1 - p0)**2, axis=-1)
+            # Scale by alpha squared because these are squared lengths
+            rest_lengths_sq[group] = lengths_sq * (alpha ** 2)
+        return rest_lengths_sq
     
 
     def to_jax_state(self):
@@ -253,6 +274,10 @@ class Tessellation:
         # Opposite edges (2*N_voids, 2, 2) - vertex indices of the opposite edges
         E_opp = np.array(self.build_void_opposite_edges(), dtype=np.int32)
 
+        # Border edges
+        # We can pass them as a list or dict of arrays. Since JAX works with dicts of arrays, we can do that.
+        Border_edges = {group: np.array(edges, dtype=np.int32) for group, edges in self.border_edges.items()}
+
         return {
             'vertices': X,
             'faces': F_idx,
@@ -263,4 +288,5 @@ class Tessellation:
             'hinge_linear_stiffness': H_linear_stiffness,
             'hinge_vertex_connections': V_hinge,
             'boundary_indices': Boundary_indices,
+            'border_edges': Border_edges,
         }

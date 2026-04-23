@@ -2,6 +2,7 @@ from topology.core import Tessellation
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon
+import matplotlib.animation as animation
 from geometry.target_shape import DEFAULT_TARGET
 from geometry.target_shape import get_target_points
 
@@ -108,3 +109,43 @@ def plot_tessellation(tessellation, ax=None,
     ax.set_aspect('equal')
     ax.axis('off')
     return ax
+
+def animate_tessellation(tessellation, state_history, filepath="closing_animation.gif", fps=15, **plot_kwargs):
+    """
+    Animates the tessellation process given a history of states and saves it to a file.
+    """
+    if not state_history:
+        print("Warning: state_history is empty, cannot animate.")
+        return
+
+    fig, ax = plt.subplots(figsize=(10, 10), facecolor='#FFFFFF')
+    
+    # Compute fixed bounds so the camera doesn't jitter
+    all_X = np.concatenate(state_history)
+    x_min, y_min = all_X.min(axis=0)
+    x_max, y_max = all_X.max(axis=0)
+    center_x = (x_max + x_min) / 2
+    center_y = (y_max + y_min) / 2
+    delta_x = (x_max - x_min)
+    delta_y = (y_max - y_min)
+    max_range = max(delta_x, delta_y) * 1.1
+
+    def update(frame):
+        ax.clear()
+        tessellation.update_vertices(state_history[frame])
+        
+        # We reuse the existing plotting function
+        plot_tessellation(tessellation, ax=ax, title=f"Closing Process", **plot_kwargs)
+        
+        # Enforce fixed bounds over the automatic ones computed in plot_tessellation
+        ax.set_xlim(center_x - max_range/2, center_x + max_range/2)
+        ax.set_ylim(center_y - max_range/2, center_y + max_range/2)
+
+    print(f"Generating animation with {len(state_history)} frames...")
+    ani = animation.FuncAnimation(fig, update, frames=len(state_history), blit=False)
+    
+    # Use pillow for GIF, otherwise default
+    writer = 'pillow' if filepath.endswith('.gif') else None
+    ani.save(filepath, writer=writer, fps=fps)
+    plt.close(fig)
+    print(f"Animation successfully saved to {filepath}")

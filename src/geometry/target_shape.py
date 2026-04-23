@@ -2,9 +2,9 @@ import numpy as np
 
 # Définition centrale de la forme cible
 DEFAULT_TARGET = {
-    'type': 'heart',  # Changement vers 'heart'
+    'type': 'circle',  # Changement vers 'heart'
     'center': np.array([0.0, 0.0]),
-    'radius': 0.8     # Facteur d'échelle pour que le coeur tienne dans la vue
+    'radius': 1.0     # Facteur d'échelle pour que le coeur tienne dans la vue
 }
 
 def get_target_points(n_points=200):
