@@ -114,7 +114,6 @@ class Tessellation:
                     angle=hinge.angle,
                     properties=hinge.properties,
                     id=hinge.id,
-
                 )
     
     def copy(self):
@@ -164,6 +163,14 @@ class Tessellation:
             primary_to_hinges.setdefault(hinge.vertex1, []).append(hinge.id)
             primary_to_hinges.setdefault(hinge.vertex2, []).append(hinge.id)
         return primary_to_hinges
+
+    def build_adjacent_to_hinge(self):
+        """Build a map from hinge side vertices to the hinge id."""
+        adjacent_to_hinge = {}
+        for hinge in self.hinges:
+            adjacent_to_hinge[hinge.vertex_adjacent1] = hinge.id
+            adjacent_to_hinge[hinge.vertex_adjacent2] = hinge.id
+        return adjacent_to_hinge
     
     def build_adjacents_to_hinge(self):
         """Build a map from hinge side vertices to the hinge id."""
@@ -245,7 +252,24 @@ class Tessellation:
             # Scale by alpha squared because these are squared lengths
             rest_lengths_sq[group] = lengths_sq * (alpha ** 2)
         return rest_lengths_sq
-    
+
+    def boundary_pivot_indices(self):
+        """Return the set of hinge pivot indices that lie on the boundary."""
+        boundary_indices = set(self.boundary_points())
+        
+        # Build map from adjacent vertex to the actual pivot vertex
+        adjacent_to_pivot = {}
+        for hinge in self.hinges:
+            adjacent_to_pivot[hinge.vertex_adjacent1] = hinge.vertex1
+            adjacent_to_pivot[hinge.vertex_adjacent2] = hinge.vertex2
+        
+        pivots_on_boundary = set()
+        for p in boundary_indices:
+            if p in adjacent_to_pivot:
+                pivots_on_boundary.add(adjacent_to_pivot[p])
+                
+        return list(pivots_on_boundary)
+        
 
     def to_jax_state(self):
 
@@ -270,6 +294,8 @@ class Tessellation:
 
         # boundary indices (N_boundarys,) - vertex indices of boundary points not involved in any hinge connections
         Boundary_indices = np.array(self.boundary_points(), dtype=np.int32)
+                    
+        Boundary_pivot_indices = np.array(self.boundary_pivot_indices(), dtype=np.int32)
 
         # Opposite edges (2*N_voids, 2, 2) - vertex indices of the opposite edges
         E_opp = np.array(self.build_void_opposite_edges(), dtype=np.int32)
@@ -288,5 +314,7 @@ class Tessellation:
             'hinge_linear_stiffness': H_linear_stiffness,
             'hinge_vertex_connections': V_hinge,
             'boundary_indices': Boundary_indices,
+            'boundary_pivot_indices': Boundary_pivot_indices,
             'border_edges': Border_edges,
         }
+
