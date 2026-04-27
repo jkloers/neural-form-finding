@@ -23,8 +23,8 @@ from geometry.get_contracted_shape import get_contracted_shape
 # --- Configuration ---
 @dataclass
 class ExperimentConfig:
-    width: int = 3
-    height: int = 3
+    width: int = 4
+    height: int = 4
     pattern: callable = unit_RDQK_D
     initial_map_type: str = 'elliptical_grip'
     fix_contracted_boundary: bool = True
@@ -36,6 +36,12 @@ class ExperimentConfig:
 if __name__ == "__main__":
 
     config = ExperimentConfig()
+
+    target_params = {
+        'type': config.target_boundary[0],
+        'center': config.target_boundary[1],
+        'radius': config.target_boundary[2]
+    }
 
     print(f"Building tessellation ({config.width}x{config.height})...")
     tessellation = build_tessellation(config.pattern, config.width, config.height)
@@ -56,14 +62,14 @@ if __name__ == "__main__":
         config.target_boundary, 
         map_type=config.initial_map_type, 
         scale_factor=1.0)
-        # Plot the mapped tessellation
-    # plot_tessellation(mapped_tessellation, 
-    #     title="Mapped Tessellation", 
-    #     show_target=True,
-    #     show_indices=False, 
-    #     show_vertices=False, 
-    #     show_hinges=False)
-    # plt.show()
+    # Plot the mapped tessellation
+    plot_tessellation(mapped_tessellation, 
+        title="Mapped Tessellation", 
+        show_target=True,
+        show_indices=False, 
+        show_vertices=False, 
+        show_hinges=False)
+    plt.show()
 
 
     # JAX PyTree state for optimization
@@ -74,7 +80,7 @@ if __name__ == "__main__":
     # Proportionality rule: global scaling is inversely proportional 
     # to grid size so the mesh fits in the same target shape.
     # Calibrated with base_alpha (e.g. 1.0 gives 0.5 for a 2x2 grid)
-    base_alpha = 0.65
+    base_alpha = 0.5
     alpha_border = base_alpha / max(config.width, config.height)
     print(f"Dynamically calculated alpha_border: {alpha_border} (base_alpha={base_alpha}, grid={config.width}x{config.height})")
     
@@ -93,23 +99,39 @@ if __name__ == "__main__":
     print("Opposite Edges (E_opp):", tessellation_state.E_opp.shape)
 
     # Define target parameters based on the central configuration
-    target_params = {
-        'radius': DEFAULT_TARGET['radius']
-    }
-
     print("\nStarting optimization...")
+    # Save the initial mapped tessellation for comparison
+    initial_map_tessellation = mapped_tessellation.copy()
+    
     # Optimization
     optimized_state, result = solve_form_finding_deployed(tessellation_state, target_params, max_iter=500)
     mapped_tessellation.update_vertices(optimized_state.X)
     print("Optimization finished.")
-    # Visualization of the deployed shape (optimized)
-    plot_tessellation(mapped_tessellation, 
-        title="Deployed Shape", 
-        show_target=True, 
-        show_indices=False, 
-        show_vertices=False, 
-        show_hinges=True,
-        color_faces='#2ECC71')
+
+    from utils.metrics import compute_tessellation_differences
+    diff_areas, diff_ratios = compute_tessellation_differences(initial_map_tessellation, mapped_tessellation)
+
+    print("\n--- Optimization Evaluation ---")
+    avg_diff_area = sum(diff_areas) / len(diff_areas)
+    avg_diff_ratio = sum(diff_ratios) / len(diff_ratios)
+    print(f"Average Face Area Difference: {avg_diff_area:.2f}%")
+    print(f"Average Face Ratio Difference: {avg_diff_ratio:.2f}%")
+    print(f"Max Face Area Difference: {max(diff_areas):.2f}%")
+    print(f"Max Face Ratio Difference: {max(diff_ratios):.2f}%")
+    print("-------------------------------")
+
+    # Visualization of the deployed shape (optimized) with deformations
+    from utils.visualization import plot_tessellation_differences
+    plot_tessellation_differences(
+        mapped_tessellation,
+        diff_areas,
+        title="Deployed Shape (Area Deformation)",
+        show_target=True,
+        show_indices=False,
+        show_vertices=False,
+        show_hinges=False,
+        target_params=target_params
+    )
     plt.show()
 
 
@@ -132,29 +154,31 @@ if __name__ == "__main__":
             history['states'], 
             filepath="closing_animation.gif", 
             fps=15,
-            show_target=False, 
+            show_target=True, 
             show_indices=False, 
             show_vertices=False, 
-            show_hinges=True,
+            show_hinges=False,
+            target_params=target_params,
             color_faces='orange'
         )
 
     # Visualization of the contracted shape
     plot_tessellation(contracted_tessellation, 
         title="Contracted Shape", 
-        show_target=False, 
+        show_target=True, 
         show_indices=False, 
         show_vertices=False, 
-        show_hinges=True,
-        color_faces='#2ECC71')
+        show_hinges=False,
+        target_params=target_params,
+        color_faces='orange')
     plt.show()
 
     # Plotting Energy History
     plt.figure(figsize=(8, 5))
-    plt.plot(history['energy'], label='Total Energy', color='blue', linewidth=2)
+    plt.plot(history['energy'], label='Internal Energy', color='orange', linewidth=2)
     plt.xlabel('Iteration')
     plt.ylabel('Objective / Energy')
-    plt.title('Energy of the Structure during Closing Process')
+    plt.title('Internal Energy of the Tessellation during Closing')
     plt.yscale('log')
     plt.grid(True, which="both", ls="--", alpha=0.7)
     plt.legend()

@@ -174,19 +174,19 @@ def compute_objective_deployed(X, state: TessellationState, target_params):
     
     # Target fitting via Chamfer Distance on the boundary
     boundary_indices = state.Boundary_indices
-    target_cloud = jnp.array(get_target_points(n_points=100))
+    target_cloud = jnp.array(get_target_points(target_params, n_points=100))
     e_target = boundary_shape_constraint(current_state, boundary_indices, target_cloud)
     
     e_reg = jnp.sum(X**2) * 1e-4
 
     return (10.0 * e_faces +        # RIGIDITY
-            1000.0 * e_hinge +      # CONNECTIVITY
+            700.0 * e_hinge +      # CONNECTIVITY
             1000.0 * e_non_inv +    # ORIENTATION (no intersection)
-            1000.0 * e_void_l +     # VOID EDGE LENGTH
-            1000.0 * e_void_c +     # VOID COLLINEARITY
+            10000.0 * e_void_l +     # VOID EDGE LENGTH
+            10000.0 * e_void_c +     # VOID COLLINEARITY
             1.0    * e_target +     # TARGET FITTING
-            100.0  * e_boundary_hinge + # HINGE ARM SYMMETRY
-            1000.0 * e_border_length +  # BORDER LENGTHS
+            1.0  * e_boundary_hinge + # HINGE ARM SYMMETRY
+            10.0 * e_border_length +  # BORDER LENGTHS
             e_reg)
 
 def compute_objective_contracted(X, state: TessellationState, target_params):
@@ -200,8 +200,8 @@ def compute_objective_contracted(X, state: TessellationState, target_params):
     
     e_reg = jnp.sum(X**2) * 1e-4
 
-    return (1000.0 * e_faces + 
-            500.0 * e_hinge + 
+    return (10000.0 * e_faces + 
+            10000.0 * e_hinge + 
             1  * e_target_angle + 
-            1000.0 * e_non_inv + 
+            10.0 * e_non_inv + 
             e_reg)

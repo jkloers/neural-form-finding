@@ -222,6 +222,19 @@ class Tessellation:
             return np.zeros((0,), dtype=float)
         return np.array([face.area(self.vertices) for face in self.faces], dtype=float)
 
+    def get_area(self, face_idx):
+        """Get the area of a specific face."""
+        return self.faces[face_idx].area(self.vertices)
+
+    def compute_ratio(self, face_idx):
+        """Compute the height-to-width ratio of a specific face."""
+        coords = self.vertices[self.faces[face_idx].vertex_indices]
+        width = np.max(coords[:, 0]) - np.min(coords[:, 0])
+        height = np.max(coords[:, 1]) - np.min(coords[:, 1])
+        if width == 0:
+            return float('inf')
+        return height / width
+
     def face_features(self):
         centroids = self.face_centroids()
         areas = self.face_areas().reshape(-1, 1)
