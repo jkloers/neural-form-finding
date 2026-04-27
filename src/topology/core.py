@@ -7,6 +7,14 @@ class IndexedFace:
     """A face represented by global vertex indices."""
     vertex_indices: np.ndarray
     id: any = None
+    properties: dict = None
+    dofs: list = None # 0 for X, 1 for Y, 2 for in-plane rotation
+
+    def __post_init__(self):
+        if self.properties is None:
+            self.properties = {}
+        if self.dofs is None:
+            self.dofs = []
     
     def centroid(self, vertices):
         return np.mean(vertices[self.vertex_indices], axis=0)
@@ -24,7 +32,7 @@ class IndexedFace:
         raise ValueError("Face must be defined in 2D or 3D")
 
     def __repr__(self):
-        return f"IndexedFace(id={self.id}, vertices={self.vertex_indices.tolist()})"
+        return f"IndexedFace(id={self.id}, vertices={self.vertex_indices.tolist()}, properties={self.properties})"
 
 class Hinge:
     """A hinge defined by two faces and two vertex indices."""
@@ -37,7 +45,7 @@ class Hinge:
         self.vertex_adjacent1 = vertex_adjacent1 # The vertex adjacent to vertex1 in face1 along the hinge closing edge
         self.vertex_adjacent2 = vertex_adjacent2 # The vertex adjacent to vertex2 in face2 along the hinge closing edge
         self.angle = angle
-        self.properties = properties if properties is not None else {}
+        self.properties = {}
         self.id = id
 
     def __repr__(self):
@@ -48,6 +56,11 @@ class Hinge:
             f"angle={self.angle}, properties={self.properties})"
         )
     
+    def set_properties(self, k_stretch=1.0, k_shear=1.0, k_rot=1.0):
+        """Update the hinge properties in the tessellation."""
+        self.properties['k_stretch'] = k_stretch
+        self.properties['k_shear'] = k_shear
+        self.properties['k_rot'] = k_rot
 
 class UnitPattern:
     def __init__(self, vertices, faces, internal_hinges, external_hinges, shift_vectors=None, border_edges=None):
@@ -120,7 +133,7 @@ class Tessellation:
         """Create a deep copy of the tessellation."""
         new_tess = Tessellation(
             vertices=self.vertices.copy(),
-            faces=[IndexedFace(f.vertex_indices.copy(), f.id) for f in self.faces],
+            faces=[IndexedFace(f.vertex_indices.copy(), f.id, f.properties.copy(), f.dofs.copy()) for f in self.faces],
             hinges=[
                 Hinge(
                     h.face1, h.face2, h.vertex1, h.vertex2,
@@ -137,15 +150,43 @@ class Tessellation:
     def update_vertices(self, new_vertices):
         """Update the vertex positions in the tessellation."""
         self.vertices = np.asarray(new_vertices, dtype=float)
+    
+    def set_hinge_properties(self, k_stretch=None, k_shear=None, k_rot=None):
+        """Update the hinge properties in the tessellation."""
+        for hinge in self.hinges:
+            if k_stretch is not None:
+                hinge.properties['k_stretch'] = k_stretch
+            if k_shear is not None:
+                hinge.properties['k_shear'] = k_shear
+            if k_rot is not None:
+                hinge.properties['k_rot'] = k_rot
+
+    def set_face_properties(self, face_idx, **kwargs):
+        """Update the properties of a specific face."""
+        self.faces[face_idx].properties.update(kwargs)
+
+    def set_all_faces_properties(self, **kwargs):
+        """Update the properties of all faces in the tessellation."""
+        for face in self.faces:
+            face.properties.update(kwargs)
+
+    def set_face_dofs(self, face_idx, dofs):
+        """Set the blocked DOFs for a specific face (e.g., [0, 1] for X and Y)."""
+        self.faces[face_idx].dofs = list(dofs)
+
+    def set_all_faces_dofs(self, dofs):
+        """Set the same blocked DOFs for all faces in the tessellation."""
+        for face in self.faces:
+            face.dofs = list(dofs)
 
     def add_vertex(self, vertex):
         self.vertices = np.vstack([self.vertices, vertex])
 
-    def add_face(self, vertex_indices, id=None):
+    def add_face(self, vertex_indices, id=None, properties=None, dofs=None):
         if isinstance(vertex_indices, IndexedFace):
             face = vertex_indices
         else:
-            face = IndexedFace(vertex_indices, id=id)
+            face = IndexedFace(vertex_indices, id=id, properties=properties, dofs=dofs)
         self.faces.append(face)
         return face
 
@@ -211,20 +252,12 @@ class Tessellation:
         min_coords = np.min(self.vertices, axis=0)
         max_coords = np.max(self.vertices, axis=0)
         return np.array([min_coords, max_coords])
-
-    def face_centroids(self):
-        if not self.faces:
-            return np.zeros((0, self.dim), dtype=float)
-        return np.vstack([face.centroid(self.vertices) for face in self.faces])
-
-    def face_areas(self):
+    
+    def get_face_areas(self):
         if not self.faces:
             return np.zeros((0,), dtype=float)
         return np.array([face.area(self.vertices) for face in self.faces], dtype=float)
-
-    def get_area(self, face_idx):
-        """Get the area of a specific face."""
-        return self.faces[face_idx].area(self.vertices)
+        
 
     def compute_ratio(self, face_idx):
         """Compute the height-to-width ratio of a specific face."""
@@ -236,7 +269,7 @@ class Tessellation:
         return height / width
 
     def face_features(self):
-        centroids = self.face_centroids()
+        centroids = self.get_face_centroids()
         areas = self.face_areas().reshape(-1, 1)
         if centroids.size == 0:
             return np.zeros((0, self.dim + 1), dtype=float)
@@ -266,23 +299,78 @@ class Tessellation:
             rest_lengths_sq[group] = lengths_sq * (alpha ** 2)
         return rest_lengths_sq
 
-    def boundary_pivot_indices(self):
-        """Return the set of hinge pivot indices that lie on the boundary."""
-        boundary_indices = set(self.boundary_points())
-        
-        # Build map from adjacent vertex to the actual pivot vertex
-        adjacent_to_pivot = {}
+    ##################################################################
+    ##                                                              ##
+    ##  Centroidal methods                                          ##
+    ##                                                              ##
+    ##################################################################
+
+    def get_face_centroids(self):
+        if not self.faces:
+            return np.zeros((0, self.dim), dtype=float)
+        return np.vstack([face.centroid(self.vertices) for face in self.faces])
+    
+    def build_face_adjacency_matrix(self):
+        """Build an adjacency matrix for the tessellation."""
+        face_adjacency_matrix = np.zeros((len(self.faces), len(self.faces)), dtype=np.int32)
         for hinge in self.hinges:
-            adjacent_to_pivot[hinge.vertex_adjacent1] = hinge.vertex1
-            adjacent_to_pivot[hinge.vertex_adjacent2] = hinge.vertex2
+            face_adjacency_matrix[hinge.face1, hinge.face2] = 1
+            face_adjacency_matrix[hinge.face2, hinge.face1] = 1
+        return face_adjacency_matrix
+
+    def build_centroid_node_vectors(self):
+        """
+        Build a 3D tensor of relative coordinates for each node in each face.
+        Dimension: (n_faces, max_nodes_per_face, dim)
+        """
+        n_faces = len(self.faces)
+        if n_faces == 0:
+            dim = self.vertices.shape[1] if self.vertices.size > 0 else 2
+            return np.zeros((0, 0, dim))
         
-        pivots_on_boundary = set()
-        for p in boundary_indices:
-            if p in adjacent_to_pivot:
-                pivots_on_boundary.add(adjacent_to_pivot[p])
-                
-        return list(pivots_on_boundary)
+        centroids = self.get_face_centroids()
+        max_nodes = max(len(face.vertex_indices) for face in self.faces)
+        dim = self.vertices.shape[1]
         
+        centroid_node_vectors = np.zeros((n_faces, max_nodes, dim))
+        for i, face in enumerate(self.faces):
+            nodes = self.vertices[face.vertex_indices]
+            centroid_node_vectors[i, :len(face.vertex_indices)] = nodes - centroids[i]
+            
+        return centroid_node_vectors
+
+    def build_reference_hinge_vectors(self):
+        """
+        Build the vectors separating the two nodes of each hinge in the reference configuration.
+        Dimension: (n_hinges, dim)
+        """
+        n_hinges = len(self.hinges)
+        if n_hinges == 0:
+            dim = self.vertices.shape[1] if self.vertices.size > 0 else 2
+            return np.zeros((0, dim))
+        
+        dim = self.vertices.shape[1]
+        hinge_vectors = np.zeros((n_hinges, dim))
+        for i, hinge in enumerate(self.hinges):
+            p1 = self.vertices[hinge.vertex1]
+            p2 = self.vertices[hinge.vertex2]
+            hinge_vectors[i] = p2 - p1
+            
+        return hinge_vectors
+
+    def build_constrained_face_DOF_pairs(self):
+        """
+        Build the table of blocked DOFs (constraints).
+        Format: (N_constraints, 2) -> [face_id, DOF_id]
+        """
+        pairs = []
+        for i, face in enumerate(self.faces):
+            if face.dofs:
+                for dof in face.dofs:
+                    pairs.append([i, dof])
+        return np.array(pairs, dtype=np.int32) if pairs else np.zeros((0, 2), dtype=np.int32)
+
+
 
     def to_jax_state(self):
 
@@ -330,4 +418,51 @@ class Tessellation:
             'boundary_pivot_indices': Boundary_pivot_indices,
             'border_edges': Border_edges,
         }
+
+    def to_jax_state_centroidal(self):
+        n_faces = len(self.faces)
+        n_hinges = len(self.hinges)
+        
+        # face_centroids: (n_faces, 2)
+        face_centroids = self.get_face_centroids()
+        
+        # centroid_node_vectors: (n_faces, max_nodes_per_face, 2)
+        centroid_node_vectors = self.build_centroid_node_vectors()
+            
+        # hinge_connectivity: (n_hinges, 2) - pairs of vertices connected by hinges
+        hinge_connectivity = np.array([[h.vertex1, h.vertex2] for h in self.hinges], dtype=np.int32) if n_hinges > 0 else np.zeros((0, 2), dtype=np.int32)
+        
+        # reference_hinge_vectors: (n_hinges, 2) - vector between hinge nodes in base config
+        reference_hinge_vectors = self.build_reference_hinge_vectors()
+        
+        # RAIDEURS (BondParams)
+        k_stretch = np.array([hinge.properties.get('k_stretch', 1.0) for hinge in self.hinges])
+        k_shear = np.array([hinge.properties.get('k_shear', 1.0) for hinge in self.hinges])
+        k_rot = np.array([hinge.properties.get('k_rot', 1.0) for hinge in self.hinges])
+        
+        # MASSES (BlockParams)
+        density = np.array([face.properties.get('density', 1.0) for face in self.faces], dtype=float)
+        
+        # constrained_face_DOF_pairs: (n_constraints, 2) - [ID_face, ID_DOF]
+        constrained_face_DOF_pairs = self.build_constrained_face_DOF_pairs()
+        
+        # state: (n_faces, 3) - [dx, dy, d_theta]
+        current_state = np.zeros((n_faces, 3), dtype=float)
+        
+        
+        return {
+            'face_centroids': face_centroids,                             # (n_faces, 2) 
+            'centroid_node_vectors': centroid_node_vectors,               # (n_faces, max_nodes_per_face, 2)
+            'hinge_connectivity': hinge_connectivity,                     # (n_hinges, 2)
+            'reference_hinge_vectors': reference_hinge_vectors,           # (n_hinges, 2)
+            'face_hinge_vectors': self.build_face_hinge_vectors(),        # (n_faces, max_nodes_per_face, 2)
+            'k_stretch': k_stretch,                                       # (n_hinges,)
+            'k_shear': k_shear,                                           # (n_hinges,)
+            'k_rot': k_rot,                                               # (n_hinges,)
+            'density': density,                                           # (n_faces,)
+            'constrained_face_DOF_pairs': constrained_face_DOF_pairs,     # (n_constraints, 2)
+            'state': current_state                                        # (n_faces, 3)
+        }
+
+        
 
