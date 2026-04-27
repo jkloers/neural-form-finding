@@ -13,12 +13,11 @@ from dataclasses import dataclass
 # Local imports
 from topology.unit_patterns import unit_RDQK_D, unit_RDQK_0
 from topology.builder import build_tessellation
-from geometry.make_initial_map import compute_initial_map
+from jax_backend.initial_map import make_initial_map
 from utils.visualization import plot_tessellation, animate_tessellation
 from jax_backend.pytrees import create_jax_state
-from optimization.solver import solve_form_finding_deployed, solve_form_finding_contracted
 from geometry.target_shape import DEFAULT_TARGET
-from geometry.get_contracted_shape import get_contracted_shape
+from jax_backend.solver import solve_form_finding_deployed, solve_form_finding_contracted
 
 # --- Configuration ---
 @dataclass
@@ -56,25 +55,9 @@ if __name__ == "__main__":
     # plt.show()
 
 
-    print(f"Applying initial map: {config.initial_map_type}...")
-    mapped_tessellation = compute_initial_map(
-        tessellation, 
-        config.target_boundary, 
-        map_type=config.initial_map_type, 
-        scale_factor=1.0)
-    # Plot the mapped tessellation
-    plot_tessellation(mapped_tessellation, 
-        title="Mapped Tessellation", 
-        show_target=True,
-        show_indices=False, 
-        show_vertices=False, 
-        show_hinges=False)
-    plt.show()
-
-
     # JAX PyTree state for optimization
     print("\nCreating JAX PyTree state for optimization...")
-    tess_dict = mapped_tessellation.to_jax_state()
+    tess_dict = tessellation.to_jax_state()
     
     # Calculate border edge rest lengths from the UNMAPPED initial tessellation
     # Proportionality rule: global scaling is inversely proportional 
@@ -87,6 +70,26 @@ if __name__ == "__main__":
     tess_dict['border_edges_rest_lengths_sq'] = tessellation.compute_border_edges_lengths_sq(alpha=alpha_border)
     
     tessellation_state = create_jax_state(tess_dict)
+
+    print(f"Applying initial map: {config.initial_map_type}...")
+    tessellation_state = make_initial_map(
+        tessellation_state, 
+        config.target_boundary, 
+        map_type=config.initial_map_type, 
+        scale_factor=1.0)
+    
+    mapped_tessellation = tessellation.copy()
+    import numpy as np
+    mapped_tessellation.update_vertices(np.array(tessellation_state.X))
+
+    # Plot the mapped tessellation
+    plot_tessellation(mapped_tessellation, 
+        title="Mapped Tessellation", 
+        show_target=True,
+        show_indices=False, 
+        show_vertices=False, 
+        show_hinges=False)
+    plt.show()
     print("Tessellation State Dimensions:")
     print("Vertices (X):", tessellation_state.X.shape)
     print("Face Indices (F_idx):", tessellation_state.F_idx.shape)
