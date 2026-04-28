@@ -35,7 +35,8 @@ class IndexedFace:
         raise ValueError("Face must be defined in 2D or 3D")
 
     def __repr__(self):
-        return f"IndexedFace(id={self.id}, vertices={self.vertex_indices.tolist()}, properties={self.properties})"
+        v_list = self.vertex_indices.tolist() if hasattr(self.vertex_indices, 'tolist') else list(self.vertex_indices)
+        return f"IndexedFace(id={self.id}, vertices={v_list}, properties={self.properties})"
 
 class Hinge:
     """A hinge defined by two faces and two vertex indices."""
@@ -460,104 +461,182 @@ class Tessellation:
         else:
             return np.zeros((0, 2), dtype=np.int32), np.zeros((0,), dtype=float)
 
+    def to_centroidal_state(self):
+        """Export tessellation as a dict ready to build a CentroidalState.
 
-
-    def to_jax_state(self):
-
-        # Convert vertices (N, dim)
-        X = np.asarray(self.vertices, dtype=float)
-
-        # Convert faces (N_faces, max_vertices_per_face) - assuming quads for now, with padding if necessary
-        F_idx = np.array([face.vertex_indices for face in self.faces], dtype=np.int32) 
-
-        # Adjacent edge vertices (N_hinges, 2, 2) - vertex indices of the adjacent vertices along the hinge closing edge
-        E_adjacent = np.array([[[hinge.vertex1, hinge.vertex_adjacent1], [hinge.vertex2, hinge.vertex_adjacent2]] for hinge in self.hinges], dtype=np.int32)
-
-        # Rest angles for hinges (N_hinges,)
-        A_rest = np.array([hinge.angle for hinge in self.hinges], dtype=float)
-
-        # Hinge properties (N_hinges,) - stiffness values for each hinge
-        H_angular_stiffness = np.array([hinge.properties.get('angular_stiffness', 1.0) for hinge in self.hinges], dtype=float)
-        H_linear_stiffness = np.array([hinge.properties.get('linear_stiffness', 1.0) for hinge in self.hinges], dtype=float)
-
-        # Topological vertex connectivity (N_hinges, 2) - vertex indices of the hinge connections
-        V_hinge = np.array([[hinge.vertex1, hinge.vertex2] for hinge in self.hinges], dtype=np.int32)
-
-        # boundary indices (N_boundarys,) - vertex indices of boundary points not involved in any hinge connections
-        Boundary_indices = np.array(self.boundary_points(), dtype=np.int32)
-                    
-        Boundary_pivot_indices = np.array(self.boundary_pivot_indices(), dtype=np.int32)
-
-        # Opposite edges (2*N_voids, 2, 2) - vertex indices of the opposite edges
-        E_opp = np.array(self.build_void_opposite_edges(), dtype=np.int32)
-
-        # Border edges
-        # We can pass them as a list or dict of arrays. Since JAX works with dicts of arrays, we can do that.
-        Border_edges = {group: np.array(edges, dtype=np.int32) for group, edges in self.border_edges.items()}
-
-        return {
-            'vertices': X,
-            'faces': F_idx,
-            'hinge_adjacent_edges': E_adjacent,
-            'void_opposite_edges': E_opp,
-            'angles_rest': A_rest,
-            'hinge_angular_stiffness': H_angular_stiffness,
-            'hinge_linear_stiffness': H_linear_stiffness,
-            'hinge_vertex_connections': V_hinge,
-            'boundary_indices': Boundary_indices,
-            'boundary_pivot_indices': Boundary_pivot_indices,
-            'border_edges': Border_edges,
-        }
-
-    def to_jax_state_centroidal(self):
+        This is the unified export for the centroidal pipeline.
+        Uses a centralized vertex-to-face mapping for efficiency.
+        """
         n_faces = len(self.faces)
         n_hinges = len(self.hinges)
+        n_verts = len(self.vertices)
         
-        # face_centroids: (n_faces, 2)
+        # 1. Variables
         face_centroids = self.get_face_centroids()
-        
-        # centroid_node_vectors: (n_faces, max_nodes_per_face, 2)
         centroid_node_vectors = self.build_centroid_node_vectors()
-            
-        # hinge_connectivity: (n_hinges, 2) - pairs of vertices connected by hinges
-        hinge_connectivity = np.array([[h.vertex1, h.vertex2] for h in self.hinges], dtype=np.int32) if n_hinges > 0 else np.zeros((0, 2), dtype=np.int32)
+        max_nodes = centroid_node_vectors.shape[1]
+
+        # 2. Build inverse mapping: vertex_id -> [face_id, local_node_id]
+        # Useful for all topological lookups
+        v_to_fn = np.full((n_verts, 2), -1, dtype=np.int32)
+        for i, face in enumerate(self.faces):
+            for j, v in enumerate(face.vertex_indices):
+                v_to_fn[v] = [i, j]
+
+        # 3. Topology: Hinges
+        # hinge_face_pairs: (n_hinges, 2)
+        # hinge_node_pairs: (n_hinges, 2, 2) -> [[f1, loc1], [f2, loc2]]
+        h_v1 = np.array([h.vertex1 for h in self.hinges], dtype=np.int32)
+        h_v2 = np.array([h.vertex2 for h in self.hinges], dtype=np.int32)
         
-        # reference_hinge_vectors: (n_hinges, 2) - vector between hinge nodes in base config
-        reference_hinge_vectors = self.build_reference_hinge_vectors()
+        hinge_node_pairs = np.stack([v_to_fn[h_v1], v_to_fn[h_v2]], axis=1)
+        hinge_face_pairs = hinge_node_pairs[:, :, 0] # Extract face indices
+
+        # hinge_adj_info: [fi, fk, pivot_local_i, adj_local_i, adj_local_k]
+        h_va1 = np.array([h.vertex_adjacent1 for h in self.hinges], dtype=np.int32)
+        h_va2 = np.array([h.vertex_adjacent2 for h in self.hinges], dtype=np.int32)
         
-        # RAIDEURS (BondParams)
-        k_stretch = np.array([hinge.properties.get('k_stretch', 1.0) for hinge in self.hinges])
-        k_shear = np.array([hinge.properties.get('k_shear', 1.0) for hinge in self.hinges])
-        k_rot = np.array([hinge.properties.get('k_rot', 1.0) for hinge in self.hinges])
-        
-        # MASSES (faceParams)
-        density = np.array([face.properties.get('density', 1.0) for face in self.faces], dtype=float)
-        
-        # constrained_face_DOF_pairs: (n_constraints, 2) - [ID_face, ID_DOF]
+        # fi, fk are hinge_face_pairs[:, 0], hinge_face_pairs[:, 1]
+        # pivot_local_i is v_to_fn[h_v1][:, 1]
+        # adj_local_i is v_to_fn[h_va1][:, 1]
+        # adj_local_k is v_to_fn[h_va2][:, 1]
+        hinge_adj_info = np.column_stack([
+            hinge_face_pairs,
+            v_to_fn[h_v1][:, 1],
+            v_to_fn[h_va1][:, 1],
+            v_to_fn[h_va2][:, 1]
+        ]).astype(np.int32)
+
+        # 4. Topology: Boundary nodes (for target fitting)
+        hinge_verts_set = set(h_v1) | set(h_v2)
+        # Boundary nodes are vertices in faces that are NOT hinge nodes
+        boundary_verts = np.array([v for v in range(n_verts) 
+                                 if v not in hinge_verts_set and v_to_fn[v, 0] != -1], dtype=np.int32)
+        boundary_face_node_ids = v_to_fn[boundary_verts]
+
+        # 5. BCs & Mechanical properties
         constrained_face_DOF_pairs = self.build_constrained_face_DOF_pairs()
-        
-        # loaded_face_DOF_pairs: (n_loaded, 2) + load_values: (n_loaded,)
         loaded_face_DOF_pairs, load_values = self.build_loaded_face_DOF_pairs()
-        
-        # state: (n_faces, 3) - [dx, dy, d_theta]
-        current_state = np.zeros((n_faces, 3), dtype=float)
-        
-        
+
+        k_stretch = np.array([h.properties.get('k_stretch', 1.0) for h in self.hinges])
+        k_shear = np.array([h.properties.get('k_shear', 1.0) for h in self.hinges])
+        k_rot = np.array([h.properties.get('k_rot', 1.0) for h in self.hinges])
+        density = np.array([f.properties.get('density', 1.0) for f in self.faces], dtype=float)
+
         return {
-            'face_centroids': face_centroids,                             # (n_faces, 2) 
-            'centroid_node_vectors': centroid_node_vectors,               # (n_faces, max_nodes_per_face, 2)
-            'bond_connectivity': hinge_connectivity,                     # (n_hinges, 2)
-            'reference_bond_vectors': reference_hinge_vectors,           # (n_hinges, 2)
-            'face_bond_vectors': self.build_face_hinge_vectors(),        # (n_faces, max_nodes_per_face, 2)
-            'k_stretch': k_stretch,                                       # (n_hinges,)
-            'k_shear': k_shear,                                           # (n_hinges,)
-            'k_rot': k_rot,                                               # (n_hinges,)
-            'density': density,                                           # (n_faces,)
-            'constrained_face_DOF_pairs': constrained_face_DOF_pairs,     # (n_constraints, 2)
-            'loaded_face_DOF_pairs': loaded_face_DOF_pairs,               # (n_loaded, 2)
-            'load_values': load_values,                                   # (n_loaded,)
-            'state': current_state                                        # (n_faces, 3)
+            'face_centroids': face_centroids,
+            'centroid_node_vectors': centroid_node_vectors,
+            'hinge_face_pairs': hinge_face_pairs,
+            'hinge_node_pairs': hinge_node_pairs,
+            'hinge_adj_info': hinge_adj_info,
+            'boundary_face_node_ids': boundary_face_node_ids,
+            'constrained_face_DOF_pairs': constrained_face_DOF_pairs,
+            'loaded_face_DOF_pairs': loaded_face_DOF_pairs,
+            'load_values': load_values,
+            'k_stretch': k_stretch,
+            'k_shear': k_shear,
+            'k_rot': k_rot,
+            'density': density,
         }
+
+
+
+    # def to_jax_state(self):
+
+    #     # Convert vertices (N, dim)
+    #     X = np.asarray(self.vertices, dtype=float)
+
+    #     # Convert faces (N_faces, max_vertices_per_face) - assuming quads for now, with padding if necessary
+    #     F_idx = np.array([face.vertex_indices for face in self.faces], dtype=np.int32) 
+
+    #     # Adjacent edge vertices (N_hinges, 2, 2) - vertex indices of the adjacent vertices along the hinge closing edge
+    #     E_adjacent = np.array([[[hinge.vertex1, hinge.vertex_adjacent1], [hinge.vertex2, hinge.vertex_adjacent2]] for hinge in self.hinges], dtype=np.int32)
+
+    #     # Rest angles for hinges (N_hinges,)
+    #     A_rest = np.array([hinge.angle for hinge in self.hinges], dtype=float)
+
+    #     # Hinge properties (N_hinges,) - stiffness values for each hinge
+    #     H_angular_stiffness = np.array([hinge.properties.get('angular_stiffness', 1.0) for hinge in self.hinges], dtype=float)
+    #     H_linear_stiffness = np.array([hinge.properties.get('linear_stiffness', 1.0) for hinge in self.hinges], dtype=float)
+
+    #     # Topological vertex connectivity (N_hinges, 2) - vertex indices of the hinge connections
+    #     V_hinge = np.array([[hinge.vertex1, hinge.vertex2] for hinge in self.hinges], dtype=np.int32)
+
+    #     # boundary indices (N_boundarys,) - vertex indices of boundary points not involved in any hinge connections
+    #     Boundary_indices = np.array(self.boundary_points(), dtype=np.int32)
+                    
+    #     Boundary_pivot_indices = np.array(self.boundary_pivot_indices(), dtype=np.int32)
+
+    #     # Opposite edges (2*N_voids, 2, 2) - vertex indices of the opposite edges
+    #     E_opp = np.array(self.build_void_opposite_edges(), dtype=np.int32)
+
+    #     # Border edges
+    #     # We can pass them as a list or dict of arrays. Since JAX works with dicts of arrays, we can do that.
+    #     Border_edges = {group: np.array(edges, dtype=np.int32) for group, edges in self.border_edges.items()}
+
+    #     return {
+    #         'vertices': X,
+    #         'faces': F_idx,
+    #         'hinge_adjacent_edges': E_adjacent,
+    #         'void_opposite_edges': E_opp,
+    #         'angles_rest': A_rest,
+    #         'hinge_angular_stiffness': H_angular_stiffness,
+    #         'hinge_linear_stiffness': H_linear_stiffness,
+    #         'hinge_vertex_connections': V_hinge,
+    #         'boundary_indices': Boundary_indices,
+    #         'boundary_pivot_indices': Boundary_pivot_indices,
+    #         'border_edges': Border_edges,
+    #     }
+
+    # def to_jax_state_centroidal(self):
+    #     n_faces = len(self.faces)
+    #     n_hinges = len(self.hinges)
+        
+    #     # face_centroids: (n_faces, 2)
+    #     face_centroids = self.get_face_centroids()
+        
+    #     # centroid_node_vectors: (n_faces, max_nodes_per_face, 2)
+    #     centroid_node_vectors = self.build_centroid_node_vectors()
+            
+    #     # hinge_connectivity: (n_hinges, 2) - pairs of vertices connected by hinges
+    #     hinge_connectivity = np.array([[h.vertex1, h.vertex2] for h in self.hinges], dtype=np.int32) if n_hinges > 0 else np.zeros((0, 2), dtype=np.int32)
+        
+    #     # reference_hinge_vectors: (n_hinges, 2) - vector between hinge nodes in base config
+    #     reference_hinge_vectors = self.build_reference_hinge_vectors()
+        
+    #     # RAIDEURS (BondParams)
+    #     k_stretch = np.array([hinge.properties.get('k_stretch', 1.0) for hinge in self.hinges])
+    #     k_shear = np.array([hinge.properties.get('k_shear', 1.0) for hinge in self.hinges])
+    #     k_rot = np.array([hinge.properties.get('k_rot', 1.0) for hinge in self.hinges])
+        
+    #     # MASSES (faceParams)
+    #     density = np.array([face.properties.get('density', 1.0) for face in self.faces], dtype=float)
+        
+    #     # constrained_face_DOF_pairs: (n_constraints, 2) - [ID_face, ID_DOF]
+    #     constrained_face_DOF_pairs = self.build_constrained_face_DOF_pairs()
+        
+    #     # loaded_face_DOF_pairs: (n_loaded, 2) + load_values: (n_loaded,)
+    #     loaded_face_DOF_pairs, load_values = self.build_loaded_face_DOF_pairs()
+        
+    #     # state: (n_faces, 3) - [dx, dy, d_theta]
+    #     current_state = np.zeros((n_faces, 3), dtype=float)
+        
+        
+    #     return {
+    #         'face_centroids': face_centroids,                             # (n_faces, 2) 
+    #         'centroid_node_vectors': centroid_node_vectors,               # (n_faces, max_nodes_per_face, 2)
+    #         'bond_connectivity': hinge_connectivity,                     # (n_hinges, 2)
+    #         'reference_bond_vectors': reference_hinge_vectors,           # (n_hinges, 2)
+    #         'face_bond_vectors': self.build_face_hinge_vectors(),        # (n_faces, max_nodes_per_face, 2)
+    #         'k_stretch': k_stretch,                                       # (n_hinges,)
+    #         'k_shear': k_shear,                                           # (n_hinges,)
+    #         'k_rot': k_rot,                                               # (n_hinges,)
+    #         'density': density,                                           # (n_faces,)
+    #         'constrained_face_DOF_pairs': constrained_face_DOF_pairs,     # (n_constraints, 2)
+    #         'loaded_face_DOF_pairs': loaded_face_DOF_pairs,               # (n_loaded, 2)
+    #         'load_values': load_values,                                   # (n_loaded,)
+    #         'state': current_state                                        # (n_faces, 3)
+    #     }
 
         
 
