@@ -22,14 +22,15 @@ sys.path.append(os.path.abspath('.'))
 
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
+import numpy as np
 from dataclasses import dataclass
 
 # Topology
-from topology.unit_patterns import unit_RDQK_D, unit_RDQK_0
+from topology.unit_patterns import unit_RDQK_D
 from topology.builder import build_tessellation
 
 # Target shape
-from geometry.target_shape import DEFAULT_TARGET, get_target_points
+from geometry.target_shape import get_target_points, DEFAULT_TARGET
 
 # Centroidal pipeline
 from jax_backend.centroidal.state import CentroidalState
@@ -97,11 +98,6 @@ if __name__ == "__main__":
           f"{len(tessellation.faces)} faces, "
           f"{len(tessellation.hinges)} hinges, "
           f"{len(tessellation.voids)} voids.")
-
-    # printing tessalation
-    print(tessellation.faces)
-    print(tessellation.hinges)
-    print(tessellation.vertices)
 
     # ══════════════════════════════════════════════════════════════════════════
     # 2. Configure boundary conditions & material properties
@@ -171,35 +167,57 @@ if __name__ == "__main__":
     )
 
     # ══════════════════════════════════════════════════════════════════════════
-    # 5. Results
+    # 5. Results & Visualization
     # ══════════════════════════════════════════════════════════════════════════
     print("\n" + "-" * 60)
-    print("RESULTS")
+    print("RESULTS VISUALIZATION")
     print("-" * 60)
 
-    mapped_state = result['mapped_state']
+    from utils.visualization import plot_tessellation
+    import copy
+
+    def plot_stage(state, title):
+        # 1. Reconstruct vertices from centroidal state
+        c = state.face_centroids
+        s = state.centroid_node_vectors
+        verts_rec = reconstruct_vertices(c, s) # (n_faces, max_nodes, 2)
+        
+        # 2. Update a copy of the tessellation
+        tess_copy = copy.deepcopy(tessellation)
+        new_verts = np.zeros_like(tess_copy.vertices)
+        for i, face in enumerate(tess_copy.faces):
+            for j, v_idx in enumerate(face.vertex_indices):
+                new_verts[v_idx] = verts_rec[i, j]
+        tess_copy.update_vertices(new_verts)
+        
+        # 3. Plot
+        fig, ax = plt.subplots(figsize=(8, 8))
+        plot_tessellation(tess_copy, ax=ax, title=title, 
+                          show_target=True, target_params=target_params)
+        plt.show()
+
+    # Stage 0
+    print("Displaying Stage 0: Initial Mapping...")
+    plot_stage(result['mapped_state'], "Stage 0: Initial Mapping")
+
+    # Stage 1
+    print("Displaying Stage 1: Geometric Validity...")
+    plot_stage(result['valid_state'], "Stage 1: Geometric Validity")
+
+    # Stage 2
+    print("Displaying Stage 2: Static Equilibrium...")
+    # Reconstruct equilibrium state from solution
+    sol = result['solution']
     valid_state = result['valid_state']
-    solution = result['solution']
-
-    print(f"\nStage 0 — Initial Mapping:")
-    verts_mapped = reconstruct_vertices(
-        mapped_state.face_centroids, mapped_state.centroid_node_vectors)
-    print(f"  Mapped vertex range X: [{float(verts_mapped[:,:,0].min()):.4f}, "
-          f"{float(verts_mapped[:,:,0].max()):.4f}]")
-    print(f"  Mapped vertex range Y: [{float(verts_mapped[:,:,1].min()):.4f}, "
-          f"{float(verts_mapped[:,:,1].max()):.4f}]")
-
-    print(f"\nStage 1 — Geometric Validity:")
-    verts_valid = reconstruct_vertices(
-        valid_state.face_centroids, valid_state.centroid_node_vectors)
-    print(f"  Valid vertex range X:  [{float(verts_valid[:,:,0].min()):.4f}, "
-          f"{float(verts_valid[:,:,0].max()):.4f}]")
-    print(f"  Valid vertex range Y:  [{float(verts_valid[:,:,1].min()):.4f}, "
-          f"{float(verts_valid[:,:,1].max()):.4f}]")
-
-    print(f"\nStage 2 — Static Equilibrium:")
-    print(f"  Solution fields shape: {solution.fields.shape}")
-    print(f"  Max displacement:      {float(jnp.max(jnp.abs(solution.fields[:, :2]))):.6f}")
-    print(f"  Max rotation:          {float(jnp.max(jnp.abs(solution.fields[:, 2]))):.6f}")
+    
+    # centroids_eq = centroids_valid + displacement
+    c_eq = valid_state.face_centroids + sol.fields[:, :2]
+    # s_eq = rotate(s_valid, theta)
+    from jax_backend.physics_solver.kinematics import rotation_matrix
+    R = rotation_matrix(sol.fields[:, 2])
+    s_eq = jnp.einsum('nij, nkj -> nki', R, valid_state.centroid_node_vectors)
+    
+    equilibrium_state = valid_state._replace(face_centroids=c_eq, centroid_node_vectors=s_eq)
+    plot_stage(equilibrium_state, "Stage 2: Static Equilibrium")
 
     print("\nPipeline complete.")

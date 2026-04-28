@@ -21,6 +21,11 @@ from jax_backend.utils.utils import (
     LigamentParams, ContactParams, SolutionData,
 )
 
+from jax_backend.physics_solver.energy import (
+    build_strain_energy, build_contact_energy, combine_face_energies,
+    ligament_energy, ligament_energy_linearized,
+)
+from geometry.target_shape import get_target_points
 
 def _build_reference_bond_vectors(valid_state: CentroidalState):
     """Compute bond reference vectors from the validated centroidal state.
@@ -86,11 +91,6 @@ def forward_pipeline(
             'vertices_reference': (n_faces, max_nodes, 2) reference vertex positions
             'reference_bond_vectors': (n_hinges, 2)
     """
-    from jax_backend.physics_solver.energy import (
-        build_strain_energy, build_contact_energy, combine_face_energies,
-        ligament_energy, ligament_energy_linearized,
-    )
-    from geometry.target_shape import get_target_points
 
     # ══════════════════════════════════════════════════════════════════════════
     # Stage 0 — Initial Mapping (to be replaced by GNN)
@@ -106,91 +106,91 @@ def forward_pipeline(
     valid_state = solve_geometric_validity(
         mapped_state, target_cloud, weights=geom_weights)
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # Stage 2 — Physics Solver
-    # ══════════════════════════════════════════════════════════════════════════
+    # # ══════════════════════════════════════════════════════════════════════════
+    # # Stage 2 — Physics Solver
+    # # ══════════════════════════════════════════════════════════════════════════
 
-    # Build reference geometry from validated (c*, s*)
-    _face_centroids = valid_state.face_centroids
-    _cnv = valid_state.centroid_node_vectors
-    _reference_bond_vectors = _build_reference_bond_vectors(valid_state)
-    _bond_connectivity = valid_state.hinge_face_pairs[0::2]  # one entry per hinge
+    # # Build reference geometry from validated (c*, s*)
+    # _face_centroids = valid_state.face_centroids
+    # _cnv = valid_state.centroid_node_vectors
+    # _reference_bond_vectors = _build_reference_bond_vectors(valid_state)
+    # _bond_connectivity = valid_state.hinge_face_pairs  # one entry per hinge
 
-    n_faces = _face_centroids.shape[0]
+    # n_faces = _face_centroids.shape[0]
 
-    # Build Geometry object for the physics solver
-    tess_dict = {
-        'face_centroids': _face_centroids,
-        'centroid_node_vectors': _cnv,
-        'bond_connectivity': _bond_connectivity,
-        'reference_bond_vectors': _reference_bond_vectors,
-    }
-    geometry = TessellationGeometry(tess_dict)
+    # # Build Geometry object for the physics solver
+    # tess_dict = {
+    #     'face_centroids': _face_centroids,
+    #     'centroid_node_vectors': _cnv,
+    #     'bond_connectivity': _bond_connectivity,
+    #     'reference_bond_vectors': _reference_bond_vectors,
+    # }
+    # geometry = TessellationGeometry(tess_dict)
 
-    # Energy
-    bond_energy_fn = ligament_energy_linearized if linearized_strains else ligament_energy
-    strain_energy = build_strain_energy(
-        bond_connectivity=_bond_connectivity,
-        bond_energy_fn=bond_energy_fn,
-    )
-    if use_contact:
-        contact_energy = build_contact_energy(bond_connectivity=_bond_connectivity)
-        potential_energy = combine_face_energies(strain_energy, contact_energy)
-    else:
-        potential_energy = strain_energy
+    # # Energy
+    # bond_energy_fn = ligament_energy_linearized if linearized_strains else ligament_energy
+    # strain_energy = build_strain_energy(
+    #     bond_connectivity=_bond_connectivity,
+    #     bond_energy_fn=bond_energy_fn,
+    # )
+    # if use_contact:
+    #     contact_energy = build_contact_energy(bond_connectivity=_bond_connectivity)
+    #     potential_energy = combine_face_energies(strain_energy, contact_energy)
+    # else:
+    #     potential_energy = strain_energy
 
-    # Loading
-    loaded_pairs = valid_state.loaded_face_DOF_pairs
-    if len(loaded_pairs) > 0:
-        _force_values = valid_state.load_values
-        loading_fn = lambda state, t, **kwargs: _force_values
-    else:
-        loaded_pairs = None
-        loading_fn = None
+    # # Loading
+    # loaded_pairs = valid_state.loaded_face_DOF_pairs
+    # if len(loaded_pairs) > 0:
+    #     _force_values = valid_state.load_values
+    #     loading_fn = lambda state, t, **kwargs: _force_values
+    # else:
+    #     loaded_pairs = None
+    #     loading_fn = None
 
-    # Solver
-    solve_statics = setup_static_solver(
-        geometry=geometry,
-        energy_fn=potential_energy,
-        loaded_face_DOF_pairs=loaded_pairs,
-        loading_fn=loading_fn,
-        constrained_face_DOF_pairs=valid_state.constrained_face_DOF_pairs,
-    )
+    # # Solver
+    # solve_statics = setup_static_solver(
+    #     geometry=geometry,
+    #     energy_fn=potential_energy,
+    #     loaded_face_DOF_pairs=loaded_pairs,
+    #     loading_fn=loading_fn,
+    #     constrained_face_DOF_pairs=valid_state.constrained_face_DOF_pairs,
+    # )
 
-    # Control params
-    control_params = ControlParams(
-        geometrical_params=GeometricalParams(
-            face_centroids=_face_centroids,
-            centroid_node_vectors=_cnv,
-            bond_connectivity=_bond_connectivity,
-            reference_bond_vectors=_reference_bond_vectors,
-        ),
-        mechanical_params=MechanicalParams(
-            bond_params=LigamentParams(
-                k_stretch=valid_state.k_stretch,
-                k_shear=valid_state.k_shear,
-                k_rot=valid_state.k_rot,
-                reference_vector=_reference_bond_vectors,
-            ),
-            density=valid_state.density,
-            contact_params=ContactParams(
-                k_contact=k_contact,
-                min_angle=min_angle,
-                cutoff_angle=cutoff_angle,
-            ) if use_contact else None,
-        ),
-        constraint_params=dict(),
-    )
+    # # Control params
+    # control_params = ControlParams(
+    #     geometrical_params=GeometricalParams(
+    #         face_centroids=_face_centroids,
+    #         centroid_node_vectors=_cnv,
+    #         bond_connectivity=_bond_connectivity,
+    #         reference_bond_vectors=_reference_bond_vectors,
+    #     ),
+    #     mechanical_params=MechanicalParams(
+    #         bond_params=LigamentParams(
+    #             k_stretch=valid_state.k_stretch,
+    #             k_shear=valid_state.k_shear,
+    #             k_rot=valid_state.k_rot,
+    #             reference_vector=_reference_bond_vectors,
+    #         ),
+    #         density=valid_state.density,
+    #         contact_params=ContactParams(
+    #             k_contact=k_contact,
+    #             min_angle=min_angle,
+    #             cutoff_angle=cutoff_angle,
+    #         ) if use_contact else None,
+    #     ),
+    #     constraint_params=dict(),
+    # )
 
-    state0 = jnp.zeros((n_faces, 3), dtype=float)
-    solution = solve_statics(state0=state0, control_params=control_params)
+    # state0 = jnp.zeros((n_faces, 3), dtype=float)
+    # solution = solve_statics(state0=state0, control_params=control_params)
 
-    vertices_ref = reconstruct_vertices(_face_centroids, _cnv)
+    # vertices_ref = reconstruct_vertices(_face_centroids, _cnv)
 
     return {
         'mapped_state': mapped_state,
         'valid_state': valid_state,
-        'solution': solution,
-        'vertices_reference': vertices_ref,
-        'reference_bond_vectors': _reference_bond_vectors,
+        # 'solution': solution,
+        # 'vertices_reference': vertices_ref,
+        # 'reference_bond_vectors': _reference_bond_vectors,
     }
