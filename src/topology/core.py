@@ -8,13 +8,16 @@ class IndexedFace:
     vertex_indices: np.ndarray
     id: any = None
     properties: dict = None
-    dofs: list = None # 0 for X, 1 for Y, 2 for in-plane rotation
+    dofs: list = None         # Constrained DOFs (Dirichlet): [0, 1, 2] = blocked x, y, theta
+    loads: dict = None        # External loads (Neumann): {DOF_id: force_value}
 
     def __post_init__(self):
         if self.properties is None:
             self.properties = {}
         if self.dofs is None:
             self.dofs = []
+        if self.loads is None:
+            self.loads = {}
     
     def centroid(self, vertices):
         return np.mean(vertices[self.vertex_indices], axis=0)
@@ -171,13 +174,63 @@ class Tessellation:
             face.properties.update(kwargs)
 
     def set_face_dofs(self, face_idx, dofs):
-        """Set the blocked DOFs for a specific face (e.g., [0, 1] for X and Y)."""
+        """Set the constrained DOFs for a specific face.
+
+        Args:
+            face_idx (int): Face index.
+            dofs (list): List of DOF ids to constrain. 0=X, 1=Y, 2=theta.
+        """
         self.faces[face_idx].dofs = list(dofs)
 
     def set_all_faces_dofs(self, dofs):
-        """Set the same blocked DOFs for all faces in the tessellation."""
+        """Set the same constrained DOFs for all faces."""
         for face in self.faces:
             face.dofs = list(dofs)
+
+    def clamp_boundary_faces(self, dofs=None):
+        """Clamp all boundary faces (fix specified DOFs, default: all 3).
+
+        Args:
+            dofs (list, optional): DOF ids to clamp. Defaults to [0, 1, 2].
+
+        Returns:
+            list[int]: List of clamped face ids.
+        """
+        if dofs is None:
+            dofs = [0, 1, 2]
+        boundary_ids = self.get_boundary_face_ids()
+        for face_id in boundary_ids:
+            self.set_face_dofs(face_id, dofs)
+        return boundary_ids
+
+    def set_face_load(self, face_idx, dof_id, value):
+        """Apply an external force on a specific DOF of a face.
+
+        Args:
+            face_idx (int): Face index.
+            dof_id (int): DOF to load. 0=X, 1=Y, 2=theta (moment).
+            value (float): Force (or moment) magnitude.
+        """
+        self.faces[face_idx].loads[dof_id] = value
+
+    def set_face_loads(self, face_idx, loads_dict):
+        """Apply external forces on multiple DOFs of a face.
+
+        Args:
+            face_idx (int): Face index.
+            loads_dict (dict): {DOF_id: force_value}, e.g. {0: 5.0, 1: -10.0}.
+        """
+        self.faces[face_idx].loads.update(loads_dict)
+
+    def clear_all_loads(self):
+        """Remove all external loads from all faces."""
+        for face in self.faces:
+            face.loads = {}
+
+    def clear_all_dofs(self):
+        """Remove all DOF constraints from all faces."""
+        for face in self.faces:
+            face.dofs = []
 
     def add_vertex(self, vertex):
         self.vertices = np.vstack([self.vertices, vertex])
@@ -280,6 +333,22 @@ class Tessellation:
         vertices = set(range(len(self.vertices)))
         hinge_vertices = self.build_primary_to_hinges().keys()
         return list(vertices - hinge_vertices)
+
+    def get_boundary_face_ids(self):
+        """Returns the indices of faces that have at least one boundary vertex.
+
+        A boundary vertex is one that is not involved in any hinge connection.
+        Faces touching the boundary are typically clamped in static analyses.
+
+        Returns:
+            list[int]: Sorted list of face indices on the boundary.
+        """
+        boundary_verts = set(self.boundary_points())
+        boundary_faces = []
+        for i, face in enumerate(self.faces):
+            if any(v in boundary_verts for v in face.vertex_indices):
+                boundary_faces.append(i)
+        return sorted(boundary_faces)
         
     def compute_border_edges_lengths_sq(self, alpha=1.0):
         """
@@ -359,9 +428,10 @@ class Tessellation:
         return hinge_vectors
 
     def build_constrained_face_DOF_pairs(self):
-        """
-        Build the table of blocked DOFs (constraints).
-        Format: (N_constraints, 2) -> [face_id, DOF_id]
+        """Build the table of constrained DOFs (Dirichlet BCs).
+
+        Returns:
+            np.ndarray: shape (N_constraints, 2) -> [face_id, DOF_id]
         """
         pairs = []
         for i, face in enumerate(self.faces):
@@ -369,6 +439,26 @@ class Tessellation:
                 for dof in face.dofs:
                     pairs.append([i, dof])
         return np.array(pairs, dtype=np.int32) if pairs else np.zeros((0, 2), dtype=np.int32)
+
+    def build_loaded_face_DOF_pairs(self):
+        """Build the table of loaded DOFs (Neumann BCs) and their force values.
+
+        Returns:
+            Tuple[np.ndarray, np.ndarray]:
+                - loaded_face_DOF_pairs: shape (N_loaded, 2) -> [face_id, DOF_id]
+                - load_values: shape (N_loaded,) -> force magnitude
+        """
+        pairs = []
+        values = []
+        for i, face in enumerate(self.faces):
+            if face.loads:
+                for dof_id, force in face.loads.items():
+                    pairs.append([i, dof_id])
+                    values.append(force)
+        if pairs:
+            return np.array(pairs, dtype=np.int32), np.array(values, dtype=float)
+        else:
+            return np.zeros((0, 2), dtype=np.int32), np.zeros((0,), dtype=float)
 
 
 
@@ -440,11 +530,14 @@ class Tessellation:
         k_shear = np.array([hinge.properties.get('k_shear', 1.0) for hinge in self.hinges])
         k_rot = np.array([hinge.properties.get('k_rot', 1.0) for hinge in self.hinges])
         
-        # MASSES (BlockParams)
+        # MASSES (faceParams)
         density = np.array([face.properties.get('density', 1.0) for face in self.faces], dtype=float)
         
         # constrained_face_DOF_pairs: (n_constraints, 2) - [ID_face, ID_DOF]
         constrained_face_DOF_pairs = self.build_constrained_face_DOF_pairs()
+        
+        # loaded_face_DOF_pairs: (n_loaded, 2) + load_values: (n_loaded,)
+        loaded_face_DOF_pairs, load_values = self.build_loaded_face_DOF_pairs()
         
         # state: (n_faces, 3) - [dx, dy, d_theta]
         current_state = np.zeros((n_faces, 3), dtype=float)
@@ -453,14 +546,16 @@ class Tessellation:
         return {
             'face_centroids': face_centroids,                             # (n_faces, 2) 
             'centroid_node_vectors': centroid_node_vectors,               # (n_faces, max_nodes_per_face, 2)
-            'hinge_connectivity': hinge_connectivity,                     # (n_hinges, 2)
-            'reference_hinge_vectors': reference_hinge_vectors,           # (n_hinges, 2)
-            'face_hinge_vectors': self.build_face_hinge_vectors(),        # (n_faces, max_nodes_per_face, 2)
+            'bond_connectivity': hinge_connectivity,                     # (n_hinges, 2)
+            'reference_bond_vectors': reference_hinge_vectors,           # (n_hinges, 2)
+            'face_bond_vectors': self.build_face_hinge_vectors(),        # (n_faces, max_nodes_per_face, 2)
             'k_stretch': k_stretch,                                       # (n_hinges,)
             'k_shear': k_shear,                                           # (n_hinges,)
             'k_rot': k_rot,                                               # (n_hinges,)
             'density': density,                                           # (n_faces,)
             'constrained_face_DOF_pairs': constrained_face_DOF_pairs,     # (n_constraints, 2)
+            'loaded_face_DOF_pairs': loaded_face_DOF_pairs,               # (n_loaded, 2)
+            'load_values': load_values,                                   # (n_loaded,)
             'state': current_state                                        # (n_faces, 3)
         }
 

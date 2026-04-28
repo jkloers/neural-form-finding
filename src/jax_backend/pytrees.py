@@ -1,7 +1,9 @@
 
 import jax
 import jax.numpy as jnp
-from typing import NamedTuple
+from typing import NamedTuple, Callable, Tuple
+from jax import vmap
+
 
 class TessellationState(NamedTuple):
     X: jnp.ndarray
@@ -56,3 +58,110 @@ def create_jax_state(tess_dict):
             for k, v in tess_dict.get('border_edges_rest_lengths_sq', {}).items()
         }
     )
+
+
+class Geometry:
+    """
+    Template class for defining geometric data for rigid-face assemblies.
+    """
+
+    n_faces: int
+    n_nodes: int
+    face_centroids: Callable
+    centroid_node_vectors: Callable
+    bond_connectivity: Callable
+    reference_bond_vectors: Callable
+
+    @property
+    def n_blocks(self):
+        """Alias for n_faces (backward compatibility)."""
+        return self.n_faces
+
+    def compute_geometry(self):
+        """Any geometric class must implement the definition of the following data structures:
+        - `face_centroids`: (ndarray): array of shape (n_faces, 2) defining the centroid of each face.
+        - `centroid_node_vectors` (ndarray): array of shape (n_faces, n_nodes_per_face, 2) defining the vectors connecting the centroid of the face to each node.
+        - `bond_connectivity` (ndarray): array of shape (n_bonds, 2) defining the pair of nodes connected by bonds i.e. each row is of the form [node1, node2].
+        - `reference_bond_vectors` (ndarray): array of shape (n_bonds, 2) defining the reference configuration of the bonds.
+
+        Raises:
+            NotImplementedError: `compute_geometry` must define `centroid_node_vectors`, `bond_connectivity`, and `reference_bond_vectors`.
+        """
+        raise NotImplementedError("Child classes should implement this method.")
+
+    def get_reference_geometry(self, *args):
+        """
+        Computes reference configuration of all the nodes.
+        """
+
+        try:
+            centroid_node_vectors = self.centroid_node_vectors(*args)
+        except AttributeError as err:
+            self.compute_geometry()
+            centroid_node_vectors = self.centroid_node_vectors(*args)
+
+        centroids = self.face_centroids(*args)
+
+        return vmap(lambda face_nodes, centroid: face_nodes + centroid, in_axes=(0, 0))(centroid_node_vectors, centroids)
+
+    def get_xy_limits(self, *args):
+        """
+        Computes reference configuration xy limits.
+        """
+
+        vertices = self.get_reference_geometry(*args).reshape((self.n_nodes, 2))
+        return compute_xy_limits(vertices)
+
+    def get_parametrization(self) -> Tuple[Callable, Callable, Callable, Callable]:
+        """Returns the set of functions parameterizing the geometry.
+
+        Returns:
+            Tuple[Callable, Callable, Callable, Callable]: parameterizing functions: face_centroids, centroid_node_vectors, bond_connectivity, reference_bond_vectors.
+        """
+
+        self.compute_geometry()
+
+        return self.face_centroids, self.centroid_node_vectors, self.bond_connectivity, self.reference_bond_vectors
+
+
+class TessellationGeometry(Geometry):
+    """Concrete Geometry built from the dict returned by Tessellation.to_jax_state_centroidal().
+
+    Unlike the parametric Geometry base class (whose attributes are Callables),
+    this class wraps fixed numpy/jnp arrays and exposes them through no-arg lambdas
+    so that the rest of the physics solver pipeline (which calls ``face_centroids()``)
+    works without changes.
+
+    Usage::
+
+        tess_state = tessellation.to_jax_state_centroidal()
+        geom = TessellationGeometry.from_dict(tess_state)
+        # geom.n_faces, geom.face_centroids(), geom.bond_connectivity(), etc.
+    """
+
+    def __init__(self, tess_dict: dict):
+        _fc = jnp.array(tess_dict['face_centroids'])
+        _cnv = jnp.array(tess_dict['centroid_node_vectors'])
+        _bc = jnp.array(tess_dict['bond_connectivity'])
+        _rbv = jnp.array(tess_dict['reference_bond_vectors'])
+
+        self.n_faces = int(_fc.shape[0])
+        self.n_nodes = int(self.n_faces * _cnv.shape[1])
+
+        # Expose as no-arg callables (consistent with Geometry interface)
+        self.face_centroids = lambda: _fc
+        self.centroid_node_vectors = lambda: _cnv
+        self.bond_connectivity = lambda: _bc
+        self.reference_bond_vectors = lambda: _rbv
+
+        # Store extra data from the tessellation export
+        self._tess_dict = tess_dict
+
+    def compute_geometry(self):
+        """No-op: geometry is already computed from the tessellation export."""
+        pass
+
+    @classmethod
+    def from_dict(cls, tess_dict: dict) -> 'TessellationGeometry':
+        """Alternative constructor for readability."""
+        return cls(tess_dict)

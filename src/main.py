@@ -137,53 +137,97 @@ if __name__ == "__main__":
     )
     plt.show()
 
-
-    print("\nCalculating contracted shape using optimization...")
-    # VERY IMPORTANT: Update face rest lengths so that 
-    # the contracted solver tries to maintain the DEPLOYED shape, not the mapped shape.
-    from jax_backend.pytrees import compute_face_lengths_sq
-    new_F_rest = compute_face_lengths_sq(optimized_state.X, optimized_state.F_idx)
-    optimized_state = optimized_state._replace(F_rest_lengths_sq=new_F_rest)
+    # print("\nCalculating contracted shape using optimization...")
+    # # VERY IMPORTANT: Update face rest lengths so that 
+    # # the contracted solver tries to maintain the DEPLOYED shape, not the mapped shape.
+    # from jax_backend.pytrees import compute_face_lengths_sq
+    # new_F_rest = compute_face_lengths_sq(optimized_state.X, optimized_state.F_idx)
+    # optimized_state = optimized_state._replace(F_rest_lengths_sq=new_F_rest)
     
-    contracted_state, result, history = solve_form_finding_contracted(optimized_state, target_params, max_iter=500)
-    contracted_tessellation = mapped_tessellation.copy()
-    contracted_tessellation.update_vertices(contracted_state.X)
-    print("Contraction finished.")
+    # contracted_state, result, history = solve_form_finding_contracted(optimized_state, target_params, max_iter=500)
+    # contracted_tessellation = mapped_tessellation.copy()
+    # contracted_tessellation.update_vertices(contracted_state.X)
+    # print("Contraction finished.")
 
-    if config.animate_contraction:
-        print("\nCreating animation of the closing process...")
-        animate_tessellation(
-            contracted_tessellation, 
-            history['states'], 
-            filepath="closing_animation.gif", 
-            fps=15,
-            show_target=True, 
-            show_indices=False, 
-            show_vertices=False, 
-            show_hinges=False,
-            target_params=target_params,
-            color_faces='orange'
-        )
+    # if config.animate_contraction:
+    #     print("\nCreating animation of the closing process...")
+    #     animate_tessellation(
+    #         contracted_tessellation, 
+    #         history['states'], 
+    #         filepath="closing_animation.gif", 
+    #         fps=15,
+    #         show_target=True, 
+    #         show_indices=False, 
+    #         show_vertices=False, 
+    #         show_hinges=False,
+    #         target_params=target_params,
+    #         color_faces='orange'
+    #     )
 
-    # Visualization of the contracted shape
-    plot_tessellation(contracted_tessellation, 
-        title="Contracted Shape", 
-        show_target=True, 
-        show_indices=False, 
-        show_vertices=False, 
-        show_hinges=False,
-        target_params=target_params,
-        color_faces='orange')
-    plt.show()
+    # # Visualization of the contracted shape
+    # plot_tessellation(contracted_tessellation, 
+    #     title="Contracted Shape", 
+    #     show_target=True, 
+    #     show_indices=False, 
+    #     show_vertices=False, 
+    #     show_hinges=False,
+    #     target_params=target_params,
+    #     color_faces='orange')
+    # plt.show()
 
-    # Plotting Energy History
-    plt.figure(figsize=(8, 5))
-    plt.plot(history['energy'], label='Internal Energy', color='orange', linewidth=2)
-    plt.xlabel('Iteration')
-    plt.ylabel('Objective / Energy')
-    plt.title('Internal Energy of the Tessellation during Closing')
-    plt.yscale('log')
-    plt.grid(True, which="both", ls="--", alpha=0.7)
-    plt.legend()
-    plt.tight_layout()
-    plt.show()
+    # # Plotting Energy History
+    # plt.figure(figsize=(8, 5))
+    # plt.plot(history['energy'], label='Internal Energy', color='orange', linewidth=2)
+    # plt.xlabel('Iteration')
+    # plt.ylabel('Objective / Energy')
+    # plt.title('Internal Energy of the Tessellation during Closing')
+    # plt.yscale('log')
+    # plt.grid(True, which="both", ls="--", alpha=0.7)
+    # plt.legend()
+    # plt.tight_layout()
+    # plt.show()
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # CENTROIDAL STATIC SOLVER — Rigid-face equilibrium
+    # ═══════════════════════════════════════════════════════════════════════════
+    print("\n" + "="*60)
+    print("CENTROIDAL STATIC SOLVER")
+    print("="*60)
+
+    # ── 1. Configure the tessellation for statics ──────────────────────────
+    # Set material properties on all hinges
+    tessellation.set_hinge_properties(k_stretch=10.0, k_shear=5.0, k_rot=1.0)
+    # Set density on all faces
+    tessellation.set_all_faces_properties(density=1.0)
+
+    # Clamp the boundary faces (fix all 3 DOFs: x, y, theta)
+    boundary_face_ids = tessellation.get_boundary_face_ids()
+    for face_id in boundary_face_ids:
+        tessellation.set_face_dofs(face_id, [0, 1, 2])
+
+    print(f"Clamped {len(boundary_face_ids)} boundary faces.")
+
+    # ── 2. Export to JAX centroidal state ───────────────────────────────────
+    print("Exporting centroidal JAX state...")
+    tess_centroidal = tessellation.to_jax_state_centroidal()
+
+    print(f"  face_centroids:          {tess_centroidal['face_centroids'].shape}")
+    print(f"  centroid_node_vectors:   {tess_centroidal['centroid_node_vectors'].shape}")
+    print(f"  bond_connectivity:       {tess_centroidal['bond_connectivity'].shape}")
+    print(f"  reference_bond_vectors:  {tess_centroidal['reference_bond_vectors'].shape}")
+    print(f"  constrained_face_DOFs:   {tess_centroidal['constrained_face_DOF_pairs'].shape}")
+    print(f"  state:                   {tess_centroidal['state'].shape}")
+
+    # ── 3. Build and run the static forward problem ────────────────────────
+    from jax_backend.physics_solver.static_problem import StaticForwardProblem
+
+    problem = StaticForwardProblem(tess_dict=tess_centroidal)
+    problem.setup()
+    print("Static solver compiled. Solving...")
+
+    solution = problem.solve()
+    print(f"Solution fields shape: {solution.fields.shape}")
+    print(f"Max displacement: {float(jnp.max(jnp.abs(solution.fields[:, :2]))):.6f}")
+    print(f"Max rotation:     {float(jnp.max(jnp.abs(solution.fields[:, 2]))):.6f}")
+
+    print("\nCentroidal static solver complete.")

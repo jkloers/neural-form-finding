@@ -8,23 +8,11 @@ import jax.numpy as jnp
 from jax import vmap
 from jax_md import smap
 
-from difflexmm.geometry import compute_edge_angles, rotation_matrix
-from difflexmm.kinematics import block_to_node_kinematics
-from difflexmm.utils import ControlParams
+from jax_backend.utils.linalg import rotation_matrix, compute_edge_angles, vdot
+from jax_backend.physics_solver.kinematics import face_to_node_kinematics
+from jax_backend.utils.utils import ControlParams
 
 
-def vdot(v1, v2):
-    """Vectorized dot product based on *.
-
-    Args:
-        v1 (jnp.ndarray): Array of shape (Any, Any).
-        v2 (jnp.ndarray): Array having the same shape as v1 or (v1.shape[1],).
-
-    Returns:
-        jnp.ndarray: row-wise dot product between v1 and v2
-    """
-
-    return jnp.sum(v1 * v2, axis=-1)
 
 
 def simple_spring_energy(nodal_DOFs: Tuple[jnp.ndarray, jnp.ndarray], reference_vector: jnp.ndarray = jnp.array([1., 0.]), k_stretch=1.):
@@ -40,7 +28,7 @@ def simple_spring_energy(nodal_DOFs: Tuple[jnp.ndarray, jnp.ndarray], reference_
     """
 
     DOFs1, DOFs2 = nodal_DOFs
-    dU = DOFs2[:, :2] - DOFs1[:, :2]
+    dU = DOFs2[:, 1] - DOFs1[:, 1]
     l = jnp.linalg.norm(dU + reference_vector, axis=-1)
     l0 = jnp.linalg.norm(reference_vector, axis=-1)
     axial_strain = l / l0 - 1
@@ -198,14 +186,14 @@ def strain_energy_bond(bond_connectivity: jnp.ndarray, bond_energy_fn: Callable 
 
 
 # Contact energy between adjacent edges
-# NOTE: This is a simplified way to handle contact. The energy is just based on the angle between blocks connected by a bond.
+# NOTE: This is a simplified way to handle contact. The energy is just based on the angle between faces connected by a bond.
 # NOTE: This is also not based on general data structures for defining edges (see geometry.compute_edge_angles).
 
-def void_angles(current_block_nodes: jnp.ndarray, bond_connectivity: jnp.ndarray):
-    """Computes angles between blocks connected by the bonds.
+def void_angles(current_face_nodes: jnp.ndarray, bond_connectivity: jnp.ndarray):
+    """Computes angles between faces connected by the bonds.
 
     Args:
-        current_block_nodes (jnp.ndarray): array of shape (n_blocks, n_nodes_per_block, 2) defining the current position of the blocks.
+        current_face_nodes (jnp.ndarray): array of shape (n_faces, n_nodes_per_face, 2) defining the current position of the faces.
         bond_connectivity (jnp.ndarray): array of shape (n_bonds, 2) where each row [n1, n2] defines a bond connecting nodes n1 and n2.
 
     Returns:
@@ -213,7 +201,7 @@ def void_angles(current_block_nodes: jnp.ndarray, bond_connectivity: jnp.ndarray
     """
 
     angles = vmap(lambda bond: compute_edge_angles(
-        current_block_nodes, bond))(bond_connectivity)
+        current_face_nodes, bond))(bond_connectivity)
     void_angles = jnp.array(angles)[:2].ravel()
 
     return void_angles
@@ -287,32 +275,32 @@ def build_void_edge_distance(bond_connectivity: jnp.ndarray):
         Callable: function that computes all the pairwise distances between edges connected by the bonds.
     """
 
-    def void_edge_distance(current_block_nodes: jnp.ndarray):
+    def void_edge_distance(current_face_nodes: jnp.ndarray):
         """Computes the distance between edges connected by the bonds.
 
         Args:
-            current_block_nodes (jnp.ndarray): array of shape (n_blocks, n_nodes_per_block, 2) defining the current position of the blocks.
+            current_face_nodes (jnp.ndarray): array of shape (n_faces, n_nodes_per_face, 2) defining the current position of the faces.
 
         Returns:
             jnp.ndarray: array of shape (2*n_bonds,) defining the distances between edges connected by the bonds.
         """
 
-        _, n_nodes_per_block, _ = current_block_nodes.shape
+        _, n_nodes_per_face, _ = current_face_nodes.shape
         nodes_1_id = bond_connectivity[:, 0]
         nodes_2_id = bond_connectivity[:, 1]
-        pts1 = current_block_nodes[nodes_1_id //
-                                   n_nodes_per_block, nodes_1_id % n_nodes_per_block]
-        pts1_prev = current_block_nodes[nodes_1_id //
-                                        n_nodes_per_block, (nodes_1_id-1) % n_nodes_per_block]
-        pts1_next = current_block_nodes[nodes_1_id //
-                                        n_nodes_per_block, (nodes_1_id+1) % n_nodes_per_block]
+        pts1 = current_face_nodes[nodes_1_id //
+                                   n_nodes_per_face, nodes_1_id % n_nodes_per_face]
+        pts1_prev = current_face_nodes[nodes_1_id //
+                                        n_nodes_per_face, (nodes_1_id-1) % n_nodes_per_face]
+        pts1_next = current_face_nodes[nodes_1_id //
+                                        n_nodes_per_face, (nodes_1_id+1) % n_nodes_per_face]
 
-        pts2 = current_block_nodes[nodes_2_id //
-                                   n_nodes_per_block, nodes_2_id % n_nodes_per_block]
-        pts2_prev = current_block_nodes[nodes_2_id //
-                                        n_nodes_per_block, (nodes_2_id-1) % n_nodes_per_block]
-        pts2_next = current_block_nodes[nodes_2_id //
-                                        n_nodes_per_block, (nodes_2_id+1) % n_nodes_per_block]
+        pts2 = current_face_nodes[nodes_2_id //
+                                   n_nodes_per_face, nodes_2_id % n_nodes_per_face]
+        pts2_prev = current_face_nodes[nodes_2_id //
+                                        n_nodes_per_face, (nodes_2_id-1) % n_nodes_per_face]
+        pts2_next = current_face_nodes[nodes_2_id //
+                                        n_nodes_per_face, (nodes_2_id+1) % n_nodes_per_face]
 
         # Distance between edges on one side of the bond
         void_distances1 = edges_distance_mapped(
@@ -331,13 +319,13 @@ def build_void_edge_distance(bond_connectivity: jnp.ndarray):
 
 
 def contact_energy(current_void_angles: jnp.ndarray, min_angle: jnp.ndarray = jnp.array(0.), cutoff_angle: jnp.ndarray = jnp.array(2.0*jnp.pi/180), k_contact=1.0):
-    """Computes the contact energy between connected blocks.
+    """Computes the contact energy between connected faces.
 
-    This is a simplified way to handle contact. The energy is just based on the angle between blocks connected by a bond.
+    This is a simplified way to handle contact. The energy is just based on the angle between faces connected by a bond.
 
     Args:
-        current_void_angles (jnp.ndarray): array of shape (2*n_bonds,) defining the angles between connected blocks.
-        min_angle (jnp.ndarray, optional): lower bound for the angle between the blocks. Defaults to jnp.array(0.).
+        current_void_angles (jnp.ndarray): array of shape (2*n_bonds,) defining the angles between connected faces.
+        min_angle (jnp.ndarray, optional): lower bound for the angle between the faces. Defaults to jnp.array(0.).
         cutoff_angle (jnp.ndarray, optional): cutoff for the contact energy. Defaults to jnp.array(2.0*jnp.pi/180).
         k_contact (float, optional): initial stiffness of the contact. Defaults to 1.0.
 
@@ -348,7 +336,7 @@ def contact_energy(current_void_angles: jnp.ndarray, min_angle: jnp.ndarray = jn
     # min_angle is an asymptote for the energy. This is to make sure that min_angle cannot be overcome.
     x = (current_void_angles-cutoff_angle)/(cutoff_angle-min_angle)
     energy = jnp.where(
-        # This means that the blocks are not in contact as we assume that min_angle is the minimum angle between the blocks
+        # This means that the faces are not in contact as we assume that min_angle is the minimum angle between the faces
         current_void_angles < min_angle,
         0,
         jnp.where(
@@ -362,52 +350,52 @@ def contact_energy(current_void_angles: jnp.ndarray, min_angle: jnp.ndarray = jn
 
 
 def build_contact_energy(bond_connectivity: jnp.ndarray, angle_based=True):
-    """Defines the energy functional for simulating contact between connected blocks.
+    """Defines the energy functional for simulating contact between connected faces.
 
     Args:
         bond_connectivity (jnp.ndarray): array of shape (n_bonds, 2) where each row [n1, n2] defines a bond connecting nodes n1 and n2.
         angle_based (bool, optional): whether to use the angle-based contact energy or the distance-based one. Defaults to True (angle-based). Angle-based is more cheaper but less accurate for complex geometries.
 
     Returns:
-        Callable: contact energy functional as a function of the DOFs of the blocks and the `control_params`.
+        Callable: contact energy functional as a function of the DOFs of the faces and the `control_params`.
     """
 
     void_edge_distance_fn = build_void_edge_distance(bond_connectivity)
 
-    def void_angle_fn(current_block_nodes): return void_angles(
-        current_block_nodes, bond_connectivity)
+    def void_angle_fn(current_face_nodes): return void_angles(
+        current_face_nodes, bond_connectivity)
     distance_fn = void_angle_fn if angle_based else void_edge_distance_fn
 
-    def contact_energy_fn(block_displacement: jnp.ndarray, control_params: ControlParams):
-        """Computes the contact energy between connected blocks.
+    def contact_energy_fn(face_displacement: jnp.ndarray, control_params: ControlParams):
+        """Computes the contact energy between connected faces.
 
         Args:
-            block_displacement (jnp.ndarray): array of shape (n_blocks, 3) collecting the displacements (first two positions) and rotations (last position) of all the blocks.
-            centroid_node_vectors (ndarray): array of shape (n_blocks, n_nodes_per_block, 2) representing the vectors connecting the centroid of the blocks to the nodes.
+            face_displacement (jnp.ndarray): array of shape (n_faces, 3) collecting the displacements (first two positions) and rotations (last position) of all the faces.
+            centroid_node_vectors (ndarray): array of shape (n_faces, n_nodes_per_face, 2) representing the vectors connecting the centroid of the faces to the nodes.
             control_params (ControlParams): contains the contact params in control_params.mechanical_params.contact_params.
 
         Returns:
             float: Total contact energy.
         """
 
-        block_centroids = control_params.geometrical_params.block_centroids
+        face_centroids = control_params.geometrical_params.face_centroids
         centroid_node_vectors = control_params.geometrical_params.centroid_node_vectors
         contact_params = control_params.mechanical_params.contact_params
 
         node_displacements = jnp.array(
-            block_to_node_kinematics(
-                block_displacement,
+            face_to_node_kinematics(
+                face_displacement,
                 centroid_node_vectors
             )
         )[:, :, :2]
-        current_block_nodes = block_centroids[:, None] + \
+        current_face_nodes = face_centroids[:, None] + \
             centroid_node_vectors + node_displacements
-        return jnp.sum(contact_energy(current_void_angles=distance_fn(current_block_nodes), **contact_params._asdict()))
+        return jnp.sum(contact_energy(current_void_angles=distance_fn(current_face_nodes), **contact_params._asdict()))
 
     return contact_energy_fn
 
 
-def build_strain_energy(bond_connectivity: jnp.ndarray, bond_energy_fn: Callable = ligament_energy_linearized):
+def build_strain_energy(bond_connectivity: jnp.ndarray, bond_energy_fn: Callable = ligament_energy_linearized) -> Callable:
     """Defines the strain energy functional of the system.
 
     Args:
@@ -415,18 +403,18 @@ def build_strain_energy(bond_connectivity: jnp.ndarray, bond_energy_fn: Callable
         bond_energy_fn (Callable): energy functional of a single bond. Defaults to `energy.ligament_energy_linearized`.
 
     Returns:
-        Callable: function evaluating the strain energy of the system from the DOFs of the blocks and the `control_params`.
+        Callable: function evaluating the strain energy of the system from the DOFs of the faces and the `control_params`.
     """
 
     # Build vectorized bond energy using smap.bond
     strain_energy_bonds = strain_energy_bond(
         bond_connectivity=bond_connectivity, bond_energy_fn=bond_energy_fn)
 
-    def strain_energy_fn(block_displacement: jnp.ndarray, control_params: ControlParams):
+    def strain_energy_fn(face_displacement: jnp.ndarray, control_params: ControlParams) -> float:
         """Computes total strain energy by summing over all bonds.
 
         Args:
-            block_displacement (ndarray): array of shape (n_blocks, 3) collecting the displacements (first two positions) and rotations (last position) of all the blocks.
+            face_displacement (ndarray): array of shape (n_faces, 3) collecting the displacements (first two positions) and rotations (last position) of all the faces.
             control_params (ControlParams): contains the geometrical params in control_params.geometrical_params, as well as the bond params in control_params.mechanical_params.bond_params.
 
         Returns:
@@ -436,35 +424,35 @@ def build_strain_energy(bond_connectivity: jnp.ndarray, bond_energy_fn: Callable
         centroid_node_vectors = control_params.geometrical_params.centroid_node_vectors
         bond_params = control_params.mechanical_params.bond_params
 
-        n_blocks, n_nodes_per_block, _ = centroid_node_vectors.shape
-        node_displacements = block_to_node_kinematics(
-            block_displacement,
+        n_faces, n_nodes_per_face, _ = centroid_node_vectors.shape
+        node_displacements = face_to_node_kinematics(
+            face_displacement,
             centroid_node_vectors
         )
         node_displacements = node_displacements.reshape(
-            (n_blocks * n_nodes_per_block, 3))
+            (n_faces * n_nodes_per_face, 3))
 
         return strain_energy_bonds(node_displacements, **bond_params._asdict())
 
     return strain_energy_fn
 
 
-def combine_block_energies(*energy_fns: Callable):
-    """Combines multiple energy functions into a single function with signature (block_displacement, control_params) -> energy.
+def combine_face_energies(*energy_fns: Callable):
+    """Combines multiple energy functions into a single function with signature (face_displacement, control_params) -> energy.
 
     Args:
-        *energy_fns (Callable): energy functions with signature (block_displacement, control_params) -> energy.
+        *energy_fns (Callable): energy functions with signature (face_displacement, control_params) -> energy.
 
     Returns:
-        Callable: energy function with signature (block_displacement, control_params) -> energy.
+        Callable: energy function with signature (face_displacement, control_params) -> energy.
     """
 
-    def combined_energy_fn(block_displacement: jnp.ndarray, control_params: ControlParams):
+    def combined_energy_fn(face_displacement: jnp.ndarray, control_params: ControlParams):
         # NOTE: Maybe there is a better way of doing this using a scan/loop. See https://github.com/google/jax/issues/673#issuecomment-894955037.
         # But, a for loop should be fine as the number of energy functions is small, so unrolling the loop should not be a problem.
         energy = jnp.array(0.)
         for energy_fn in energy_fns:
-            energy += energy_fn(block_displacement, control_params)
+            energy += energy_fn(face_displacement, control_params)
         return energy
 
     return combined_energy_fn
@@ -475,7 +463,7 @@ def constrain_energy(energy_fn: Callable, constrained_kinematics: Callable):
 
     Args:
         energy_fn (Callable): Energy functional to be constrained.
-        constrained_kinematics (Callable): Constraint function mapping the free DOFs and time to the displacement of all the blocks. Normally, this is the output of `kineamtics.build_constrained_kinematics`.
+        constrained_kinematics (Callable): Constraint function mapping the free DOFs and time to the displacement of all the faces. Normally, this is the output of `kineamtics.build_constrained_kinematics`.
 
     Returns:
         Callable: Constrained energy functional with signature (free_dofs, time, control_params) -> energy.
@@ -491,37 +479,9 @@ def constrain_energy(energy_fn: Callable, constrained_kinematics: Callable):
     return constrained_energy_fn
 
 
-def kinetic_energy(block_velocity, inertia):
-    """
-    Computes the kinetic energy of the blocks.
-    """
-
-    return jnp.sum(inertia * block_velocity**2 / 2)
-
-
-def angular_momentum(block_position, block_velocity, inertia, reference_point=jnp.array([0., 0.])):
-    """
-    Computes the angular momentum of the blocks.
-
-    Args:
-        block_position (ndarray): array of shape (n_blocks, 2) representing the position of the blocks.
-        block_velocity (ndarray): array of shape (n_blocks, 3) representing the velocity of the blocks.
-        inertia (ndarray): array of shape (n_blocks, 3) representing the inertia of the blocks.
-        reference_point (ndarray, optional): array of shape (2,) representing the reference point for computing the angular momentum. Defaults to jnp.array([0., 0.]).
-
-    Returns:
-        ndarray: array of shape (n_blocks,) representing the angular momentum of the blocks.
-    """
-
-    momentum_centroids = jnp.cross(block_position[:, :2] - reference_point,
-                                   block_velocity[:, :2] * inertia[:, :2], axis=-1)
-    momentum_rotations = block_velocity[:, 2] * inertia[:, 2]
-    return momentum_centroids + momentum_rotations
-
-
-def compute_ligament_strains(block_displacement, centroid_node_vectors, bond_connectivity, reference_bond_vectors):
-    node_displacements = block_to_node_kinematics(
-        block_displacement,
+def compute_ligament_strains(face_displacement, centroid_node_vectors, bond_connectivity, reference_bond_vectors):
+    node_displacements = face_to_node_kinematics(
+        face_displacement,
         centroid_node_vectors
     ).reshape(-1, 3)
     return ligament_strains(node_displacements[bond_connectivity[:, 0]],
