@@ -26,8 +26,6 @@ import copy
 
 # Add src to path for imports
 sys.path.append(os.path.abspath('src'))
-# Add data/library to path for unit_patterns
-sys.path.append(os.path.abspath('data/library'))
 
 # Visualization
 from src.utils.visualization import plot_tessellation
@@ -41,7 +39,7 @@ from src.problem.conditions import (
     apply_loads, 
     set_material_properties
 )
-from src.problem.loader import load_config
+from src.problem.config import load_config
 
 # Centroidal pipeline
 from src.jax_backend.centroidal.state import CentroidalState
