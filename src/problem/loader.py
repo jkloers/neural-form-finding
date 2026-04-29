@@ -1,7 +1,7 @@
 import yaml
 import os
 from problem.config import CentroidalConfig
-from topology.unit_patterns import unit_RDQK_D, unit_RDQK_0
+from unit_patterns import unit_RDQK_D, unit_RDQK_0
 
 # Map string names from YAML to actual function objects
 PATTERN_MAP = {

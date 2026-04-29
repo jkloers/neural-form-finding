@@ -13,9 +13,11 @@ dependencies:
   - jupyter
   - scikit-learn
   - pip
+  - shapely
   - pip:
     - jax
     - jaxlib
+    - jax_md
     - jax-metal
     - flax
     - optax

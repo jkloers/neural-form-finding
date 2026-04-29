@@ -13,7 +13,7 @@ target:
 material:
   k_stretch: 10000.0
   k_shear: 10000.0
-  k_rot: 1.0
+  k_rot: 0.1
   density: 1.0
 
 mapping:
@@ -39,6 +39,6 @@ boundary_conditions:
   clamped_faces: [0] # can be "boundary" or a list of IDs like [0, 1, 2]
 
 loads:
-  - face: 5 # can be "central" or an ID
+  - face: 3 # can be "central" or an ID
     dof: 2          # 0=x, 1=y, 2=theta
-    value: 50.0
+    value: 75.0

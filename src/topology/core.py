@@ -152,8 +152,11 @@ class Tessellation:
         return new_tess
     
     def update_vertices(self, new_vertices):
-        """Update the vertex positions in the tessellation."""
-        self.vertices = np.asarray(new_vertices, dtype=float)
+        """Update the vertex positions in the tessellation with shape validation."""
+        new_vertices = np.asarray(new_vertices, dtype=float)
+        if self.vertices.size > 0 and new_vertices.shape != self.vertices.shape:
+            raise ValueError(f"New vertices shape {new_vertices.shape} must match existing {self.vertices.shape}")
+        self.vertices = new_vertices
     
     def set_hinge_properties(self, k_stretch=None, k_shear=None, k_rot=None):
         """Update the hinge properties in the tessellation."""
@@ -259,13 +262,6 @@ class Tessellation:
             primary_to_hinges.setdefault(hinge.vertex2, []).append(hinge.id)
         return primary_to_hinges
 
-    def build_adjacent_to_hinge(self):
-        """Build a map from hinge side vertices to the hinge id."""
-        adjacent_to_hinge = {}
-        for hinge in self.hinges:
-            adjacent_to_hinge[hinge.vertex_adjacent1] = hinge.id
-            adjacent_to_hinge[hinge.vertex_adjacent2] = hinge.id
-        return adjacent_to_hinge
     
     def build_adjacents_to_hinge(self):
         """Build a map from hinge side vertices to the hinge id."""
@@ -293,12 +289,6 @@ class Tessellation:
             
         return void_opposite_edges
 
-    def update_vertices(self, vertices):
-        vertices = np.asarray(vertices, dtype=float)
-        if vertices.shape != self.vertices.shape:
-            raise ValueError("New vertices must match the existing vertex shape")
-        self.vertices = vertices
-        return self
     
     def get_rectangular_bounds(self):
         if self.vertices.shape[0] == 0:
@@ -461,105 +451,86 @@ class Tessellation:
         else:
             return np.zeros((0, 2), dtype=np.int32), np.zeros((0,), dtype=float)
 
-    def to_centroidal_state(self):
-        """Export tessellation as a dict ready to build a CentroidalState.
-
-        This is the unified export for the centroidal pipeline.
-        Uses a centralized vertex-to-face mapping for efficiency.
-        """
-        n_faces = len(self.faces)
-        n_hinges = len(self.hinges)
+    def _build_vertex_to_face_mapping(self):
+        """Build inverse mapping: vertex_id -> [face_id, local_node_id]."""
         n_verts = len(self.vertices)
-        
-        # 1. Variables
-        face_centroids = self.get_face_centroids()
-        centroid_node_vectors = self.build_centroid_node_vectors()
-        max_nodes = centroid_node_vectors.shape[1]
-
-        # 2. Build inverse mapping: vertex_id -> [face_id, local_node_id]
-        # Useful for all topological lookups
         v_to_fn = np.full((n_verts, 2), -1, dtype=np.int32)
         for i, face in enumerate(self.faces):
             for j, v in enumerate(face.vertex_indices):
                 v_to_fn[v] = [i, j]
+        return v_to_fn
 
-        # 3. Topology: Hinges
-        # hinge_face_pairs: (n_hinges, 2)
-        # hinge_node_pairs: (n_hinges, 2, 2) -> [[f1, loc1], [f2, loc2]]
+    def _build_hinge_topology(self, v_to_fn):
+        """Build hinge connectivity arrays for JAX."""
         h_v1 = np.array([h.vertex1 for h in self.hinges], dtype=np.int32)
         h_v2 = np.array([h.vertex2 for h in self.hinges], dtype=np.int32)
-        
-        hinge_node_pairs = np.stack([v_to_fn[h_v1], v_to_fn[h_v2]], axis=1)
-        hinge_face_pairs = hinge_node_pairs[:, :, 0] # Extract face indices
-
-        # hinge_adj_info: [fi, fk, pivot_local_i, adj_local_i, adj_local_k]
         h_va1 = np.array([h.vertex_adjacent1 for h in self.hinges], dtype=np.int32)
         h_va2 = np.array([h.vertex_adjacent2 for h in self.hinges], dtype=np.int32)
         
-        # fi, fk are hinge_face_pairs[:, 0], hinge_face_pairs[:, 1]
-        # pivot_local_i is v_to_fn[h_v1][:, 1]
-        # adj_local_i is v_to_fn[h_va1][:, 1]
-        # adj_local_k is v_to_fn[h_va2][:, 1]
+        hinge_node_pairs = np.stack([v_to_fn[h_v1], v_to_fn[h_v2]], axis=1)
+        hinge_face_pairs = hinge_node_pairs[:, :, 0]
+        
         hinge_adj_info = np.column_stack([
             hinge_face_pairs,
             v_to_fn[h_v1][:, 1],
             v_to_fn[h_va1][:, 1],
             v_to_fn[h_va2][:, 1]
         ]).astype(np.int32)
+        
+        return hinge_face_pairs, hinge_node_pairs, hinge_adj_info
 
-        # 4. Topology: Boundary nodes (for target fitting)
-        hinge_verts_set = set(h_v1) | set(h_v2)
-        # Boundary nodes are vertices in faces that are NOT hinge nodes
+    def _build_boundary_topology(self, v_to_fn):
+        """Identify boundary nodes for JAX."""
+        n_verts = len(self.vertices)
+        hinge_verts = set()
+        for h in self.hinges:
+            hinge_verts.add(h.vertex1)
+            hinge_verts.add(h.vertex2)
+            
         boundary_verts = np.array([v for v in range(n_verts) 
-                                 if v not in hinge_verts_set and v_to_fn[v, 0] != -1], dtype=np.int32)
-        boundary_face_node_ids = v_to_fn[boundary_verts]
+                                 if v not in hinge_verts and v_to_fn[v, 0] != -1], dtype=np.int32)
+        return v_to_fn[boundary_verts]
 
-        # 5. Topology: Void opposite edges (for symmetry/collinearity)
-        void_opp_verts = self.build_void_opposite_edges()  # List of [[v1a, v1b], [v2a, v2b]]
-        if len(void_opp_verts) > 0:
-            void_opp_array = np.array(void_opp_verts) # (n_void_edges, 2, 2)
-            # Map each vertex to [face_id, local_node_id]
-            # void_opposite_node_pairs will be (n_void_edges, 2, 3) where each entry is [f, n_a, n_b]
-            v_opp_node_pairs = []
-            for pair in void_opp_verts:
-                # pair = [[v1a, v1b], [v2a, v2b]]
-                e1_fa, e1_na = v_to_fn[pair[0][0]]
-                e1_fb, e1_nb = v_to_fn[pair[0][1]]
-                e2_fa, e2_na = v_to_fn[pair[1][0]]
-                e2_fb, e2_nb = v_to_fn[pair[1][1]]
-                
-                # Check consistency (both vertices of an edge MUST belong to same face)
-                # Note: in Kirigami, if faces are disconnected, they each have their own vertices.
-                v_opp_node_pairs.append([
-                    [e1_fa, e1_na, e1_nb],
-                    [e2_fa, e2_na, e2_nb]
-                ])
-            void_opposite_node_pairs = np.array(v_opp_node_pairs, dtype=np.int32)
-        else:
-            void_opposite_node_pairs = np.zeros((0, 2, 3), dtype=np.int32)
+    def _build_void_topology(self, v_to_fn):
+        """Build void opposite edge mapping for JAX."""
+        void_opp_verts = self.build_void_opposite_edges()
+        if len(void_opp_verts) == 0:
+            return np.zeros((0, 2, 3), dtype=np.int32)
+            
+        v_opp_node_pairs = []
+        for pair in void_opp_verts:
+            e1_fa, e1_na = v_to_fn[pair[0][0]]
+            e1_nb = v_to_fn[pair[0][1]][1]
+            e2_fa, e2_na = v_to_fn[pair[1][0]]
+            e2_nb = v_to_fn[pair[1][1]][1]
+            v_opp_node_pairs.append([[e1_fa, e1_na, e1_nb], [e2_fa, e2_na, e2_nb]])
+            
+        return np.array(v_opp_node_pairs, dtype=np.int32)
 
-        # 6. BCs & Mechanical properties
-        constrained_face_DOF_pairs = self.build_constrained_face_DOF_pairs()
-        loaded_face_DOF_pairs, load_values = self.build_loaded_face_DOF_pairs()
-
-        k_stretch = np.array([h.properties.get('k_stretch', 1.0) for h in self.hinges])
-        k_shear = np.array([h.properties.get('k_shear', 1.0) for h in self.hinges])
-        k_rot = np.array([h.properties.get('k_rot', 1.0) for h in self.hinges])
-        density = np.array([f.properties.get('density', 1.0) for f in self.faces], dtype=float)
+    def to_centroidal_state(self):
+        """Export tessellation as a dict ready to build a CentroidalState."""
+        v_to_fn = self._build_vertex_to_face_mapping()
+        
+        h_face_pairs, h_node_pairs, h_adj_info = self._build_hinge_topology(v_to_fn)
+        boundary_ids = self._build_boundary_topology(v_to_fn)
+        void_node_pairs = self._build_void_topology(v_to_fn)
+        
+        constrained_pairs = self.build_constrained_face_DOF_pairs()
+        loaded_pairs, load_values = self.build_loaded_face_DOF_pairs()
 
         return {
-            'face_centroids': face_centroids,
-            'centroid_node_vectors': centroid_node_vectors,
-            'hinge_face_pairs': hinge_face_pairs,
-            'hinge_node_pairs': hinge_node_pairs,
-            'hinge_adj_info': hinge_adj_info,
-            'boundary_face_node_ids': boundary_face_node_ids,
-            'void_opposite_node_pairs': void_opposite_node_pairs,
-            'constrained_face_DOF_pairs': constrained_face_DOF_pairs,
-            'loaded_face_DOF_pairs': loaded_face_DOF_pairs,
+            'face_centroids': self.get_face_centroids(),
+            'centroid_node_vectors': self.build_centroid_node_vectors(),
+            'hinge_face_pairs': h_face_pairs,
+            'hinge_node_pairs': h_node_pairs,
+            'hinge_adj_info': h_adj_info,
+            'boundary_face_node_ids': boundary_ids,
+            'void_opposite_node_pairs': void_node_pairs,
+            'constrained_face_DOF_pairs': constrained_pairs,
+            'loaded_face_DOF_pairs': loaded_pairs,
             'load_values': load_values,
-            'k_stretch': k_stretch,
-            'k_shear': k_shear,
-            'k_rot': k_rot,
-            'density': density,
+            'k_stretch': np.array([h.properties.get('k_stretch', 1.0) for h in self.hinges]),
+            'k_shear': np.array([h.properties.get('k_shear', 1.0) for h in self.hinges]),
+            'k_rot': np.array([h.properties.get('k_rot', 1.0) for h in self.hinges]),
+            'density': np.array([f.properties.get('density', 1.0) for f in self.faces], dtype=float),
         }

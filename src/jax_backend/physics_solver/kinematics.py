@@ -4,15 +4,10 @@ State is displacement-only: (n_faces, 3) = [dx, dy, d_theta]. No velocities.
 """
 
 from typing import Callable, Dict, Tuple, Union
-
 import jax.numpy as jnp
 from jax import vmap
 
-
-def rotation_matrix(angle):
-    """2D rotation matrix for a given angle."""
-    return jnp.array([[jnp.cos(angle), -jnp.sin(angle)],
-                      [jnp.sin(angle),  jnp.cos(angle)]])
+from jax_backend.utils.linalg import rotation_matrix
 
 
 def _face_to_node_displacement(face_displacement: jnp.ndarray, centroid_node_vectors: jnp.ndarray):

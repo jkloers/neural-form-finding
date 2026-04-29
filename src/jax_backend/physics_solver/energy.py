@@ -14,47 +14,6 @@ from jax_backend.utils.utils import ControlParams
 
 
 
-
-def simple_spring_energy(nodal_DOFs: Tuple[jnp.ndarray, jnp.ndarray], reference_vector: jnp.ndarray = jnp.array([1., 0.]), k_stretch=1.):
-    """Computes the energy of a simple linear spring connecting two nodes.
-
-    Args:
-        nodal_DOFs (Tuple[ndarray, ndarray]): tuple of arrays of shape (Any, 3) representing the DOFs of the nodes connected by the ligament.
-        reference_vector (jnp.ndarray, optional): array of shape (2,) or (Any, 2) representing the reference configuration of the ligament. Defaults to jnp.array([1., 0.]).
-        k_stretch (float, optional): linear stretching stiffness. Defaults to 1..
-
-    Returns:
-        float: strain energy.
-    """
-
-    DOFs1, DOFs2 = nodal_DOFs
-    dU = DOFs2[:, 1] - DOFs1[:, 1]
-    l = jnp.linalg.norm(dU + reference_vector, axis=-1)
-    l0 = jnp.linalg.norm(reference_vector, axis=-1)
-    axial_strain = l / l0 - 1
-
-    return k_stretch * (axial_strain*l0)**2 / 2
-
-
-def stretching_torsional_spring_energy(nodal_DOFs: Tuple[jnp.ndarray, jnp.ndarray], k_stretch=1., k_rot=1.):
-    """Computes the energy of a zero-length spring connecting two coincident nodes accounting for stretching and bending energies.
-
-    Args:
-        nodal_DOFs (Tuple[ndarray, ndarray]): tuple of arrays of shape (Any, 3) representing the DOFs of the nodes connected by the ligament.
-        k_stretch (float, optional): linear stretching stiffness. Defaults to 1..
-        k_rot (float, optional): linear rotational stiffness. Defaults to 1..
-
-    Returns:
-        float: strain energy.
-    """
-
-    DOFs1, DOFs2 = nodal_DOFs
-    dU = DOFs2[:, :2] - DOFs1[:, :2]
-    dRot = DOFs2[:, 2] - DOFs1[:, 2]
-
-    return k_stretch * vdot(dU, dU) / 2 + k_rot * dRot**2 / 2
-
-
 def ligament_strains_linearized(DOFs1: jnp.ndarray, DOFs2: jnp.ndarray, reference_vector: jnp.ndarray = jnp.array([1., 0.])):
     """Computes linearized strain measures of an elastic ligament i.e. axial, shear, and flexural strains.
 

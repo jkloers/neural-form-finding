@@ -42,13 +42,17 @@ def apply_loads(tessellation, config):
             all_ids = set(range(len(tessellation.faces)))
             interior_ids = sorted(all_ids - set(clamped_ids))
             if interior_ids:
-                target_face = interior_ids[len(interior_ids) // 2]
+                target_faces = [interior_ids[len(interior_ids) // 2]]
+        elif isinstance(face_spec, list):
+            target_faces = face_spec
         elif isinstance(face_spec, int):
-            target_face = face_spec
+            target_faces = [face_spec]
+        else:
+            target_faces = []
             
-        if target_face is not None:
-            tessellation.set_face_load(target_face, dof_id=dof, value=value)
-            applied_loads.append((target_face, dof, value))
+        for fid in target_faces:
+            tessellation.set_face_load(fid, dof_id=dof, value=value)
+            applied_loads.append((fid, dof, value))
             
     return applied_loads
 

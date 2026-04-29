@@ -1,0 +1,44 @@
+# Default configuration for the Centroidal Pipeline
+
+tessellation:
+  width: 2
+  height: 2
+  pattern: "unit_RDQK_D"
+
+target:
+  type: "circle"
+  center: [0.0, 0.0]
+  radius: 1.0
+
+material:
+  k_stretch: 10000.0
+  k_shear: 10000.0
+  k_rot: 0.1
+  density: 1.0
+
+mapping:
+  type: "elliptical_grip"
+  scale_factor: 1.0
+
+optimization_weights:
+  connectivity: 700.0
+  non_intersection: 1000.0
+  target: 1.0
+  arm_symmetry: 1.0
+  void_length: 1000.0
+  void_collinear: 1000.0
+
+physics:
+  use_contact: true
+  linearized_strains: true
+  k_contact: 1000.0
+  min_angle: 1.0      # in degrees
+  cutoff_angle: 5.0   # in degrees
+
+boundary_conditions:
+  clamped_faces: [0] # can be "boundary" or a list of IDs like [0, 1, 2]
+
+loads:
+  - face: 2 # can be "central" or an ID
+    dof: 2          # 0=x, 1=y, 2=theta
+    value: 75.0

@@ -49,31 +49,3 @@ def build_loading(
         return loading_vector
 
     return global_loading_fn
-
-
-def build_static_loading(
-        geometry,
-        loaded_face_DOF_pairs: jnp.ndarray,
-        force_values: jnp.ndarray,
-        constrained_face_DOF_pairs: jnp.ndarray = jnp.array([])):
-    """Builds a static (constant) loading vector reduced to the free DOFs.
-
-    Args:
-        geometry: Geometry object (must have `n_faces` attribute).
-        loaded_face_DOF_pairs (jnp.ndarray): shape (n_loaded, 2) — [face_id, DOF_id].
-        force_values (jnp.ndarray): shape (n_loaded,) — force magnitude on each loaded DOF.
-        constrained_face_DOF_pairs (jnp.ndarray, optional): shape (n_constraints, 2).
-
-    Returns:
-        jnp.ndarray: shape (n_free_DOFs,) — static force vector reduced to free DOFs.
-    """
-
-    loaded_DOF_ids = jnp.array(
-        [face_id * 3 + dof_id for face_id, dof_id in loaded_face_DOF_pairs])
-    free_DOF_ids, _, all_DOF_ids = DOFsInfo(
-        geometry.n_faces, constrained_face_DOF_pairs)
-
-    full_loading = jnp.zeros(len(all_DOF_ids))
-    full_loading = full_loading.at[loaded_DOF_ids].set(force_values)
-
-    return full_loading[free_DOF_ids]

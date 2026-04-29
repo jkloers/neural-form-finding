@@ -19,6 +19,15 @@ jax.config.update("jax_enable_x64", True)
 
 import sys
 sys.path.append(os.path.abspath('.'))
+# Ensure src is in path if running from root
+if os.path.exists('src'):
+    sys.path.append(os.path.abspath('src'))
+    
+# Add data/library to path (handle both running from root or src)
+if os.path.exists('../data/library'):
+    sys.path.append(os.path.abspath('../data/library'))
+elif os.path.exists('data/library'):
+    sys.path.append(os.path.abspath('data/library'))
 
 import jax.numpy as jnp
 from jax import vmap
@@ -26,15 +35,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 import copy
 
-# Topology
-from topology.unit_patterns import unit_RDQK_D
-from topology.builder import build_tessellation
-
 # Visualization
 from utils.visualization import plot_tessellation
 
+# Builder
+from topology.builder import build_tessellation
+
 # Problem definition (Targets, Conditions, Config)
-from problem.targets import get_target_points, DEFAULT_TARGET
 from problem.conditions import (
     apply_boundary_conditions, 
     apply_loads, 
@@ -56,11 +63,31 @@ from jax_backend.physics_solver.kinematics import rotation_matrix
 if __name__ == "__main__":
 
     # Load configuration from YAML
-    config_name = "default"
+    config_name = "turn3"
 
-    config_path = f"problem/configs/{config_name}.yaml"
+    # Handle both running from root or src
+    if os.path.exists(f"../data/configs/{config_name}.yaml"):
+        config_path = f"../data/configs/{config_name}.yaml"
+    else:
+        config_path = f"data/configs/{config_name}.yaml"
+        
     config = load_config(config_path)
     print(f"Loaded configuration from {config_path}")
+
+    # Create output directory for this run
+    import datetime
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    base_output = "../data/outputs" if os.path.exists("../data") else "data/outputs"
+    output_dir = os.path.join(base_output, "runs", f"{timestamp}_{config_name}")
+    
+    os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(os.path.join(output_dir, "plots"), exist_ok=True)
+    
+    # Save a copy of the config used
+    import shutil
+    shutil.copy2(config_path, os.path.join(output_dir, "config_used.yaml"))
+    print(f"Results will be saved to: {output_dir}")
 
     target_params = {
         'type': config.target_type,
@@ -152,7 +179,7 @@ if __name__ == "__main__":
     print("RESULTS VISUALIZATION")
     print("-" * 60)
 
-    def plot_stage(state, title):
+    def plot_stage(state, title, save_figure=False):
         # 1. Reconstruct vertices from centroidal state
         c = state.face_centroids
         s = state.centroid_node_vectors
@@ -170,15 +197,22 @@ if __name__ == "__main__":
         fig, ax = plt.subplots(figsize=(8, 8))
         plot_tessellation(tess_copy, ax=ax, title=title, 
                           show_target=True, target_params=target_params)
+        
+        if save_figure:
+            # Save figure
+            filename = title.lower().replace(" ", "_").replace(":", "") + ".png"
+            save_path = os.path.join(output_dir, "plots", filename)
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"  Saved plot to {save_path}")
         plt.show()
 
-    # # Stage 0
-    # print("Displaying Stage 0: Initial Mapping...")
-    # plot_stage(result['mapped_state'], "Stage 0: Initial Mapping")
+    # Stage 0
+    print("Displaying Stage 0: Initial Mapping...")
+    plot_stage(result['mapped_state'], "Stage 0: Initial Mapping")
 
-    # # Stage 1
-    # print("Displaying Stage 1: Geometric Validity...")
-    # plot_stage(result['valid_state'], "Stage 1: Geometric Validity")
+    # Stage 1
+    print("Displaying Stage 1: Geometric Validity...")
+    plot_stage(result['valid_state'], "Stage 1: Geometric Validity")
 
     # Stage 2
     print("Displaying Stage 2: Static Equilibrium...")

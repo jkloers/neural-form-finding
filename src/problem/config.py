@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from typing import Tuple, Callable, Any
 from problem.targets import DEFAULT_TARGET
-from topology.unit_patterns import unit_RDQK_D
+from unit_patterns import unit_RDQK_D
 
 @dataclass
 class CentroidalConfig:
