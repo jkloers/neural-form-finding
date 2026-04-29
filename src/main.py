@@ -56,7 +56,9 @@ from jax_backend.physics_solver.kinematics import rotation_matrix
 if __name__ == "__main__":
 
     # Load configuration from YAML
-    config_path = "problem/configs/default.yaml"
+    config_name = "default"
+
+    config_path = f"problem/configs/{config_name}.yaml"
     config = load_config(config_path)
     print(f"Loaded configuration from {config_path}")
 
