@@ -6,42 +6,42 @@ from unit_patterns import unit_RDQK_D
 @dataclass
 class CentroidalConfig:
     # Tessellation
-    width: int = 2
-    height: int = 2
-    pattern: Callable = unit_RDQK_D
+    width: int
+    height: int
+    pattern: Callable
 
     # Target shape
-    target_type: str = DEFAULT_TARGET['type']
-    target_center: Tuple[float, float] = (0.0, 0.0)
-    target_radius: float = DEFAULT_TARGET['radius']
+    target_type: str
+    target_center: Tuple[float, float]
+    target_radius: float
 
     # Material properties
-    k_stretch: float = 10.0
-    k_shear: float = 5.0
-    k_rot: float = 1.0
-    density: float = 1.0
+    k_stretch: float
+    k_shear: float
+    k_rot: float
+    density: float
 
     # Initial mapping
-    map_type: str = 'elliptical_grip'
-    scale_factor: float = 1.0
+    map_type: str
+    scale_factor: float
 
     # Geometric validity weights
-    w_connectivity: float = 700.0
-    w_non_intersection: float = 1000.0
-    w_target: float = 1.0
-    w_arm_symmetry: float = 1.0
-    w_void_length: float = 1000.0
-    w_void_collinear: float = 1000.0
+    w_connectivity: float
+    w_non_intersection: float
+    w_target: float
+    w_arm_symmetry: float
+    w_void_length: float
+    w_void_collinear: float
 
     # Physics
-    use_contact: bool = True
-    linearized_strains: bool = True
-    k_contact: float = 1.0
-    min_angle: float = 0.0 # degrees
-    cutoff_angle: float = 5.0 # degrees
+    use_contact: bool
+    linearized_strains: bool
+    k_contact: float
+    min_angle: float
+    cutoff_angle: float
 
     # Boundary Conditions & Loading
     # bc_clamped can be "boundary" or a list of IDs
-    bc_clamped: Any = "boundary"
+    bc_clamped: Any
     # loads is a list of dicts: [{'face': 'central', 'dof': 1, 'value': -1.0}, ...]
-    loads: list = field(default_factory=lambda: [{'face': 'central', 'dof': 1, 'value': -1.0}])
+    loads: list

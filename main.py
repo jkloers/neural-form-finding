@@ -18,42 +18,36 @@ import jax
 jax.config.update("jax_enable_x64", True)
 
 import sys
-sys.path.append(os.path.abspath('.'))
-# Ensure src is in path if running from root
-if os.path.exists('src'):
-    sys.path.append(os.path.abspath('src'))
-    
-# Add data/library to path (handle both running from root or src)
-if os.path.exists('../data/library'):
-    sys.path.append(os.path.abspath('../data/library'))
-elif os.path.exists('data/library'):
-    sys.path.append(os.path.abspath('data/library'))
-
 import jax.numpy as jnp
 from jax import vmap
 import matplotlib.pyplot as plt
 import numpy as np
 import copy
 
+# Add src to path for imports
+sys.path.append(os.path.abspath('src'))
+# Add data/library to path for unit_patterns
+sys.path.append(os.path.abspath('data/library'))
+
 # Visualization
-from utils.visualization import plot_tessellation
+from src.utils.visualization import plot_tessellation
 
 # Builder
-from topology.builder import build_tessellation
+from src.topology.builder import build_tessellation
 
 # Problem definition (Targets, Conditions, Config)
-from problem.conditions import (
+from src.problem.conditions import (
     apply_boundary_conditions, 
     apply_loads, 
     set_material_properties
 )
-from problem.loader import load_config
+from src.problem.loader import load_config
 
 # Centroidal pipeline
-from jax_backend.centroidal.state import CentroidalState
-from jax_backend.centroidal.geometry import reconstruct_vertices
-from jax_backend.centroidal.pipeline import forward_pipeline
-from jax_backend.physics_solver.kinematics import rotation_matrix
+from src.jax_backend.centroidal.state import CentroidalState
+from src.jax_backend.centroidal.geometry import reconstruct_vertices
+from src.jax_backend.centroidal.pipeline import forward_pipeline
+from src.jax_backend.physics_solver.kinematics import rotation_matrix
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -65,21 +59,15 @@ if __name__ == "__main__":
     # Load configuration from YAML
     config_name = "turn3"
 
-    # Handle both running from root or src
-    if os.path.exists(f"../data/configs/{config_name}.yaml"):
-        config_path = f"../data/configs/{config_name}.yaml"
-    else:
-        config_path = f"data/configs/{config_name}.yaml"
-        
+    # Paths are now simple as we run from root
+    config_path = f"data/configs/{config_name}.yaml"
     config = load_config(config_path)
     print(f"Loaded configuration from {config_path}")
 
     # Create output directory for this run
     import datetime
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    base_output = "../data/outputs" if os.path.exists("../data") else "data/outputs"
-    output_dir = os.path.join(base_output, "runs", f"{timestamp}_{config_name}")
+    output_dir = os.path.join("data/outputs", "runs", f"{timestamp}_{config_name}")
     
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(os.path.join(output_dir, "plots"), exist_ok=True)
