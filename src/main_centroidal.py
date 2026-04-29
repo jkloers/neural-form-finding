@@ -31,7 +31,7 @@ from topology.unit_patterns import unit_RDQK_D
 from topology.builder import build_tessellation
 
 # Target shape
-from geometry.target_shape import get_target_points, DEFAULT_TARGET
+from jax_backend.utils.target_shape import get_target_points, DEFAULT_TARGET
 
 # Centroidal pipeline
 from jax_backend.centroidal.state import CentroidalState

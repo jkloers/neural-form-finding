@@ -5,8 +5,8 @@ from matplotlib.patches import Polygon
 import matplotlib.animation as animation
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
-from geometry.target_shape import DEFAULT_TARGET
-from geometry.target_shape import get_target_points
+from jax_backend.utils.target_shape import DEFAULT_TARGET
+from jax_backend.utils.target_shape import get_target_points
 
 def plot_tessellation(tessellation, ax=None, 
                       show_faces=True, 

@@ -25,7 +25,7 @@ from jax_backend.physics_solver.energy import (
     build_strain_energy, build_contact_energy, combine_face_energies,
     ligament_energy, ligament_energy_linearized,
 )
-from geometry.target_shape import get_target_points
+from jax_backend.utils.target_shape import get_target_points
 
 def _build_reference_bond_vectors(valid_state: CentroidalState):
     """Compute bond reference vectors from the validated centroidal state.
@@ -123,7 +123,7 @@ def forward_pipeline(
         'bond_connectivity': _bond_connectivity,
         'reference_bond_vectors': _reference_bond_vectors,
     }
-    geometry = TessellationGeometry(tess_dict)
+    geometry = TessellationGeometry.from_dict(tess_dict)
 
     # Energy
     bond_energy_fn = ligament_energy_linearized if linearized_strains else ligament_energy
