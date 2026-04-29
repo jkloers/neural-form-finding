@@ -1,58 +1,84 @@
 
 import jax
 import jax.numpy as jnp
-from typing import NamedTuple
+from typing import NamedTuple, Callable, Tuple, Any
+from jax import vmap
 
-class TessellationState(NamedTuple):
-    X: jnp.ndarray
+# ─────────────────────────────────────────────────────────────────────────────
+# MODERN: Centroidal Geometry (Pytree)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@jax.tree_util.register_pytree_node_class
+class Geometry:
+    """Base class for JAX-compatible geometry representations."""
     
-    # Topology
-    F_idx: jnp.ndarray
-    F_rest_lengths_sq: jnp.ndarray # (N_faces, 6): 4 edges + 2 diagonals
-    E_adjacent: jnp.ndarray
-    E_opp: jnp.ndarray
-    A_rest: jnp.ndarray
-    H_angular_stiffness: jnp.ndarray
-    H_linear_stiffness: jnp.ndarray
-    V_connect: jnp.ndarray
-    Boundary_indices: jnp.ndarray
-    Border_edges: dict
-    Border_edges_rest_lengths_sq: dict
+    def tree_flatten(self):
+        # Default implementation for stateless geometries
+        return (), ()
 
-jax.tree_util.register_pytree_node(
-    TessellationState,
-    lambda state: ((state.X,), (state.F_idx, state.F_rest_lengths_sq, state.E_adjacent, state.E_opp, state.A_rest, state.H_angular_stiffness, state.H_linear_stiffness, state.V_connect, state.Boundary_indices, state.Border_edges, state.Border_edges_rest_lengths_sq)),
-    lambda aux, dynamic: TessellationState(dynamic[0], *aux)
-)
+    @classmethod
+    def tree_unflatten(cls, aux_data, children):
+        return cls(*children, **aux_data)
 
-def compute_face_lengths_sq(X, F_idx):
-    """Calculates the squared lengths of the 4 edges and 2 diagonals for each face."""
-    p0, p1, p2, p3 = X[F_idx[:, 0]], X[F_idx[:, 1]], X[F_idx[:, 2]], X[F_idx[:, 3]]
-    edges = [p0-p1, p1-p2, p2-p3, p3-p0, p0-p2, p1-p3]
-    return jnp.stack([jnp.sum(e**2, axis=-1) for e in edges], axis=1)
+    def face_centroids(self): raise NotImplementedError()
+    def centroid_node_vectors(self): raise NotImplementedError()
+    def bond_connectivity(self): raise NotImplementedError()
+    def reference_bond_vectors(self): raise NotImplementedError()
 
-def create_jax_state(tess_dict):
-    """Converts a tessellation dictionary to a JAX-compatible state representation."""
-    X_init = jnp.array(tess_dict['vertices'])
-    F_idx = jnp.array(tess_dict['faces'])
+    def get_reference_geometry(self):
+        """Computes reference configuration of all the nodes."""
+        c = self.face_centroids()
+        s = self.centroid_node_vectors()
+        return vmap(lambda face_nodes, centroid: face_nodes + centroid)(s, c)
+
+    @property
+    def n_faces(self):
+        return self.face_centroids().shape[0]
+
+    @property
+    def n_nodes(self):
+        c_shape = self.centroid_node_vectors().shape
+        return c_shape[0] * c_shape[1]
+
+
+@jax.tree_util.register_pytree_node_class
+class TessellationGeometry(Geometry):
+    """Concrete Geometry representation for the centroidal pipeline.
     
-    # Pre-calculate initial face lengths for rigidity constraint
-    rest_lengths_sq = compute_face_lengths_sq(X_init, F_idx)
+    This class is a proper JAX Pytree, meaning it can be passed to JIT-compiled
+    functions and supports gradients.
+    """
 
-    return TessellationState(
-        X=X_init,
-        F_idx=F_idx,
-        F_rest_lengths_sq=rest_lengths_sq,
-        E_adjacent=jnp.array(tess_dict['hinge_adjacent_edges']),
-        E_opp=jnp.array(tess_dict['void_opposite_edges']),
-        A_rest=jnp.array(tess_dict['angles_rest']),
-        H_angular_stiffness=jnp.array(tess_dict['hinge_angular_stiffness']),
-        H_linear_stiffness=jnp.array(tess_dict['hinge_linear_stiffness']),
-        V_connect=jnp.array(tess_dict['hinge_vertex_connections']),
-        Boundary_indices=jnp.array(tess_dict['boundary_indices']),
-        Border_edges={k: jnp.array(v) for k, v in tess_dict.get('border_edges', {}).items()},
-        Border_edges_rest_lengths_sq={
-            k: jnp.array(v)
-            for k, v in tess_dict.get('border_edges_rest_lengths_sq', {}).items()
-        }
-    )
+    def __init__(self, face_centroids, centroid_node_vectors, 
+                 bond_connectivity, reference_bond_vectors):
+        self._fc = jnp.array(face_centroids)
+        self._cnv = jnp.array(centroid_node_vectors)
+        self._bc = jnp.array(bond_connectivity)
+        self._rbv = jnp.array(reference_bond_vectors)
+
+    def tree_flatten(self):
+        # Children are the JAX arrays that carry data/gradients
+        children = (self._fc, self._cnv, self._bc, self._rbv)
+        # Aux data is empty here as everything is in children
+        aux_data = {}
+        return children, aux_data
+
+    @classmethod
+    def tree_unflatten(cls, aux_data, children):
+        return cls(*children)
+
+    # Physics solver interface (called as no-arg methods)
+    def face_centroids(self): return self._fc
+    def centroid_node_vectors(self): return self._cnv
+    def bond_connectivity(self): return self._bc
+    def reference_bond_vectors(self): return self._rbv
+
+    @classmethod
+    def from_dict(cls, d: dict):
+        """Build from the dictionary returned by Tessellation.to_centroidal_state()."""
+        return cls(
+            face_centroids=d['face_centroids'],
+            centroid_node_vectors=d['centroid_node_vectors'],
+            bond_connectivity=d['bond_connectivity'],
+            reference_bond_vectors=d['reference_bond_vectors']
+        )

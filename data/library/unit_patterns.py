@@ -1,5 +1,5 @@
 import numpy as np
-from .core import UnitPattern
+from topology.core import UnitPattern
 
 # RDQK pattern (Rigidly Deployable Quadrilateral Kirigami)
 unit_RDQK_0 = UnitPattern(
