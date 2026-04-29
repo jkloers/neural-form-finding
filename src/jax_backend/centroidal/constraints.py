@@ -129,6 +129,45 @@ def hinge_arm_symmetry(face_centroids, cnv, hinge_adj_info, boundary_face_node_i
     return jnp.sum(mask * (l1_sq - l2_sq)**2)
 
 
+def void_opposite_edges_validity(cnv, void_opposite_node_pairs):
+    """Maintains symmetry and collinearity of opposite edges in voids.
+
+    Args:
+        cnv: (n_faces, max_nodes, 2)
+        void_opposite_node_pairs: (n_void_edges, 2, 3) -> [[f1, na1, nb1], [f2, na2, nb2]]
+
+    Returns:
+        tuple (length_penalty, collinearity_penalty)
+    """
+    if void_opposite_node_pairs.shape[0] == 0:
+        return 0.0, 0.0
+
+    # Extract node vectors for each edge vertex
+    # cnv has shape (n_faces, max_nodes, 2)
+    f1 = void_opposite_node_pairs[:, 0, 0]
+    na1 = void_opposite_node_pairs[:, 0, 1]
+    nb1 = void_opposite_node_pairs[:, 0, 2]
+    
+    f2 = void_opposite_node_pairs[:, 1, 0]
+    na2 = void_opposite_node_pairs[:, 1, 1]
+    nb2 = void_opposite_node_pairs[:, 1, 2]
+
+    # vectors s_b - s_a
+    v1 = cnv[f1, nb1] - cnv[f1, na1]
+    v2 = cnv[f2, nb2] - cnv[f2, na2]
+
+    # 1. Length symmetry: |v1|^2 == |v2|^2
+    l1_sq = jnp.sum(v1**2, axis=-1)
+    l2_sq = jnp.sum(v2**2, axis=-1)
+    length_penalty = jnp.sum((l1_sq - l2_sq)**2)
+
+    # 2. Collinearity: v1 x v2 == 0
+    cross_prod = v1[:, 0] * v2[:, 1] - v1[:, 1] * v2[:, 0]
+    collinearity_penalty = jnp.sum(cross_prod**2)
+
+    return length_penalty, collinearity_penalty
+
+
 def compute_geometric_objective(face_centroids, cnv, state, target_cloud, weights):
     """Total geometric validity objective.
 
@@ -138,7 +177,8 @@ def compute_geometric_objective(face_centroids, cnv, state, target_cloud, weight
         state: CentroidalState — fixed topology
         target_cloud: (n_target, 2) — target shape
         weights: dict with keys:
-            'connectivity', 'non_intersection', 'target', 'arm_symmetry'
+            'connectivity', 'non_intersection', 'target', 'arm_symmetry', 
+            'void_length', 'void_collinear'
 
     Returns:
         scalar — weighted sum of all geometric penalties.
@@ -155,7 +195,12 @@ def compute_geometric_objective(face_centroids, cnv, state, target_cloud, weight
     e_symmetry = hinge_arm_symmetry(
         face_centroids, cnv, state.hinge_adj_info, state.boundary_face_node_ids)
 
+    e_void_l, e_void_c = void_opposite_edges_validity(
+        cnv, state.void_opposite_node_pairs)
+
     return (weights.get('connectivity', 700.) * e_connect +
             weights.get('non_intersection', 1000.) * e_non_inv +
             weights.get('target', 1.) * e_target +
-            weights.get('arm_symmetry', 1.) * e_symmetry)
+            weights.get('arm_symmetry', 1.) * e_symmetry +
+            weights.get('void_length', 1.) * e_void_l +
+            weights.get('void_collinear', 1.) * e_void_c)

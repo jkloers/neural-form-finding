@@ -514,7 +514,31 @@ class Tessellation:
                                  if v not in hinge_verts_set and v_to_fn[v, 0] != -1], dtype=np.int32)
         boundary_face_node_ids = v_to_fn[boundary_verts]
 
-        # 5. BCs & Mechanical properties
+        # 5. Topology: Void opposite edges (for symmetry/collinearity)
+        void_opp_verts = self.build_void_opposite_edges()  # List of [[v1a, v1b], [v2a, v2b]]
+        if len(void_opp_verts) > 0:
+            void_opp_array = np.array(void_opp_verts) # (n_void_edges, 2, 2)
+            # Map each vertex to [face_id, local_node_id]
+            # void_opposite_node_pairs will be (n_void_edges, 2, 3) where each entry is [f, n_a, n_b]
+            v_opp_node_pairs = []
+            for pair in void_opp_verts:
+                # pair = [[v1a, v1b], [v2a, v2b]]
+                e1_fa, e1_na = v_to_fn[pair[0][0]]
+                e1_fb, e1_nb = v_to_fn[pair[0][1]]
+                e2_fa, e2_na = v_to_fn[pair[1][0]]
+                e2_fb, e2_nb = v_to_fn[pair[1][1]]
+                
+                # Check consistency (both vertices of an edge MUST belong to same face)
+                # Note: in Kirigami, if faces are disconnected, they each have their own vertices.
+                v_opp_node_pairs.append([
+                    [e1_fa, e1_na, e1_nb],
+                    [e2_fa, e2_na, e2_nb]
+                ])
+            void_opposite_node_pairs = np.array(v_opp_node_pairs, dtype=np.int32)
+        else:
+            void_opposite_node_pairs = np.zeros((0, 2, 3), dtype=np.int32)
+
+        # 6. BCs & Mechanical properties
         constrained_face_DOF_pairs = self.build_constrained_face_DOF_pairs()
         loaded_face_DOF_pairs, load_values = self.build_loaded_face_DOF_pairs()
 
@@ -530,6 +554,7 @@ class Tessellation:
             'hinge_node_pairs': hinge_node_pairs,
             'hinge_adj_info': hinge_adj_info,
             'boundary_face_node_ids': boundary_face_node_ids,
+            'void_opposite_node_pairs': void_opposite_node_pairs,
             'constrained_face_DOF_pairs': constrained_face_DOF_pairs,
             'loaded_face_DOF_pairs': loaded_face_DOF_pairs,
             'load_values': load_values,

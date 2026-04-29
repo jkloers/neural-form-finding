@@ -25,7 +25,7 @@ from jax_backend.physics_solver.energy import (
     build_strain_energy, build_contact_energy, combine_face_energies,
     ligament_energy, ligament_energy_linearized,
 )
-from jax_backend.utils.target_shape import get_target_points
+from problem.targets import get_target_points
 
 def _build_reference_bond_vectors(valid_state: CentroidalState):
     """Compute bond reference vectors from the validated centroidal state.

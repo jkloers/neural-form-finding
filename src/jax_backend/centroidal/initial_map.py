@@ -14,7 +14,7 @@ from jax_backend.centroidal.state import CentroidalState
 from jax_backend.centroidal.geometry import reconstruct_vertices
 
 # Need boundary points — import here to avoid circular deps
-from jax_backend.utils.target_shape import get_target_points
+from problem.targets import get_target_points
 
 
 # ─────────────────────────────────────────────────────────────────────────────

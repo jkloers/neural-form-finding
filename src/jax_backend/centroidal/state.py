@@ -49,6 +49,7 @@ class CentroidalState(NamedTuple):
     hinge_node_pairs: jnp.ndarray
     hinge_adj_info: jnp.ndarray
     boundary_face_node_ids: jnp.ndarray
+    void_opposite_node_pairs: jnp.ndarray  # (n_void_edges, 2, 3) -> [[f1, na1, nb1], [f2, na2, nb2]]
 
     # ── Boundary conditions ───────────────────────────────────────────────────
     constrained_face_DOF_pairs: jnp.ndarray
