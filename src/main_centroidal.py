@@ -21,6 +21,7 @@ import sys
 sys.path.append(os.path.abspath('.'))
 
 import jax.numpy as jnp
+from jax import vmap
 import matplotlib.pyplot as plt
 import numpy as np
 from dataclasses import dataclass
@@ -36,6 +37,7 @@ from geometry.target_shape import get_target_points, DEFAULT_TARGET
 from jax_backend.centroidal.state import CentroidalState
 from jax_backend.centroidal.geometry import reconstruct_vertices
 from jax_backend.centroidal.pipeline import forward_pipeline
+from jax_backend.physics_solver.kinematics import rotation_matrix
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -213,8 +215,7 @@ if __name__ == "__main__":
     # centroids_eq = centroids_valid + displacement
     c_eq = valid_state.face_centroids + sol.fields[:, :2]
     # s_eq = rotate(s_valid, theta)
-    from jax_backend.physics_solver.kinematics import rotation_matrix
-    R = rotation_matrix(sol.fields[:, 2])
+    R = vmap(rotation_matrix)(sol.fields[:, 2])
     s_eq = jnp.einsum('nij, nkj -> nki', R, valid_state.centroid_node_vectors)
     
     equilibrium_state = valid_state._replace(face_centroids=c_eq, centroid_node_vectors=s_eq)
