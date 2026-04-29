@@ -137,6 +137,9 @@ if __name__ == "__main__":
         scale_factor=config.scale_factor,
         geom_weights=geom_weights,
         use_contact=config.use_contact,
+        k_contact=config.k_contact,
+        min_angle=config.min_angle * jnp.pi / 180.0,
+        cutoff_angle=config.cutoff_angle * jnp.pi / 180.0,
         linearized_strains=config.linearized_strains,
     )
 
@@ -167,13 +170,13 @@ if __name__ == "__main__":
                           show_target=True, target_params=target_params)
         plt.show()
 
-    # Stage 0
-    print("Displaying Stage 0: Initial Mapping...")
-    plot_stage(result['mapped_state'], "Stage 0: Initial Mapping")
+    # # Stage 0
+    # print("Displaying Stage 0: Initial Mapping...")
+    # plot_stage(result['mapped_state'], "Stage 0: Initial Mapping")
 
-    # Stage 1
-    print("Displaying Stage 1: Geometric Validity...")
-    plot_stage(result['valid_state'], "Stage 1: Geometric Validity")
+    # # Stage 1
+    # print("Displaying Stage 1: Geometric Validity...")
+    # plot_stage(result['valid_state'], "Stage 1: Geometric Validity")
 
     # Stage 2
     print("Displaying Stage 2: Static Equilibrium...")

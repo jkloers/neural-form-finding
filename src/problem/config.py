@@ -36,6 +36,9 @@ class CentroidalConfig:
     # Physics
     use_contact: bool = True
     linearized_strains: bool = True
+    k_contact: float = 1.0
+    min_angle: float = 0.0 # degrees
+    cutoff_angle: float = 5.0 # degrees
 
     # Boundary Conditions & Loading
     # bc_clamped can be "boundary" or a list of IDs
