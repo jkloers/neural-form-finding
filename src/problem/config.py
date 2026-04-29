@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Tuple, Callable
+from typing import Tuple, Callable, Any
 from problem.targets import DEFAULT_TARGET
 from topology.unit_patterns import unit_RDQK_D
 
@@ -36,3 +36,9 @@ class CentroidalConfig:
     # Physics
     use_contact: bool = True
     linearized_strains: bool = True
+
+    # Boundary Conditions & Loading
+    # bc_clamped can be "boundary" or a list of IDs
+    bc_clamped: Any = "boundary"
+    # loads is a list of dicts: [{'face': 'central', 'dof': 1, 'value': -1.0}, ...]
+    loads: list = field(default_factory=lambda: [{'face': 'central', 'dof': 1, 'value': -1.0}])

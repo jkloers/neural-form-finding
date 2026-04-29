@@ -24,17 +24,20 @@ import jax.numpy as jnp
 from jax import vmap
 import matplotlib.pyplot as plt
 import numpy as np
-from dataclasses import dataclass
+import copy
 
 # Topology
 from topology.unit_patterns import unit_RDQK_D
 from topology.builder import build_tessellation
 
+# Visualization
+from utils.visualization import plot_tessellation
+
 # Problem definition (Targets, Conditions, Config)
 from problem.targets import get_target_points, DEFAULT_TARGET
 from problem.conditions import (
-    apply_standard_boundary_conditions, 
-    apply_central_load, 
+    apply_boundary_conditions, 
+    apply_loads, 
     set_material_properties
 )
 from problem.loader import load_config
@@ -66,6 +69,9 @@ if __name__ == "__main__":
     # ══════════════════════════════════════════════════════════════════════════
     # 1. Build tessellation (numpy)
     # ══════════════════════════════════════════════════════════════════════════
+    print("\n" + "=" * 60)
+    print("TESS / PHYSICS PIPELINE")
+    print("=" * 60)
     print(f"Building tessellation ({config.width}x{config.height})...")
     tessellation = build_tessellation(config.pattern, config.width, config.height)
     print(f"  {len(tessellation.vertices)} vertices, "
@@ -76,20 +82,16 @@ if __name__ == "__main__":
     # ══════════════════════════════════════════════════════════════════════════
     # 2. Configure boundary conditions & material properties
     # ══════════════════════════════════════════════════════════════════════════
-    set_material_properties(
-        tessellation, 
-        k_stretch=config.k_stretch, 
-        k_shear=config.k_shear, 
-        k_rot=config.k_rot, 
-        density=config.density
-    )
+    print("\nSetting material properties and boundary conditions...")
+    set_material_properties(tessellation, config)
 
-    clamped_ids = apply_standard_boundary_conditions(tessellation)
-    print(f"  Clamped {len(clamped_ids)} boundary faces.")
+    clamped_ids = apply_boundary_conditions(tessellation, config)
+    print(f"  Clamped {len(clamped_ids)} faces ({config.bc_clamped}).")
 
-    loaded_face = apply_central_load(tessellation, force_value=-1.0)
-    if loaded_face is not None:
-        print(f"  Applied F_y = -1.0 on central face {loaded_face}.")
+    applied_loads = apply_loads(tessellation, config)
+    for fid, dof, val in applied_loads:
+        dof_name = ["Fx", "Fy", "Mz"][dof]
+        print(f"  Applied {dof_name} = {val} on face {fid}.")
 
     # ══════════════════════════════════════════════════════════════════════════
     # 3. Export to CentroidalState
@@ -144,9 +146,6 @@ if __name__ == "__main__":
     print("\n" + "-" * 60)
     print("RESULTS VISUALIZATION")
     print("-" * 60)
-
-    from utils.visualization import plot_tessellation
-    import copy
 
     def plot_stage(state, title):
         # 1. Reconstruct vertices from centroidal state

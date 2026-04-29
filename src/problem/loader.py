@@ -64,4 +64,9 @@ def load_config(yaml_path: str) -> CentroidalConfig:
     config_dict['use_contact'] = phys.get('use_contact', True)
     config_dict['linearized_strains'] = phys.get('linearized_strains', True)
 
+    # BCs & Loads
+    bc = data.get('boundary_conditions', {})
+    config_dict['bc_clamped'] = bc.get('clamped_faces', "boundary")
+    config_dict['loads'] = data.get('loads', [])
+
     return CentroidalConfig(**config_dict)
