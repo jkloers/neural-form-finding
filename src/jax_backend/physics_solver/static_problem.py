@@ -68,6 +68,8 @@ class StaticForwardProblem:
 
     # ── Solver options ────────────────────────────────────────────────────────
     linearized_strains: bool = True
+    incremental: bool = False
+    num_load_steps: int = 10
 
     # ── Runtime state ─────────────────────────────────────────────────────────
     solution_data: Optional[SolutionData] = None
@@ -105,10 +107,10 @@ class StaticForwardProblem:
             loaded_pairs = jnp.array(self.loaded_face_DOF_pairs)
             loading_fn = self.loading_fn
         elif _loaded_pairs is not None and len(_loaded_pairs) > 0:
-            # Auto from tessellation: build a constant-force loading_fn
+            # Auto from tessellation: build a t-dependent loading_fn
             loaded_pairs = jnp.array(_loaded_pairs)
             _force_values = jnp.array(_load_values)
-            loading_fn = lambda state, t, **kwargs: _force_values
+            loading_fn = lambda state, t, **kwargs: t * _force_values
         else:
             loaded_pairs = None
             loading_fn = None
@@ -134,6 +136,8 @@ class StaticForwardProblem:
             loaded_face_DOF_pairs=loaded_pairs,
             loading_fn=loading_fn,
             constrained_face_DOF_pairs=constrained_face_DOF_pairs,
+            incremental=self.incremental,
+            num_steps=self.num_load_steps
         )
 
         # ── Initial state (zero displacements) ────────────────────────────

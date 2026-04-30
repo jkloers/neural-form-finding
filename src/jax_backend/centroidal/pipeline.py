@@ -59,7 +59,9 @@ def forward_pipeline(
         k_contact: float = 1.,
         min_angle: float = 0.,
         cutoff_angle: float = 5. * jnp.pi / 180,
-        linearized_strains: bool = True) -> dict:
+        linearized_strains: bool = True,
+        incremental: bool = False,
+        num_load_steps: int = 10) -> dict:
     """Full pipeline: initial map → geometric validity → static physics solver.
 
     Stage 0: Map flat tessellation into target shape (→ replaced by GNN later)
@@ -75,6 +77,8 @@ def forward_pipeline(
         use_contact: whether to include contact energy.
         k_contact, min_angle, cutoff_angle: contact parameters.
         linearized_strains: use linearized strain energy.
+        incremental: use incremental loading.
+        num_load_steps: number of steps for incremental loading.
 
     Returns:
         dict with:
@@ -141,7 +145,7 @@ def forward_pipeline(
     loaded_pairs = valid_state.loaded_face_DOF_pairs
     if len(loaded_pairs) > 0:
         _force_values = valid_state.load_values
-        loading_fn = lambda state, t, **kwargs: _force_values
+        loading_fn = lambda state, t, **kwargs: t * _force_values
     else:
         loaded_pairs = None
         loading_fn = None
@@ -153,6 +157,8 @@ def forward_pipeline(
         loaded_face_DOF_pairs=loaded_pairs,
         loading_fn=loading_fn,
         constrained_face_DOF_pairs=valid_state.constrained_face_DOF_pairs,
+        incremental=incremental,
+        num_steps=num_load_steps
     )
 
     # Control params

@@ -5,6 +5,7 @@ State is displacement-only: (n_faces, 3) = [dx, dy, d_theta]. No velocities.
 
 from typing import Callable, Optional
 
+import jax
 import jax.numpy as jnp
 
 from jax_backend.physics_solver.energy import constrain_energy
@@ -22,7 +23,9 @@ def setup_static_solver(
         loaded_face_DOF_pairs: Optional[jnp.ndarray] = None,
         loading_fn: Optional[Callable] = None,
         constrained_face_DOF_pairs: jnp.ndarray = jnp.array([]),
-        constrained_DOFs_fn: Callable = lambda t, **kwargs: 0.) -> Callable:
+        constrained_DOFs_fn: Callable = lambda t, **kwargs: 0.,
+        incremental: bool = False,
+        num_steps: int = 10) -> Callable:
     """Setup a static equilibrium solver by minimizing the total potential energy.
 
     Args:
@@ -87,14 +90,33 @@ def setup_static_solver(
             SolutionData: Equilibrium solution.
         """
         initial_free = state0.reshape(-1)[free_DOF_ids]
-        result = minimize(total_potential_energy, initial_free,
-                          args=(0., control_params), method='BFGS')
-        displacement = kinematics(result.x, 0., control_params.constraint_params)
+
+        def solve_single_step(current_free_DOFs, t):
+            result = minimize(total_potential_energy, current_free_DOFs,
+                              args=(t, control_params), method='BFGS')
+            return result.x, result.x
+
+        if not incremental:
+            final_free, _ = solve_single_step(initial_free, 1.0)
+            history_free = final_free[None, :]
+            t_array = jnp.array([1.0])
+        else:
+            t_array = jnp.linspace(1.0 / num_steps, 1.0, num_steps)
+            final_free, history_free = jax.lax.scan(
+                solve_single_step,
+                init=initial_free,
+                xs=t_array
+            )
+
+        # Reconstruct displacements for the entire history
+        mapped_kinematics = jax.vmap(kinematics, in_axes=(0, 0, None))
+        history_displacement = mapped_kinematics(history_free, t_array, control_params.constraint_params)
+
         return SolutionData(
             face_centroids=control_params.geometrical_params.face_centroids,
             centroid_node_vectors=control_params.geometrical_params.centroid_node_vectors,
             bond_connectivity=control_params.geometrical_params.bond_connectivity,
-            fields=displacement
+            fields=history_displacement
         )
 
     return solve_statics

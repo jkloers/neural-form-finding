@@ -13,7 +13,7 @@ target:
 material:
   k_stretch: 10000.0
   k_shear: 10000.0
-  k_rot: 1
+  k_rot: 0.1
   density: 1.0
 
 mapping:
@@ -34,8 +34,6 @@ physics:
   k_contact: 1000.0
   min_angle: 1.0      # in degrees
   cutoff_angle: 5.0   # in degrees
-  incremental: true
-  num_load_steps: 10
 
 boundary_conditions:
   clamped_faces: [0] # can be "boundary" or a list of IDs like [0, 1, 2]
@@ -43,4 +41,4 @@ boundary_conditions:
 loads:
   - face: 3 # can be "central" or an ID
     dof: 2          # 0=x, 1=y, 2=theta
-    value: 10.0
+    value: 100.0

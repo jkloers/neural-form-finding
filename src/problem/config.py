@@ -46,10 +46,19 @@ class CentroidalConfig:
     k_contact: float
     min_angle: float
     cutoff_angle: float
+    incremental: bool
+    num_load_steps: int
 
     # Boundary Conditions & Loading
     bc_clamped: Any
     loads: list
+
+    # Visualization
+    show_stage0: bool
+    show_stage1: bool
+    show_stage2: bool
+    save_plots: bool
+    save_animation: bool
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -145,10 +154,20 @@ def load_config(yaml_path: str) -> CentroidalConfig:
     config_dict['k_contact'] = float(phys.get('k_contact', 1.0))
     config_dict['min_angle'] = float(phys.get('min_angle', 0.0))
     config_dict['cutoff_angle'] = float(phys.get('cutoff_angle', 5.0))
+    config_dict['incremental'] = phys.get('incremental', False)
+    config_dict['num_load_steps'] = int(phys.get('num_load_steps', 10))
 
     # BCs & Loads
     bc = data.get('boundary_conditions', {})
     config_dict['bc_clamped'] = bc.get('clamped_faces', "boundary")
     config_dict['loads'] = data.get('loads', [{'face': 'central', 'dof': 1, 'value': -1.0}])
+
+    # Visualization
+    vis = data.get('visualization', {})
+    config_dict['show_stage0'] = vis.get('show_stage0', False)
+    config_dict['show_stage1'] = vis.get('show_stage1', False)
+    config_dict['show_stage2'] = vis.get('show_stage2', True)
+    config_dict['save_plots'] = vis.get('save_plots', False)
+    config_dict['save_animation'] = vis.get('save_animation', True)
 
     return CentroidalConfig(**config_dict)

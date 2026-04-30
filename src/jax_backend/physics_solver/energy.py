@@ -35,10 +35,8 @@ def ligament_strains_linearized(DOFs1: jnp.ndarray, DOFs2: jnp.ndarray, referenc
     dU = DOFs2[:, :2] - DOFs1[:, :2]
     dRot = DOFs2[:, 2] - DOFs1[:, 2]
 
-    axial_strain = vdot(dU, reference_vector) / \
-        jnp.linalg.norm(reference_vector, axis=-1)**2
-    shear_strain = jnp.cross(reference_vector, dU, axis=-1) / jnp.linalg.norm(reference_vector, axis=-1)**2 \
-        - (DOFs2[:, 2] + DOFs1[:, 2])/2
+    axial_strain = vdot(dU, reference_vector) / jnp.linalg.norm(reference_vector, axis=-1)**2
+    shear_strain = jnp.cross(reference_vector, dU, axis=-1) / jnp.linalg.norm(reference_vector, axis=-1)**2 - (DOFs2[:, 2] + DOFs1[:, 2])/2
 
     return axial_strain, shear_strain, dRot
 
@@ -82,23 +80,40 @@ def ligament_strains(DOFs1: jnp.ndarray, DOFs2: jnp.ndarray, reference_vector: j
     Returns:
         Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]: axial, shear, and rotational strain measures.
     """
-
+    eps = 1e-12
     dU = DOFs2[:, :2] - DOFs1[:, :2]
     dRot = DOFs2[:, 2] - DOFs1[:, 2]
-    mean_rot = (DOFs2[:, 2] + DOFs1[:, 2])/2
+    mean_rot = (DOFs2[:, 2] + DOFs1[:, 2]) / 2.0
+
     current_bond_vector = dU + reference_vector
-    current_bond_angle = jnp.arctan2(
-        *(jnp.roll(current_bond_vector, 1, axis=-1)).T)
-    reference_bond_pushed = vmap(lambda angle, reference_v: jnp.dot(
-        rotation_matrix(angle), reference_v), in_axes=(0, 0))(mean_rot, jnp.ones((len(DOFs1), 2))*reference_vector)
-    reference_bond_pushed_angle = jnp.arctan2(
-        *(jnp.roll(reference_bond_pushed, 1, axis=-1)).T)
-
-    axial_strain = (vdot(current_bond_vector, current_bond_vector) /
-                    vdot(reference_vector, reference_vector))**0.5 - 1
-    shear_strain = jnp.mod(
-        current_bond_angle - reference_bond_pushed_angle + jnp.pi, 2*jnp.pi) - jnp.pi
-
+    # Add eps to ensure current_bond_vector is never exactly (0,0)
+    # This prevents arctan2 gradient explosion
+    curr_x = current_bond_vector[:, 0] + eps
+    curr_y = current_bond_vector[:, 1]
+    current_bond_angle = jnp.arctan2(curr_y, curr_x)
+    
+    # Reference geometry "pushed" (rotated) by the mean rotation of the faces
+    # Use vectorized rotation instead of nested vmap for stability
+    c = jnp.cos(mean_rot)
+    s = jnp.sin(mean_rot)
+    
+    # reference_vector can be (2,) or (N, 2)
+    ref_x = reference_vector[..., 0]
+    ref_y = reference_vector[..., 1]
+    
+    ref_pushed_x = c * ref_x - s * ref_y
+    ref_pushed_y = s * ref_x + c * ref_y
+    
+    reference_bond_pushed_angle = jnp.arctan2(ref_pushed_y, ref_pushed_x + eps)
+    
+    # 1. Axial Strain: (L - L0) / L0
+    l0_sq = jnp.sum(reference_vector**2, axis=-1) + eps
+    l_sq = jnp.sum(current_bond_vector**2, axis=-1)
+    axial_strain = jnp.sqrt(l_sq / l0_sq) - 1.0
+    
+    # 2. Shear Strain: angle difference (modulo 2pi)
+    shear_strain = jnp.mod(current_bond_angle - reference_bond_pushed_angle + jnp.pi, 2*jnp.pi) - jnp.pi
+    
     return axial_strain, shear_strain, dRot
 
 

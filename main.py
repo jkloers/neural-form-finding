@@ -47,6 +47,8 @@ from src.jax_backend.centroidal.geometry import reconstruct_vertices
 from src.jax_backend.centroidal.pipeline import forward_pipeline
 from src.jax_backend.physics_solver.kinematics import rotation_matrix
 
+from src.utils.pipeline_viz import visualize_pipeline_results
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Main
@@ -55,25 +57,25 @@ from src.jax_backend.physics_solver.kinematics import rotation_matrix
 if __name__ == "__main__":
 
     # Load configuration from YAML
-    config_name = "turn3"
+    config_name = "central_moment"
 
     # Paths are now simple as we run from root
     config_path = f"data/configs/{config_name}.yaml"
     config = load_config(config_path)
     print(f"Loaded configuration from {config_path}")
 
-    # Create output directory for this run
-    import datetime
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = os.path.join("data/outputs", "runs", f"{timestamp}_{config_name}")
+    # # Create output directory for this run
+    # import datetime
+    # timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    # output_dir = os.path.join("data/outputs", "runs", f"{timestamp}_{config_name}")
     
-    os.makedirs(output_dir, exist_ok=True)
-    os.makedirs(os.path.join(output_dir, "plots"), exist_ok=True)
+    # os.makedirs(output_dir, exist_ok=True)
+    # os.makedirs(os.path.join(output_dir, "plots"), exist_ok=True)
     
-    # Save a copy of the config used
-    import shutil
-    shutil.copy2(config_path, os.path.join(output_dir, "config_used.yaml"))
-    print(f"Results will be saved to: {output_dir}")
+    # # Save a copy of the config used
+    # import shutil
+    # shutil.copy2(config_path, os.path.join(output_dir, "config_used.yaml"))
+    # print(f"Results will be saved to: {output_dir}")
 
     target_params = {
         'type': config.target_type,
@@ -81,7 +83,7 @@ if __name__ == "__main__":
         'radius': config.target_radius,
     }
 
-    # ══════════════════════════════════════════════════════════════════════════
+    # # ══════════════════════════════════════════════════════════════════════════
     # 1. Build tessellation (numpy)
     # ══════════════════════════════════════════════════════════════════════════
     print("\n" + "=" * 60)
@@ -156,63 +158,14 @@ if __name__ == "__main__":
         min_angle=config.min_angle * jnp.pi / 180.0,
         cutoff_angle=config.cutoff_angle * jnp.pi / 180.0,
         linearized_strains=config.linearized_strains,
+        incremental=config.incremental,
+        num_load_steps=config.num_load_steps,
     )
 
     # ══════════════════════════════════════════════════════════════════════════
     # 5. Results & Visualization
     # ══════════════════════════════════════════════════════════════════════════
-    print("\n" + "-" * 60)
-    print("RESULTS VISUALIZATION")
-    print("-" * 60)
-
-    def plot_stage(state, title, save_figure=False):
-        # 1. Reconstruct vertices from centroidal state
-        c = state.face_centroids
-        s = state.centroid_node_vectors
-        verts_rec = reconstruct_vertices(c, s) # (n_faces, max_nodes, 2)
-        
-        # 2. Update a copy of the tessellation
-        tess_copy = copy.deepcopy(tessellation)
-        new_verts = np.zeros_like(tess_copy.vertices)
-        for i, face in enumerate(tess_copy.faces):
-            for j, v_idx in enumerate(face.vertex_indices):
-                new_verts[v_idx] = verts_rec[i, j]
-        tess_copy.update_vertices(new_verts)
-        
-        # 3. Plot
-        fig, ax = plt.subplots(figsize=(8, 8))
-        plot_tessellation(tess_copy, ax=ax, title=title, 
-                          show_target=True, target_params=target_params)
-        
-        if save_figure:
-            # Save figure
-            filename = title.lower().replace(" ", "_").replace(":", "") + ".png"
-            save_path = os.path.join(output_dir, "plots", filename)
-            plt.savefig(save_path, dpi=300, bbox_inches='tight')
-            print(f"  Saved plot to {save_path}")
-        plt.show()
-
-    # Stage 0
-    print("Displaying Stage 0: Initial Mapping...")
-    plot_stage(result['mapped_state'], "Stage 0: Initial Mapping")
-
-    # Stage 1
-    print("Displaying Stage 1: Geometric Validity...")
-    plot_stage(result['valid_state'], "Stage 1: Geometric Validity")
-
-    # Stage 2
-    print("Displaying Stage 2: Static Equilibrium...")
-    # Reconstruct equilibrium state from solution
-    sol = result['solution']
-    valid_state = result['valid_state']
-    
-    # centroids_eq = centroids_valid + displacement
-    c_eq = valid_state.face_centroids + sol.fields[:, :2]
-    # s_eq = rotate(s_valid, theta)
-    R = vmap(rotation_matrix)(sol.fields[:, 2])
-    s_eq = jnp.einsum('nij, nkj -> nki', R, valid_state.centroid_node_vectors)
-    
-    equilibrium_state = valid_state._replace(face_centroids=c_eq, centroid_node_vectors=s_eq)
-    plot_stage(equilibrium_state, "Stage 2: Static Equilibrium")
+    print("\nVisualizing results...")
+    visualize_pipeline_results(result, tessellation, config, target_params, config_name)
 
     print("\nPipeline complete. Let's pat ourselves on the back!")
