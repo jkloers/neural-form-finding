@@ -94,15 +94,16 @@ def setup_static_solver(
         def solve_single_step(current_free_DOFs, t):
             result = minimize(total_potential_energy, current_free_DOFs,
                               args=(t, control_params), method='BFGS')
-            return result.x, result.x
+            return result.x, (result.x, result.fun)
 
         if not incremental:
-            final_free, _ = solve_single_step(initial_free, 1.0)
-            history_free = final_free[None, :]
+            final_free, (history_free, history_energy) = solve_single_step(initial_free, 1.0)
+            history_free = history_free[None, :]
+            history_energy = history_energy[None]
             t_array = jnp.array([1.0])
         else:
             t_array = jnp.linspace(1.0 / num_steps, 1.0, num_steps)
-            final_free, history_free = jax.lax.scan(
+            final_free, (history_free, history_energy) = jax.lax.scan(
                 solve_single_step,
                 init=initial_free,
                 xs=t_array
@@ -116,7 +117,8 @@ def setup_static_solver(
             face_centroids=control_params.geometrical_params.face_centroids,
             centroid_node_vectors=control_params.geometrical_params.centroid_node_vectors,
             bond_connectivity=control_params.geometrical_params.bond_connectivity,
-            fields=history_displacement
+            fields=history_displacement,
+            energies=history_energy
         )
 
     return solve_statics

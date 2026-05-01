@@ -57,7 +57,7 @@ from src.utils.pipeline_viz import visualize_pipeline_results
 if __name__ == "__main__":
 
     # Load configuration from YAML
-    config_name = "central_moment"
+    config_name = "5_circlesquish_dev"
 
     # Paths are now simple as we run from root
     config_path = f"data/configs/{config_name}.yaml"

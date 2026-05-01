@@ -466,3 +466,60 @@ def compute_ligament_strains(face_displacement, centroid_node_vectors, bond_conn
 compute_ligament_strains_history = vmap(
     compute_ligament_strains, in_axes=(0, None, None, None)
 )
+
+
+def build_decompose_energy_fn(control_params: ControlParams, linearized_strains: bool = True, use_contact: bool = True, angle_based: bool = True) -> Callable:
+    """Builds a function to decompose the total energy into its components.
+    
+    Args:
+        control_params (ControlParams): physics control parameters.
+        linearized_strains (bool, optional): whether to use linearized strains. Defaults to True.
+        use_contact (bool, optional): whether to include contact energy. Defaults to True.
+        angle_based (bool, optional): whether contact is angle-based. Defaults to True.
+        
+    Returns:
+        Callable: A function `decompose_energy_fn(face_displacement)` that returns 
+                  an array [E_stretch, E_shear, E_rot, E_contact].
+    """
+    face_centroids = control_params.geometrical_params.face_centroids
+    centroid_node_vectors = control_params.geometrical_params.centroid_node_vectors
+    bond_connectivity = control_params.geometrical_params.bond_connectivity
+    bond_params = control_params.mechanical_params.bond_params
+    
+    n_faces, n_nodes_per_face, _ = centroid_node_vectors.shape
+    ref_vecs = bond_params.reference_vector
+    
+    if use_contact:
+        contact_params = control_params.mechanical_params.contact_params
+        if angle_based:
+            distance_fn = lambda x: void_angles(x, bond_connectivity)
+        else:
+            distance_fn = build_void_edge_distance(bond_connectivity)
+            
+    def decompose_energy_fn(face_displacement: jnp.ndarray) -> jnp.ndarray:
+        node_displacements = face_to_node_kinematics(face_displacement, centroid_node_vectors).reshape(-1, 3)
+        DOFs1 = node_displacements[bond_connectivity[:, 0]]
+        DOFs2 = node_displacements[bond_connectivity[:, 1]]
+        
+        if linearized_strains:
+            axial, shear, rot = ligament_strains_linearized(DOFs1, DOFs2, reference_vector=ref_vecs)
+        else:
+            axial, shear, rot = ligament_strains(DOFs1, DOFs2, reference_vector=ref_vecs)
+            
+        l0 = jnp.linalg.norm(ref_vecs, axis=-1)
+        
+        E_stretch = jnp.sum(bond_params.k_stretch * (axial * l0)**2 / 2)
+        E_shear = jnp.sum(bond_params.k_shear * (shear * l0)**2 / 2)
+        E_rot = jnp.sum(bond_params.k_rot * rot**2 / 2)
+        
+        E_contact = jnp.array(0.0)
+        if use_contact:
+            current_face_nodes = face_centroids[:, None] + centroid_node_vectors + node_displacements.reshape(n_faces, n_nodes_per_face, 3)[..., :2]
+            E_contact = jnp.sum(contact_energy(
+                current_void_angles=distance_fn(current_face_nodes), 
+                **contact_params._asdict()
+            ))
+            
+        return jnp.array([E_stretch, E_shear, E_rot, E_contact])
+
+    return decompose_energy_fn

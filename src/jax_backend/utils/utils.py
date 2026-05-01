@@ -21,6 +21,7 @@ class SolutionData(NamedTuple):
     centroid_node_vectors: Any
     bond_connectivity: Any
     fields: Any
+    energies: Any = None
 
 
 class GeometricalParams(NamedTuple):

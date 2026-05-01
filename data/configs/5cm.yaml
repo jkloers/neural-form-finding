@@ -1,0 +1,58 @@
+# Configuration for a 3D printed dual-material tessellation
+# Unit system: millimeters (mm), Newtons (N), Megapascals (MPa)
+
+tessellation:
+  width: 5
+  height: 5
+  pattern: "unit_RDQK_D"
+
+target:
+  type: "circle"
+  center: [0.0, 0.0]
+  radius: 1    # Changed to 30.0 mm (realistic scale for a few cm target)
+
+material:
+  k_stretch: 18750.0 # Scaled for 250mm base unit
+  k_shear: 6250.0    # Scaled for 250mm base unit
+  k_rot: 0.025       # Scaled for 250mm base unit
+  density: 1.2       # Remains the same (relative density)
+
+mapping:
+  type: "elliptical_grip"
+  scale_factor: 1.0
+
+optimization_weights:
+  connectivity: 700.0
+  non_intersection: 1000.0
+  target: 1.0
+  arm_symmetry: 1.0
+  void_length: 1000.0
+  void_collinear: 1000.0
+
+physics:
+  use_contact: true
+  linearized_strains: true
+  k_contact: 37500.0 # Scaled to prevent penetration at this unit size
+  min_angle: 1.0     # in degrees
+  cutoff_angle: 5.0  # in degrees
+  incremental: true
+  num_load_steps: 20
+
+boundary_conditions:
+  clamped_faces: [] 
+
+loads:
+  - face: [51,49] # can be "central" or an ID
+    dof: 2          # 0=x, 1=y, 2=theta
+    value: -2.75
+  - face: [50,48] # can be "central" or an ID
+    dof: 2          # 0=x, 1=y, 2=theta
+    value: 2.75
+   # N.mm (Will cause roughly 90 degrees of bending)
+
+save_plots: true
+show_stage0: true
+show_stage1: true
+show_stage2: true
+save_animation: true
+save_to_yaml: true

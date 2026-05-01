@@ -164,10 +164,10 @@ def load_config(yaml_path: str) -> CentroidalConfig:
 
     # Visualization
     vis = data.get('visualization', {})
-    config_dict['show_stage0'] = vis.get('show_stage0', False)
-    config_dict['show_stage1'] = vis.get('show_stage1', False)
-    config_dict['show_stage2'] = vis.get('show_stage2', True)
-    config_dict['save_plots'] = vis.get('save_plots', False)
-    config_dict['save_animation'] = vis.get('save_animation', True)
+    config_dict['show_stage0'] = vis.get('show_stage0', data.get('show_stage0', False))
+    config_dict['show_stage1'] = vis.get('show_stage1', data.get('show_stage1', False))
+    config_dict['show_stage2'] = vis.get('show_stage2', data.get('show_stage2', True))
+    config_dict['save_plots'] = vis.get('save_plots', data.get('save_plots', False))
+    config_dict['save_animation'] = vis.get('save_animation', data.get('save_animation', True))
 
     return CentroidalConfig(**config_dict)

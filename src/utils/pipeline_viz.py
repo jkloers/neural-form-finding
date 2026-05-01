@@ -98,3 +98,60 @@ def visualize_pipeline_results(result, tessellation, config, target_params, conf
         
         fps = max(5, config.num_load_steps // 3)
         animate_tessellation(tessellation, state_history, filepath=ani_path, fps=fps, target_params=target_params)
+
+    # Energy Plot
+    if result.get('solution') and getattr(result['solution'], 'energies', None) is not None:
+        energies_dict = result['solution'].energies
+        
+        if isinstance(energies_dict, dict):
+            total_energy = energies_dict['total']
+            stretch_energy = energies_dict['stretch']
+            shear_energy = energies_dict['shear']
+            rot_energy = energies_dict['rot']
+            contact_energy = energies_dict.get('contact', None)
+            work_energy = energies_dict.get('work', None)
+        else:
+            total_energy = energies_dict
+            stretch_energy = None
+            work_energy = None
+            
+        fig, ax = plt.subplots(figsize=(8, 6))
+        
+        if config.incremental:
+            steps = np.linspace(1.0 / config.num_load_steps, 1.0, config.num_load_steps)
+            ax.plot(steps, total_energy, marker='o', linestyle='-', color='#000000', linewidth=2, label='Total Energy')
+            if stretch_energy is not None:
+                ax.plot(steps, stretch_energy, marker='x', linestyle='--', color='#E63946', label='Stretch Energy')
+                ax.plot(steps, shear_energy, marker='s', linestyle='-.', color='#457B9D', label='Shear Energy')
+                ax.plot(steps, rot_energy, marker='^', linestyle=':', color='#2A9D8F', label='Rotational Energy')
+                if contact_energy is not None and np.any(contact_energy > 0):
+                    ax.plot(steps, contact_energy, marker='d', linestyle='-', color='#F4A261', label='Contact Energy')
+                if work_energy is not None and np.any(jnp.abs(work_energy) > 1e-6):
+                    ax.plot(steps, -work_energy, marker='v', linestyle='-', color='#9D4EDD', label='External Work (-W_ext)')
+            ax.set_xlabel('Load Factor (t)')
+        else:
+            ax.plot([1.0], total_energy, marker='o', color='#000000', label='Total Energy')
+            if stretch_energy is not None:
+                ax.plot([1.0], stretch_energy, marker='x', color='#E63946', label='Stretch Energy')
+                ax.plot([1.0], shear_energy, marker='s', color='#457B9D', label='Shear Energy')
+                ax.plot([1.0], rot_energy, marker='^', color='#2A9D8F', label='Rotational Energy')
+                if contact_energy is not None and np.any(contact_energy > 0):
+                    ax.plot([1.0], contact_energy, marker='d', color='#F4A261', label='Contact Energy')
+                if work_energy is not None and np.any(jnp.abs(work_energy) > 1e-6):
+                    ax.plot([1.0], -work_energy, marker='v', color='#9D4EDD', label='External Work (-W_ext)')
+            ax.set_xlabel('Step')
+            
+        ax.set_ylabel('Energy')
+        ax.set_title('Energy Decomposition during Physics Solver')
+        ax.grid(True, linestyle='--', alpha=0.7)
+        ax.legend()
+        
+        if config.save_plots:
+            save_path = os.path.join(plots_dir, "energy_plot.png")
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"  Saved energy plot to {save_path}")
+            
+        if config.show_stage2 or config.save_plots: 
+            plt.show()
+        else:
+            plt.close(fig)

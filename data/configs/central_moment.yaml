@@ -54,5 +54,3 @@ show_stage1: false
 show_stage2: false
 save_animation: true
 save_to_yaml: false
-
-

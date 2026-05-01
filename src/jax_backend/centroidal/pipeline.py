@@ -8,6 +8,7 @@ This module orchestrates the three-stage sequential pipeline:
 """
 
 import jax.numpy as jnp
+import jax
 
 from jax_backend.centroidal.state import CentroidalState
 from jax_backend.centroidal.geometry import reconstruct_vertices, hinge_vertex_positions
@@ -23,7 +24,7 @@ from jax_backend.utils.utils import (
 
 from jax_backend.physics_solver.energy import (
     build_strain_energy, build_contact_energy, combine_face_energies,
-    ligament_energy, ligament_energy_linearized,
+    ligament_energy, ligament_energy_linearized, build_decompose_energy_fn,
 )
 from problem.targets import get_target_points
 
@@ -188,6 +189,29 @@ def forward_pipeline(
 
     state0 = jnp.zeros((n_faces, 3), dtype=float)
     solution = solve_statics(state0=state0, control_params=control_params)
+    
+    decompose_energy_fn = build_decompose_energy_fn(
+        control_params=control_params,
+        linearized_strains=linearized_strains,
+        use_contact=use_contact,
+        angle_based=True  # As in the default contact builder
+    )
+    
+    energy_components_history = jax.vmap(decompose_energy_fn)(solution.fields)
+    
+    # Pack them into a dictionary
+    u_int = jnp.sum(energy_components_history, axis=1)
+    w_ext = u_int - solution.energies  # Since E_total = U_int - W_ext
+    
+    energies_dict = {
+        'total': solution.energies,
+        'stretch': energy_components_history[:, 0],
+        'shear': energy_components_history[:, 1],
+        'rot': energy_components_history[:, 2],
+        'contact': energy_components_history[:, 3],
+        'work': w_ext
+    }
+    solution = solution._replace(energies=energies_dict)
 
     vertices_ref = reconstruct_vertices(_face_centroids, _cnv)
 
