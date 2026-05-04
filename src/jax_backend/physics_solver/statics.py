@@ -14,7 +14,7 @@ from jax_backend.physics_solver.kinematics import build_constrained_kinematics, 
 
 from jax_backend.utils.utils import ControlParams, SolutionData
 
-from jax.scipy.optimize import minimize
+from jaxopt import ScipyMinimize
 
 
 def setup_static_solver(
@@ -91,10 +91,12 @@ def setup_static_solver(
         """
         initial_free = state0.reshape(-1)[free_DOF_ids]
 
+        solver = ScipyMinimize(fun=total_potential_energy, method='BFGS', implicit_diff=True)
+
         def solve_single_step(current_free_DOFs, t):
-            result = minimize(total_potential_energy, current_free_DOFs,
-                              args=(t, control_params), method='BFGS')
-            return result.x, (result.x, result.fun)
+            result = solver.run(current_free_DOFs, t=t, control_params=control_params)
+            fun_val = total_potential_energy(result.params, t, control_params)
+            return result.params, (result.params, fun_val)
 
         if not incremental:
             final_free, (history_free, history_energy) = solve_single_step(initial_free, 1.0)

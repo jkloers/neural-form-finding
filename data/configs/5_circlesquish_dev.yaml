@@ -18,7 +18,7 @@ material:
   density: 1.2       # Remains the same (relative density)
 
 mapping:
-  type: "elliptical_grip"
+  type: "conformal_polynomial"
   scale_factor: 1.0
 
 optimization_weights:

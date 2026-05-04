@@ -55,6 +55,7 @@ def forward_pipeline(
         target_params: dict,
         map_type: str = 'elliptical_grip',
         scale_factor: float = 1.0,
+        map_params: jnp.ndarray = None,
         geom_weights: dict = None,
         use_contact: bool = True,
         k_contact: float = 1.,
@@ -95,7 +96,8 @@ def forward_pipeline(
     # ══════════════════════════════════════════════════════════════════════════
     mapped_state = apply_initial_map(
         initial_state, target_params,
-        map_type=map_type, scale_factor=scale_factor)
+        map_type=map_type, scale_factor=scale_factor,
+        map_params=map_params)
 
     # ══════════════════════════════════════════════════════════════════════════
     # Stage 1 — Geometric Validity

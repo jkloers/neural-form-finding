@@ -6,7 +6,7 @@ constraints while fitting a target shape. Topology is fixed.
 """
 
 import jax.numpy as jnp
-from jax.scipy.optimize import minimize
+from jaxopt import ScipyMinimize
 
 from jax_backend.centroidal.state import CentroidalState
 from jax_backend.centroidal.constraints import compute_geometric_objective
@@ -53,10 +53,11 @@ def solve_geometric_validity(
         s = x[split_idx:].reshape(n_faces, max_nodes, 2)
         return compute_geometric_objective(c, s, initial_state, target_cloud, weights)
 
-    result = minimize(objective, x0, method=method)
+    solver = ScipyMinimize(fun=objective, method=method, implicit_diff=True)
+    result = solver.run(x0)
 
-    c_opt = result.x[:split_idx].reshape(n_faces, 2)
-    s_opt = result.x[split_idx:].reshape(n_faces, max_nodes, 2)
+    c_opt = result.params[:split_idx].reshape(n_faces, 2)
+    s_opt = result.params[split_idx:].reshape(n_faces, max_nodes, 2)
 
     return initial_state._replace(
         face_centroids=c_opt,
