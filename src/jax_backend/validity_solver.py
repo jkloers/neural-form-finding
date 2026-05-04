@@ -8,8 +8,8 @@ constraints while fitting a target shape. Topology is fixed.
 import jax.numpy as jnp
 from jaxopt import LBFGS
 
-from jax_backend.centroidal.state import CentroidalState
-from jax_backend.centroidal.constraints import compute_geometric_objective
+from jax_backend.state import CentroidalState
+from jax_backend.constraints import compute_geometric_objective
 
 
 def solve_geometric_validity(

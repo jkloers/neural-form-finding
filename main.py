@@ -42,9 +42,9 @@ from src.problem.conditions import (
 from src.problem.config import load_config
 
 # Centroidal pipeline
-from src.jax_backend.centroidal.state import CentroidalState
-from src.jax_backend.centroidal.geometry import reconstruct_vertices
-from src.jax_backend.centroidal.pipeline import forward_pipeline
+from src.jax_backend.state import CentroidalState
+from src.jax_backend.geometry import reconstruct_vertices
+from src.jax_backend.pipeline import forward_pipeline
 from src.jax_backend.physics_solver.kinematics import rotation_matrix
 
 from src.utils.pipeline_viz import visualize_pipeline_results

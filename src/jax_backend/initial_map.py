@@ -9,8 +9,8 @@ The interface is: CentroidalState → CentroidalState, pure JAX, differentiable.
 """
 
 import jax.numpy as jnp
-from jax_backend.centroidal.state import CentroidalState
-from jax_backend.centroidal.geometry import reconstruct_vertices
+from jax_backend.state import CentroidalState
+from jax_backend.geometry import reconstruct_vertices
 
 # Need boundary points — import here to avoid circular deps
 from problem.targets import get_target_points

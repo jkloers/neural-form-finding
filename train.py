@@ -25,9 +25,9 @@ from src.problem.conditions import (
     set_material_properties
 )
 from src.problem.config import load_config
-from src.jax_backend.centroidal.state import CentroidalState
+from src.jax_backend.state import CentroidalState
 from src.jax_backend.training.trainer import train_pipeline
-from src.jax_backend.centroidal.pipeline import forward_pipeline
+from src.jax_backend.pipeline import forward_pipeline
 from src.utils.pipeline_viz import visualize_pipeline_results
 from src.utils.training_viz import plot_training_loss
 

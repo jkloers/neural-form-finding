@@ -10,7 +10,7 @@ These replace the vertex-based constraints in ff_optimizer/objective.py.
 import jax
 import jax.numpy as jnp
 
-from jax_backend.centroidal.geometry import (
+from jax_backend.geometry import (
     hinge_vertex_positions,
     hinge_adj_vertex_positions,
     boundary_vertex_positions,

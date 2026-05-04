@@ -9,8 +9,8 @@ after passing through the fully differentiable pipeline.
 import jax
 import jax.numpy as jnp
 
-from jax_backend.centroidal.pipeline import forward_pipeline
-from jax_backend.centroidal.state import CentroidalState
+from jax_backend.pipeline import forward_pipeline
+from jax_backend.state import CentroidalState
 from problem.targets import get_target_points
 
 def evaluate_physical_loss(solution, valid_state, target_params=None):

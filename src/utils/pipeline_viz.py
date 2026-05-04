@@ -7,7 +7,7 @@ import jax.numpy as jnp
 from jax import vmap
 
 from jax_backend.physics_solver.kinematics import rotation_matrix
-from jax_backend.centroidal.geometry import reconstruct_vertices
+from jax_backend.geometry import reconstruct_vertices
 from src.utils.visualization import plot_tessellation, animate_tessellation
 
 def visualize_pipeline_results(result, tessellation, config, target_params, config_name):

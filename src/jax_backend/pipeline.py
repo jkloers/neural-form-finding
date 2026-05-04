@@ -11,10 +11,10 @@ import jax.numpy as jnp
 import numpy as np
 import jax
 
-from jax_backend.centroidal.state import CentroidalState
-from jax_backend.centroidal.geometry import reconstruct_vertices, hinge_vertex_positions, build_reference_bond_vectors
-from jax_backend.centroidal.initial_map import apply_initial_map
-from jax_backend.centroidal.validity_solver import solve_geometric_validity
+from jax_backend.state import CentroidalState
+from jax_backend.geometry import reconstruct_vertices, hinge_vertex_positions, build_reference_bond_vectors
+from jax_backend.initial_map import apply_initial_map
+from jax_backend.validity_solver import solve_geometric_validity
 from jax_backend.pytrees import TessellationGeometry
 from jax_backend.physics_solver.statics import setup_static_solver
 from jax_backend.physics_solver.kinematics import face_to_node_kinematics, rotation_matrix
