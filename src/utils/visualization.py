@@ -17,11 +17,12 @@ def plot_tessellation(tessellation, ax=None,
                       target_params=None,
                       show_border_edges=False,
                       title=None,
-                      color_faces='orange'):
+                      color_faces='#F58025'):
     """
     Plots the tessellation with configurable visibility for topological elements.
     """
     if ax is None:
+        plt.style.use('default')
         fig, ax = plt.subplots(figsize=(10, 10), facecolor='#FFFFFF')
         ax.set_facecolor('#FFFFFF')
 
@@ -37,7 +38,7 @@ def plot_tessellation(tessellation, ax=None,
                 vertices, 
                 closed=True, 
                 facecolor=current_color, 
-                edgecolor='#111111',
+                edgecolor='#1A1A1A',
                 linewidth=1.2,
                 alpha=0.85,
                 zorder=10
@@ -82,7 +83,7 @@ def plot_tessellation(tessellation, ax=None,
             ax.scatter(midpoint[0], midpoint[1], color='#F1FAEE', edgecolor="#000000", s=30, linewidth=1.5, zorder=14)
             
             if show_indices:
-                ax.text(midpoint[0], midpoint[1] + 0.02, f"h{i}", color='blue', fontsize=8, 
+                ax.text(midpoint[0], midpoint[1] + 0.02, f"h{i}", color='#457B9D', fontsize=8, 
                         ha='center', va='bottom', weight='bold', zorder=22)
 
     # 4. Target Shape (Cloud representation)
@@ -91,10 +92,10 @@ def plot_tessellation(tessellation, ax=None,
         if len(target_pts) > 0:
             # On boucle pour fermer la ligne
             plot_pts = np.vstack([target_pts, target_pts[0]])
-            ax.plot(plot_pts[:, 0], plot_pts[:, 1], color="#D6A400", linestyle='--', linewidth=2.0, zorder=5)
+            ax.plot(plot_pts[:, 0], plot_pts[:, 1], color="#009900", linestyle='--', linewidth=2.5, zorder=5)
 
     if title:
-        ax.set_title(title, fontsize=16, weight='bold', pad=20)
+        ax.set_title(title, fontsize=16, weight='bold', color='black', pad=20)
 
     # Centrage automatique de la vue
     X = tessellation.vertices
@@ -131,6 +132,7 @@ def animate_tessellation(tessellation, state_history, filepath="closing_animatio
         print("Warning: state_history is empty, cannot animate.")
         return
 
+    plt.style.use('default')
     fig, ax = plt.subplots(figsize=(10, 10), facecolor='#FFFFFF')
     
     # Compute fixed bounds so the camera doesn't jitter
@@ -186,6 +188,7 @@ def plot_tessellation_differences(tessellation, diff_values, ax=None,
     face_colors = [cmap(norm(val)) for val in diff_values]
     
     if ax is None:
+        plt.style.use('default')
         fig, ax = plt.subplots(figsize=(10, 10), facecolor='#FFFFFF')
     else:
         fig = ax.figure

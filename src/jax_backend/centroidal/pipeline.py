@@ -8,10 +8,11 @@ This module orchestrates the three-stage sequential pipeline:
 """
 
 import jax.numpy as jnp
+import numpy as np
 import jax
 
 from jax_backend.centroidal.state import CentroidalState
-from jax_backend.centroidal.geometry import reconstruct_vertices, hinge_vertex_positions
+from jax_backend.centroidal.geometry import reconstruct_vertices, hinge_vertex_positions, build_reference_bond_vectors
 from jax_backend.centroidal.initial_map import apply_initial_map
 from jax_backend.centroidal.validity_solver import solve_geometric_validity
 from jax_backend.pytrees import TessellationGeometry
@@ -28,33 +29,12 @@ from jax_backend.physics_solver.energy import (
 )
 from problem.targets import get_target_points
 
-def _build_reference_bond_vectors(valid_state: CentroidalState):
-    """Compute bond reference vectors from the validated centroidal state.
-
-    Each hinge connects vertex1 (in face1) to vertex2 (in face2).
-    hinge_node_pairs has exactly 1 entry per hinge.
-
-    Args:
-        valid_state: CentroidalState after geometric validation.
-
-    Returns:
-        (n_hinges, 2) — reference bond vectors (from vertex1 to vertex2).
-    """
-    p1, p2 = hinge_vertex_positions(
-        valid_state.face_centroids,
-        valid_state.centroid_node_vectors,
-        valid_state.hinge_node_pairs,
-    )
-    # p1 = vertex1 position (from face1), p2 = vertex2 position (from face2)
-    # After validity optimization, these should be nearly coincident
-    return p2 - p1
-
-
 def forward_pipeline(
         initial_state: CentroidalState,
         target_params: dict,
         map_type: str = 'elliptical_grip',
         scale_factor: float = 1.0,
+        map_params: jnp.ndarray = None,
         geom_weights: dict = None,
         use_contact: bool = True,
         k_contact: float = 1.,
@@ -95,7 +75,8 @@ def forward_pipeline(
     # ══════════════════════════════════════════════════════════════════════════
     mapped_state = apply_initial_map(
         initial_state, target_params,
-        map_type=map_type, scale_factor=scale_factor)
+        map_type=map_type, scale_factor=scale_factor,
+        map_params=map_params)
 
     # ══════════════════════════════════════════════════════════════════════════
     # Stage 1 — Geometric Validity
@@ -111,12 +92,12 @@ def forward_pipeline(
     # Build reference geometry from validated (c*, s*)
     _face_centroids = valid_state.face_centroids
     _cnv = valid_state.centroid_node_vectors
-    _reference_bond_vectors = _build_reference_bond_vectors(valid_state)
+    _reference_bond_vectors = build_reference_bond_vectors(valid_state)
     
     # Correct node indexing for smap.bond: face_id * n_nodes + local_node_id
     hnp = valid_state.hinge_node_pairs
     n_faces, n_nodes, _ = _cnv.shape
-    _bond_connectivity = jnp.stack([
+    _bond_connectivity = np.stack([
         hnp[:, 0, 0] * n_nodes + hnp[:, 0, 1],
         hnp[:, 1, 0] * n_nodes + hnp[:, 1, 1]
     ], axis=1)

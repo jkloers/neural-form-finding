@@ -6,7 +6,7 @@ constraints while fitting a target shape. Topology is fixed.
 """
 
 import jax.numpy as jnp
-from jax.scipy.optimize import minimize
+from jaxopt import LBFGS
 
 from jax_backend.centroidal.state import CentroidalState
 from jax_backend.centroidal.constraints import compute_geometric_objective
@@ -48,15 +48,18 @@ def solve_geometric_validity(
     x0 = jnp.concatenate([c0.reshape(-1), s0.reshape(-1)])
     split_idx = n_faces * 2  # boundary between c and s in the flat vector
 
-    def objective(x):
+    def objective(x, state_param):
         c = x[:split_idx].reshape(n_faces, 2)
         s = x[split_idx:].reshape(n_faces, max_nodes, 2)
-        return compute_geometric_objective(c, s, initial_state, target_cloud, weights)
+        return compute_geometric_objective(c, s, state_param, target_cloud, weights)
 
-    result = minimize(objective, x0, method=method)
+    # We now have an explicit dependence on map_params via the anchoring term!
+    # Implicit differentiation works perfectly and is much more robust.
+    solver = LBFGS(fun=objective)
+    result = solver.run(x0, state_param=initial_state)
 
-    c_opt = result.x[:split_idx].reshape(n_faces, 2)
-    s_opt = result.x[split_idx:].reshape(n_faces, max_nodes, 2)
+    c_opt = result.params[:split_idx].reshape(n_faces, 2)
+    s_opt = result.params[split_idx:].reshape(n_faces, max_nodes, 2)
 
     return initial_state._replace(
         face_centroids=c_opt,

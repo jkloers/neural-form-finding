@@ -9,7 +9,6 @@ The interface is: CentroidalState → CentroidalState, pure JAX, differentiable.
 """
 
 import jax.numpy as jnp
-
 from jax_backend.centroidal.state import CentroidalState
 from jax_backend.centroidal.geometry import reconstruct_vertices
 
@@ -47,6 +46,58 @@ def _elliptical_grip_mapping(vertices_flat, center, radius):
     y_disk = v * jnp.sqrt(jnp.maximum(0.0, 1.0 - (u ** 2) / 2.0))
 
     return jnp.column_stack((x_disk, y_disk)) * radius + center
+
+
+def _conformal_polynomial_mapping(vertices_flat, center, radius, params):
+    """Complex polynomial conformal mapping to a circle.
+
+    Evaluates the polynomial mapping given the parameters [scale, c_1, ..., c_K].
+
+    Args:
+        vertices_flat: (N, 2) — flat vertex positions.
+        center: (2,) — target center.
+        radius: float — target radius.
+        params: jnp.ndarray — array of [scale, c_1, ..., c_K].
+
+    Returns:
+        (N, 2) — mapped vertex positions.
+    """
+    center_jnp = jnp.asarray(center, dtype=float)
+    min_xy = jnp.min(vertices_flat, axis=0)
+    max_xy = jnp.max(vertices_flat, axis=0)
+    box_center = (min_xy + max_xy) / 2.0
+    half_sizes = (max_xy - min_xy) / 2.0
+    half_size = jnp.maximum(jnp.max(half_sizes), 1e-6)
+
+    normalized = (vertices_flat - box_center) / half_size
+    u = normalized[:, 0]
+    v = normalized[:, 1]
+    z = u + 1j * v
+
+    # Fallback to default params if none provided or too short
+    # Format: [tx, ty, theta, scale, c1, c2, ...]
+    if params is None or len(params) < 4:
+        params = jnp.concatenate([jnp.array([0.0, 0.0, 0.0, 1.0]), jnp.zeros(1)])
+
+    tx = params[0]
+    ty = params[1]
+    theta = params[2]
+    s_val = params[3]
+    c_val = params[4:]
+    K = len(c_val)
+
+    w_opt = z
+    for k in range(K):
+        w_opt = w_opt + c_val[k] * (z ** (4 * (k + 1) + 1))
+    
+    # Apply Scale and Rotation
+    w_opt = s_val * w_opt * jnp.exp(1j * theta)
+    
+    # Apply Translation
+    x_new = jnp.real(w_opt) * radius + center_jnp[0] + tx
+    y_new = jnp.imag(w_opt) * radius + center_jnp[1] + ty
+    
+    return jnp.column_stack((x_new, y_new))
 
 
 def _boundary_projection_mapping(vertices_flat, boundary_points):
@@ -120,7 +171,8 @@ def apply_initial_map(
         state: CentroidalState,
         target_params: dict,
         map_type: str = 'elliptical_grip',
-        scale_factor: float = 1.0) -> CentroidalState:
+        scale_factor: float = 1.0,
+        map_params: jnp.ndarray = None) -> CentroidalState:
     """Apply an initial mapping to a CentroidalState.
 
     Deforms the flat tessellation into the target shape by:
@@ -135,8 +187,9 @@ def apply_initial_map(
         state: CentroidalState with flat tessellation geometry.
         target_params: dict with 'type', 'center', 'radius' (and optionally
                        a precomputed 'boundary_points' array).
-        map_type: 'elliptical_grip' or 'boundary_projection'.
+        map_type: 'elliptical_grip', 'boundary_projection' or 'conformal_polynomial'.
         scale_factor: scaling applied after mapping.
+        map_params: parameters for the parameterized map (e.g. polynomial coefficients).
 
     Returns:
         CentroidalState with updated (face_centroids, centroid_node_vectors).
@@ -158,6 +211,9 @@ def apply_initial_map(
 
     if map_type == 'elliptical_grip' and shape_type == 'circle':
         mapped_flat = _elliptical_grip_mapping(vertices_flat, center, radius)
+        mapped_flat = center + (mapped_flat - center) * scale_factor
+    elif map_type == 'conformal_polynomial' and shape_type == 'circle':
+        mapped_flat = _conformal_polynomial_mapping(vertices_flat, center, radius, map_params)
         mapped_flat = center + (mapped_flat - center) * scale_factor
     elif map_type == 'boundary_projection' or shape_type != 'circle':
         boundary_pts = get_target_points(target_params, n_points=500)

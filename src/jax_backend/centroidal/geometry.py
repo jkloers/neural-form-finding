@@ -51,6 +51,27 @@ def hinge_vertex_positions(face_centroids, cnv, hinge_node_pairs):
     return p1, p2
 
 
+def build_reference_bond_vectors(valid_state):
+    """Compute bond reference vectors from the validated centroidal state.
+
+    Each hinge connects vertex1 (in face1) to vertex2 (in face2).
+    hinge_node_pairs has exactly 1 entry per hinge.
+
+    Args:
+        valid_state: CentroidalState after geometric validation.
+
+    Returns:
+        (n_hinges, 2) — reference bond vectors (from vertex1 to vertex2).
+    """
+    p1, p2 = hinge_vertex_positions(
+        valid_state.face_centroids,
+        valid_state.centroid_node_vectors,
+        valid_state.hinge_node_pairs,
+    )
+    # After validity optimization, these should be nearly coincident
+    return p2 - p1
+
+
 def hinge_adj_vertex_positions(face_centroids, cnv, hinge_adj_info):
     """Compute pivot and adjacent vertex positions for non-intersection checks.
 

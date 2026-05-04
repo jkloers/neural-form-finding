@@ -57,10 +57,12 @@ from src.utils.pipeline_viz import visualize_pipeline_results
 if __name__ == "__main__":
 
     # Load configuration from YAML
-    config_name = "5_circlesquish_dev"
+    config_dir = "complex_mapping"
+    config_name = "5_cs_asy_complex"
+
 
     # Paths are now simple as we run from root
-    config_path = f"data/configs/{config_name}.yaml"
+    config_path = f"data/configs/{config_dir}/{config_name}.yaml"
     config = load_config(config_path)
     print(f"Loaded configuration from {config_path}")
 
@@ -115,7 +117,14 @@ if __name__ == "__main__":
     # ══════════════════════════════════════════════════════════════════════════
     print("\nExporting to CentroidalState...")
     cs_dict = tessellation.to_centroidal_state()
-    initial_state = CentroidalState(**{k: jnp.array(v) for k, v in cs_dict.items()})
+    state_kwargs = {}
+    for k, v in cs_dict.items():
+        if k in ['face_centroids', 'centroid_node_vectors', 'load_values']:
+            state_kwargs[k] = jnp.array(v)
+        else:
+            state_kwargs[k] = np.array(v)
+            
+    initial_state = CentroidalState(**state_kwargs)
 
     n_faces = initial_state.face_centroids.shape[0]
     n_hinges = initial_state.hinge_face_pairs.shape[0]
@@ -138,6 +147,7 @@ if __name__ == "__main__":
         'arm_symmetry': config.w_arm_symmetry,
         'void_length': config.w_void_length,
         'void_collinear': config.w_void_collinear,
+        'boundary_rigidity': config.w_boundary_rigidity,
     }
 
     print("\n" + "=" * 60)
@@ -151,6 +161,7 @@ if __name__ == "__main__":
         initial_state=initial_state,
         target_params=target_params,
         map_type=config.map_type,
+        map_params=jnp.array(config.map_params),
         scale_factor=config.scale_factor,
         geom_weights=geom_weights,
         use_contact=config.use_contact,
@@ -167,5 +178,6 @@ if __name__ == "__main__":
     # ══════════════════════════════════════════════════════════════════════════
     print("\nVisualizing results...")
     visualize_pipeline_results(result, tessellation, config, target_params, config_name)
-
-    print("\nPipeline complete. Let's pat ourselves on the back!")
+    print("\n" + "=" * 60)
+    print("Pipeline complete. Let's all pat ourselves on the back! 💕")
+    print("=" * 60)

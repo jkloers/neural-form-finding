@@ -168,6 +168,88 @@ def void_opposite_edges_validity(cnv, void_opposite_node_pairs):
     return length_penalty, collinearity_penalty
 
 
+def initial_map_anchoring(face_centroids, cnv, state):
+    """L2 penalty on distance to the initial mapped geometry (the reference state).
+
+    Args:
+        face_centroids: (n_faces, 2) — current coordinates
+        cnv: (n_faces, max_nodes, 2) — current coordinates
+        state: CentroidalState — initial reference state
+
+    Returns:
+        scalar — squared distance to reference.
+    """
+    c_diff = face_centroids - state.face_centroids
+    s_diff = cnv - state.centroid_node_vectors
+    return jnp.sum(c_diff**2) + jnp.sum(s_diff**2)
+
+
+def boundary_face_rigidity(cnv, boundary_face_node_ids):
+    """Penalizes deformation (non-squareness) of boundary faces.
+    Forces all 4 edges to have equal length and the 2 diagonals to have equal length.
+
+    Args:
+        cnv: (n_faces, max_nodes, 2)
+        boundary_face_node_ids: (n_boundary, 2)
+
+    Returns:
+        scalar — penalty on shape distortion for boundary faces.
+    """
+    if boundary_face_node_ids.shape[0] == 0:
+        return 0.0
+
+    # Use raw face IDs without jnp.unique. 
+    # JAX requires static shapes, so jnp.unique crashes the compiler here.
+    # Duplicates just mean the penalty is applied multiple times for corner faces.
+    b_faces = boundary_face_node_ids[:, 0]
+    b_cnv = cnv[b_faces]  # (n_boundary_nodes, max_nodes, 2)
+    
+    # Assuming faces are quads (first 4 nodes are valid)
+    e1 = b_cnv[:, 1] - b_cnv[:, 0]
+    e2 = b_cnv[:, 2] - b_cnv[:, 1]
+    e3 = b_cnv[:, 3] - b_cnv[:, 2]
+    e4 = b_cnv[:, 0] - b_cnv[:, 3]
+    
+    l1 = jnp.sum(e1**2, axis=1)
+    l2 = jnp.sum(e2**2, axis=1)
+    l3 = jnp.sum(e3**2, axis=1)
+    l4 = jnp.sum(e4**2, axis=1)
+    
+    length_penalty = jnp.sum((l1 - l2)**2 + (l2 - l3)**2 + (l3 - l4)**2 + (l4 - l1)**2)
+    
+    d1 = b_cnv[:, 2] - b_cnv[:, 0]
+    d2 = b_cnv[:, 3] - b_cnv[:, 1]
+    diag_penalty = jnp.sum((jnp.sum(d1**2, axis=1) - jnp.sum(d2**2, axis=1))**2)
+    
+    return length_penalty + diag_penalty
+
+
+def face_non_inversion(cnv):
+    """Penalizes faces that have flipped inside out (negative signed area).
+    Uses the shoelace formula on the centroid-node vectors.
+
+    Args:
+        cnv: (n_faces, max_nodes, 2)
+
+    Returns:
+        scalar — penalty for faces with negative oriented area.
+    """
+    # Assuming quad faces (first 4 nodes are ordered CCW originally)
+    # Area = 0.5 * sum(x_i * y_i+1 - x_i+1 * y_i)
+    area = 0.5 * (
+        cnv[:, 0, 0] * cnv[:, 1, 1] - cnv[:, 0, 1] * cnv[:, 1, 0] +
+        cnv[:, 1, 0] * cnv[:, 2, 1] - cnv[:, 1, 1] * cnv[:, 2, 0] +
+        cnv[:, 2, 0] * cnv[:, 3, 1] - cnv[:, 2, 1] * cnv[:, 3, 0] +
+        cnv[:, 3, 0] * cnv[:, 0, 1] - cnv[:, 3, 1] * cnv[:, 0, 0]
+    )
+    
+    # We penalize if area drops below a small positive margin
+    margin = 1e-4
+    violations = jax.nn.relu(margin - area)
+    
+    return jnp.sum(violations**2)
+
+
 def compute_geometric_objective(face_centroids, cnv, state, target_cloud, weights):
     """Total geometric validity objective.
 
@@ -198,9 +280,20 @@ def compute_geometric_objective(face_centroids, cnv, state, target_cloud, weight
     e_void_l, e_void_c = void_opposite_edges_validity(
         cnv, state.void_opposite_node_pairs)
 
+    e_anchoring = initial_map_anchoring(
+        face_centroids, cnv, state)
+
+    e_bound_rigid = boundary_face_rigidity(
+        cnv, state.boundary_face_node_ids)
+
+    e_inversion = face_non_inversion(cnv)
+
     return (weights.get('connectivity', 700.) * e_connect +
             weights.get('non_intersection', 1000.) * e_non_inv +
             weights.get('target', 1.) * e_target +
             weights.get('arm_symmetry', 1.) * e_symmetry +
             weights.get('void_length', 1.) * e_void_l +
-            weights.get('void_collinear', 1.) * e_void_c)
+            weights.get('void_collinear', 1.) * e_void_c +
+            weights.get('anchoring', 100.) * e_anchoring +
+            weights.get('boundary_rigidity', 10.) * e_bound_rigid +
+            weights.get('face_inversion', 1000.) * e_inversion)

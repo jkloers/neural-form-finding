@@ -6,6 +6,7 @@ State is displacement-only: (n_faces, 3) = [dx, dy, d_theta]. No velocities.
 from typing import Callable, Dict, Tuple, Union
 import jax.numpy as jnp
 from jax import vmap
+import numpy as np
 
 from jax_backend.utils.linalg import rotation_matrix
 
@@ -45,14 +46,26 @@ def DOFsInfo(n_faces: int, constrained_face_DOF_pairs: jnp.ndarray) -> Tuple:
     Returns:
         Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]: free_DOF_ids, constrained_DOF_ids, all_DOF_ids.
     """
-    constrained_DOF_ids = jnp.array(
-        [face_id * 3 + dof_id for face_id, dof_id in constrained_face_DOF_pairs]
-    )
-    all_DOF_ids = jnp.arange(n_faces * 3)
-    free_DOF_ids = jnp.array(
-        [dof for dof in all_DOF_ids if dof not in constrained_DOF_ids]
-    )
-    return free_DOF_ids, constrained_DOF_ids, all_DOF_ids
+    # Il est CRUCIAL d'utiliser numpy (np) et non jax.numpy (jnp) ici.
+    # La topologie doit rester statique pour ne pas être tracée par JAX.
+    if constrained_face_DOF_pairs.shape[0] == 0:
+        constrained_DOF_ids = np.array([], dtype=int)
+    else:
+        constrained_DOF_ids = constrained_face_DOF_pairs[:, 0] * 3 + constrained_face_DOF_pairs[:, 1]
+        
+    all_DOF_ids = np.arange(n_faces * 3)
+    
+    mask = np.ones(n_faces * 3, dtype=bool)
+    if constrained_face_DOF_pairs.shape[0] > 0:
+        mask[constrained_DOF_ids] = False
+        
+    n_free = n_faces * 3 - constrained_face_DOF_pairs.shape[0]
+    
+    values = np.where(mask, all_DOF_ids, n_faces * 3 + 1)
+    sorted_vals = np.sort(values)
+    free_DOF_ids = sorted_vals[:n_free]
+    
+    return free_DOF_ids, constrained_DOF_ids
 
 
 def build_constrained_kinematics(
@@ -75,7 +88,7 @@ def build_constrained_kinematics(
     """
     n_faces = geometry.n_faces
 
-    free_DOF_ids, constrained_DOF_ids, all_DOF_ids = DOFsInfo(
+    free_DOF_ids, constrained_DOF_ids = DOFsInfo(
         n_faces, constrained_face_DOF_pairs)
 
     def constrained_kinematics(
@@ -92,7 +105,7 @@ def build_constrained_kinematics(
         Returns:
             jnp.ndarray: shape (n_faces, 3) = [dx, dy, d_theta] per face.
         """
-        all_DOFs = jnp.zeros((len(all_DOF_ids),))
+        all_DOFs = jnp.zeros((n_faces * 3,))
         if len(constrained_DOF_ids) != 0:
             all_DOFs = all_DOFs.at[constrained_DOF_ids].set(
                 constrained_DOFs_fn(t, **constraint_params)
