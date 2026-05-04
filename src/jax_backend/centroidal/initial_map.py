@@ -74,22 +74,28 @@ def _conformal_polynomial_mapping(vertices_flat, center, radius, params):
     v = normalized[:, 1]
     z = u + 1j * v
 
-    # Fallback to default params if none provided (1.0 scale, zero coefficients)
-    if params is None:
-        params = jnp.concatenate([jnp.array([1.0]), jnp.zeros(4)])
+    # Fallback to default params if none provided or too short
+    # Format: [tx, ty, theta, scale, c1, c2, ...]
+    if params is None or len(params) < 4:
+        params = jnp.concatenate([jnp.array([0.0, 0.0, 0.0, 1.0]), jnp.zeros(1)])
 
-    s_val = params[0]
-    c_val = params[1:]
+    tx = params[0]
+    ty = params[1]
+    theta = params[2]
+    s_val = params[3]
+    c_val = params[4:]
     K = len(c_val)
 
     w_opt = z
     for k in range(K):
         w_opt = w_opt + c_val[k] * (z ** (4 * (k + 1) + 1))
     
-    w_opt = s_val * w_opt
+    # Apply Scale and Rotation
+    w_opt = s_val * w_opt * jnp.exp(1j * theta)
     
-    x_new = jnp.real(w_opt) * radius + center_jnp[0]
-    y_new = jnp.imag(w_opt) * radius + center_jnp[1]
+    # Apply Translation
+    x_new = jnp.real(w_opt) * radius + center_jnp[0] + tx
+    y_new = jnp.imag(w_opt) * radius + center_jnp[1] + ty
     
     return jnp.column_stack((x_new, y_new))
 

@@ -31,6 +31,7 @@ class CentroidalConfig:
     # Initial mapping
     map_type: str
     scale_factor: float
+    map_params: list
 
     # Geometric validity weights
     w_connectivity: float
@@ -39,6 +40,7 @@ class CentroidalConfig:
     w_arm_symmetry: float
     w_void_length: float
     w_void_collinear: float
+    w_boundary_rigidity: float
 
     # Physics
     use_contact: bool
@@ -137,6 +139,7 @@ def load_config(yaml_path: str) -> CentroidalConfig:
     mapping = data.get('mapping', {})
     config_dict['map_type'] = mapping.get('type', 'elliptical_grip')
     config_dict['scale_factor'] = mapping.get('scale_factor', 1.0)
+    config_dict['map_params'] = mapping.get('params', [0.0, 0.0, 0.0, 1.0, 0.0])
 
     # Weights
     w = data.get('optimization_weights', {})
@@ -146,6 +149,7 @@ def load_config(yaml_path: str) -> CentroidalConfig:
     config_dict['w_arm_symmetry'] = w.get('arm_symmetry', 1.0)
     config_dict['w_void_length'] = w.get('void_length', 1000.0)
     config_dict['w_void_collinear'] = w.get('void_collinear', 1000.0)
+    config_dict['w_boundary_rigidity'] = w.get('boundary_rigidity', 10.0)
 
     # Physics
     phys = data.get('physics', {})

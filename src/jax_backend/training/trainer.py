@@ -9,7 +9,7 @@ import jax
 import jax.numpy as jnp
 import optax
 
-from jax_backend.training.loss import compute_end_to_end_physical_loss
+from jax_backend.training.loss import compute_end_to_end_loss
 
 def create_train_step(initial_state, target_params, pipeline_kwargs, learning_rate=0.01):
     """Creates a compiled training step for optimizing map_params.
@@ -29,7 +29,7 @@ def create_train_step(initial_state, target_params, pipeline_kwargs, learning_ra
     
     # The loss function closed over the constants
     def loss_fn(map_params):
-        return compute_end_to_end_physical_loss(
+        return compute_end_to_end_loss(
             map_params, initial_state, target_params, pipeline_kwargs
         )
         
@@ -37,12 +37,12 @@ def create_train_step(initial_state, target_params, pipeline_kwargs, learning_ra
     def train_step(map_params, opt_state):
         # jax.value_and_grad computes the loss and the gradients 
         # end-to-end through the implicit physical solvers!
-        loss_val, grads = jax.value_and_grad(loss_fn)(map_params)
+        (loss_val, aux), grads = jax.value_and_grad(loss_fn, has_aux=True)(map_params)
         
         updates, opt_state = optimizer.update(grads, opt_state)
         new_map_params = optax.apply_updates(map_params, updates)
         
-        return new_map_params, opt_state, loss_val
+        return new_map_params, opt_state, loss_val, aux
 
     return optimizer, train_step
 
@@ -59,10 +59,10 @@ def train_pipeline(initial_map_params, initial_state, target_params, pipeline_kw
     history_loss = []
     
     for epoch in range(num_epochs):
-        current_params, opt_state, loss = train_step(current_params, opt_state)
-        history_loss.append(loss)
+        current_params, opt_state, loss, aux = train_step(current_params, opt_state)
+        history_loss.append(aux)
         
         if epoch % 5 == 0 or epoch == num_epochs - 1:
-            print(f"Epoch {epoch:03d} | Physical Loss: {loss:.6f}")
+            print(f"Epoch {epoch:03d} | Total Loss: {aux['total']:.6f} | Chamfer: {aux['chamfer']:.6f} | Energy: {aux['energy']:.6f}")
             
     return current_params, history_loss

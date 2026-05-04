@@ -115,36 +115,46 @@ def visualize_pipeline_results(result, tessellation, config, target_params, conf
             stretch_energy = None
             work_energy = None
             
+        plt.style.use('default')
         fig, ax = plt.subplots(figsize=(8, 6))
         
+        # Theme: Princeton Orange, Green, and Black
         if config.incremental:
             steps = np.linspace(1.0 / config.num_load_steps, 1.0, config.num_load_steps)
             ax.plot(steps, total_energy, marker='o', linestyle='-', color='#000000', linewidth=2, label='Total Energy')
             if stretch_energy is not None:
-                ax.plot(steps, stretch_energy, marker='x', linestyle='--', color='#E63946', label='Stretch Energy')
-                ax.plot(steps, shear_energy, marker='s', linestyle='-.', color='#457B9D', label='Shear Energy')
-                ax.plot(steps, rot_energy, marker='^', linestyle=':', color='#2A9D8F', label='Rotational Energy')
+                ax.plot(steps, stretch_energy, marker='x', linestyle='--', color='#F58025', label='Stretch Energy')
+                ax.plot(steps, shear_energy, marker='s', linestyle='-.', color='#009900', label='Shear Energy')
+                ax.plot(steps, rot_energy, marker='^', linestyle=':', color='#CC5500', label='Rotational Energy')
                 if contact_energy is not None and np.any(contact_energy > 0):
-                    ax.plot(steps, contact_energy, marker='d', linestyle='-', color='#F4A261', label='Contact Energy')
+                    ax.plot(steps, contact_energy, marker='d', linestyle='-', color='#3CB371', label='Contact Energy')
                 if work_energy is not None and np.any(jnp.abs(work_energy) > 1e-6):
-                    ax.plot(steps, -work_energy, marker='v', linestyle='-', color='#9D4EDD', label='External Work (-W_ext)')
-            ax.set_xlabel('Load Factor (t)')
+                    ax.plot(steps, -work_energy, marker='v', linestyle='-', color='#777777', label='External Work (-W_ext)')
+            ax.set_xlabel('Load Factor (t)', color='black')
         else:
             ax.plot([1.0], total_energy, marker='o', color='#000000', label='Total Energy')
             if stretch_energy is not None:
-                ax.plot([1.0], stretch_energy, marker='x', color='#E63946', label='Stretch Energy')
-                ax.plot([1.0], shear_energy, marker='s', color='#457B9D', label='Shear Energy')
-                ax.plot([1.0], rot_energy, marker='^', color='#2A9D8F', label='Rotational Energy')
+                ax.plot([1.0], stretch_energy, marker='x', color='#F58025', label='Stretch Energy')
+                ax.plot([1.0], shear_energy, marker='s', color='#009900', label='Shear Energy')
+                ax.plot([1.0], rot_energy, marker='^', color='#CC5500', label='Rotational Energy')
                 if contact_energy is not None and np.any(contact_energy > 0):
-                    ax.plot([1.0], contact_energy, marker='d', color='#F4A261', label='Contact Energy')
+                    ax.plot([1.0], contact_energy, marker='d', color='#3CB371', label='Contact Energy')
                 if work_energy is not None and np.any(jnp.abs(work_energy) > 1e-6):
-                    ax.plot([1.0], -work_energy, marker='v', color='#9D4EDD', label='External Work (-W_ext)')
-            ax.set_xlabel('Step')
+                    ax.plot([1.0], -work_energy, marker='v', color='#777777', label='External Work (-W_ext)')
+            ax.set_xlabel('Step', color='black')
             
-        ax.set_ylabel('Energy')
-        ax.set_title('Energy Decomposition during Physics Solver')
-        ax.grid(True, linestyle='--', alpha=0.7)
-        ax.legend()
+        ax.set_ylabel('Energy', color='black')
+        ax.set_title('Energy Decomposition during Physics Solver', color='black', pad=20, fontweight='bold')
+        ax.grid(True, linestyle='--', color='#DDDDDD', alpha=0.7)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.spines['bottom'].set_color('black')
+        ax.spines['left'].set_color('black')
+        ax.tick_params(colors='black')
+        
+        legend = ax.legend(facecolor='white', edgecolor='#CCCCCC')
+        for text in legend.get_texts():
+            text.set_color("black")
         
         if config.save_plots:
             save_path = os.path.join(plots_dir, "energy_plot.png")

@@ -5,6 +5,7 @@ The `loading` module implements loading functions for static and dynamic problem
 from typing import Callable, Dict
 
 import jax.numpy as jnp
+import numpy as np
 
 from jax_backend.physics_solver.kinematics import DOFsInfo
 
@@ -30,16 +31,15 @@ def build_loading(
             defined by `loaded_face_DOF_pairs` and 0 otherwise.
     """
 
-    # loaded DOF ids based on global numeration
-    loaded_DOF_ids = jnp.array(
+    loaded_DOF_ids = np.array(
         [face_id * 3 + DOF_id for face_id, DOF_id in loaded_face_DOF_pairs])
     # Retrieve free DOFs from constraints info (this information is assumed to be static)
-    free_DOF_ids, _, all_DOF_ids = DOFsInfo(
+    free_DOF_ids, _ = DOFsInfo(
         geometry.n_faces, constrained_face_DOF_pairs)
 
     def global_loading_fn(state, t, loading_params: Dict):
 
-        loading_vector = jnp.zeros((len(all_DOF_ids),))
+        loading_vector = jnp.zeros((geometry.n_faces * 3,))
         loading_vector = loading_vector.at[loaded_DOF_ids].set(
             loading_fn(state, t, **loading_params)
         )

@@ -14,7 +14,7 @@ from jax_backend.physics_solver.kinematics import build_constrained_kinematics, 
 
 from jax_backend.utils.utils import ControlParams, SolutionData
 
-from jaxopt import ScipyMinimize
+from jaxopt import LBFGS
 
 
 def setup_static_solver(
@@ -57,7 +57,7 @@ def setup_static_solver(
     constrained_energy = constrain_energy(energy_fn, kinematics)
 
     # Free DOF ids
-    free_DOF_ids, _, _ = DOFsInfo(geometry.n_faces, constrained_face_DOF_pairs)
+    free_DOF_ids, _ = DOFsInfo(geometry.n_faces, constrained_face_DOF_pairs)
 
     # External loading
     if loaded_face_DOF_pairs is not None and loading_fn is not None:
@@ -91,7 +91,7 @@ def setup_static_solver(
         """
         initial_free = state0.reshape(-1)[free_DOF_ids]
 
-        solver = ScipyMinimize(fun=total_potential_energy, method='BFGS', implicit_diff=True)
+        solver = LBFGS(fun=total_potential_energy)
 
         def solve_single_step(current_free_DOFs, t):
             result = solver.run(current_free_DOFs, t=t, control_params=control_params)
