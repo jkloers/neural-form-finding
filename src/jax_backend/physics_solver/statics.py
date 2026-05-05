@@ -59,7 +59,7 @@ def setup_static_solver(
     # Free DOF ids
     free_DOF_ids, _ = DOFsInfo(geometry.n_faces, constrained_face_DOF_pairs)
 
-    # External loading
+    # External loading: defaults to zero if not provided
     if loaded_face_DOF_pairs is not None and loading_fn is not None:
         _loading_fn = build_loading(
             geometry=geometry,
@@ -68,16 +68,14 @@ def setup_static_solver(
             constrained_face_DOF_pairs=constrained_face_DOF_pairs
         )
     else:
-        _loading_fn = None
+        _loading_fn = lambda state, t, loading_params: jnp.zeros_like(free_DOF_ids, dtype=float)
 
     # Total potential energy = U_internal - W_external
     def total_potential_energy(free_DOFs: jnp.ndarray, t: float, control_params: ControlParams) -> float:
         U_int = constrained_energy(free_DOFs, t, control_params)
-        if _loading_fn is not None:
-            F_ext = _loading_fn(None, t, control_params.loading_params)
-            W_ext = jnp.dot(F_ext, free_DOFs)
-            return U_int - W_ext
-        return U_int
+        F_ext = _loading_fn(None, t, control_params.loading_params)
+        W_ext = jnp.dot(F_ext, free_DOFs)
+        return U_int - W_ext
 
     def solve_statics(state0: jnp.ndarray, control_params: ControlParams) -> SolutionData:
         """Solve for the static equilibrium.
@@ -98,18 +96,13 @@ def setup_static_solver(
             fun_val = total_potential_energy(result.params, t, control_params)
             return result.params, (result.params, fun_val)
 
-        if not incremental:
-            final_free, (history_free, history_energy) = solve_single_step(initial_free, 1.0)
-            history_free = history_free[None, :]
-            history_energy = history_energy[None]
-            t_array = jnp.array([1.0])
-        else:
-            t_array = jnp.linspace(1.0 / num_steps, 1.0, num_steps)
-            final_free, (history_free, history_energy) = jax.lax.scan(
-                solve_single_step,
-                init=initial_free,
-                xs=t_array
-            )
+        t_array = jnp.linspace(1.0 / num_steps, 1.0, num_steps) if incremental else jnp.array([1.0])
+
+        final_free, (history_free, history_energy) = jax.lax.scan(
+            solve_single_step,
+            init=initial_free,
+            xs=t_array
+        )
 
         # Reconstruct displacements for the entire history
         mapped_kinematics = jax.vmap(kinematics, in_axes=(0, 0, None))

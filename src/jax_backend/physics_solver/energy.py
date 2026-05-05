@@ -224,8 +224,8 @@ def build_contact_energy(bond_connectivity: jnp.ndarray, angle_based=True):
             float: Total contact energy.
         """
 
-        face_centroids = control_params.geometrical_params.face_centroids
-        centroid_node_vectors = control_params.geometrical_params.centroid_node_vectors
+        face_centroids = control_params.reference_geometry.face_centroids
+        centroid_node_vectors = control_params.reference_geometry.centroid_node_vectors
         contact_params = control_params.mechanical_params.contact_params
 
         node_displacements = jnp.array(
@@ -261,13 +261,13 @@ def build_strain_energy(bond_connectivity: jnp.ndarray, bond_energy_fn: Callable
 
         Args:
             face_displacement (ndarray): array of shape (n_faces, 3) collecting the displacements (first two positions) and rotations (last position) of all the faces.
-            control_params (ControlParams): contains the geometrical params in control_params.geometrical_params, as well as the bond params in control_params.mechanical_params.bond_params.
+            control_params (ControlParams): contains the geometrical params in control_params.reference_geometry, as well as the bond params in control_params.mechanical_params.bond_params.
 
         Returns:
             float: Total strain energy.
         """
 
-        centroid_node_vectors = control_params.geometrical_params.centroid_node_vectors
+        centroid_node_vectors = control_params.reference_geometry.centroid_node_vectors
         bond_params = control_params.mechanical_params.bond_params
 
         n_faces, n_nodes_per_face, _ = centroid_node_vectors.shape
@@ -302,6 +302,33 @@ def combine_face_energies(*energy_fns: Callable):
         return energy
 
     return combined_energy_fn
+
+
+def build_potential_energy(bond_connectivity,
+                           linearized_strains: bool = True,
+                           use_contact: bool = True) -> Callable:
+    """Build the total potential energy functional.
+
+    Composes elastic strain energy and (optionally) contact energy into a
+    single callable with signature (face_displacement, control_params) -> scalar.
+
+    Args:
+        bond_connectivity: (n_hinges, 2) static NumPy array of global node indices.
+        linearized_strains: use linearized beam theory if True, full strains otherwise.
+        use_contact:        include contact energy penalizing face interpenetration.
+
+    Returns:
+        Callable: potential_energy(face_displacement, control_params) -> scalar.
+    """
+    bond_energy_fn = ligament_energy_linearized if linearized_strains else ligament_energy
+    strain_energy = build_strain_energy(
+        bond_connectivity=bond_connectivity,
+        bond_energy_fn=bond_energy_fn,
+    )
+    if use_contact:
+        contact_energy = build_contact_energy(bond_connectivity=bond_connectivity)
+        return combine_face_energies(strain_energy, contact_energy)
+    return strain_energy
 
 
 def constrain_energy(energy_fn: Callable, constrained_kinematics: Callable):
@@ -353,9 +380,9 @@ def build_decompose_energy_fn(control_params: ControlParams, linearized_strains:
         Callable: A function `decompose_energy_fn(face_displacement)` that returns 
                   an array [E_stretch, E_shear, E_rot, E_contact].
     """
-    face_centroids = control_params.geometrical_params.face_centroids
-    centroid_node_vectors = control_params.geometrical_params.centroid_node_vectors
-    bond_connectivity = control_params.geometrical_params.bond_connectivity
+    face_centroids = control_params.reference_geometry.face_centroids
+    centroid_node_vectors = control_params.reference_geometry.centroid_node_vectors
+    bond_connectivity = control_params.reference_geometry.bond_connectivity
     bond_params = control_params.mechanical_params.bond_params
     
     n_faces, n_nodes_per_face, _ = centroid_node_vectors.shape

@@ -32,12 +32,11 @@ from jax_backend.geometry import reconstruct_vertices
 from jax_backend.initial_map import apply_initial_map
 from jax_backend.validity_solver import solve_geometric_validity
 from jax_backend.physics_solver.energy import (
-    ligament_energy, ligament_energy_linearized,
-    build_strain_energy, build_contact_energy, combine_face_energies,
+    build_potential_energy,
     build_energy_history,
 )
 from jax_backend.physics_solver.statics import setup_static_solver
-from jax_backend.physics_solver.params import GeometricalParams, build_control_params
+from jax_backend.physics_solver.params import ReferenceGeometry, build_control_params
 from problem.targets import get_target_points
 
 
@@ -109,24 +108,18 @@ def forward_pipeline(
     # ══════════════════════════════════════════════════════════════════════════
 
     # 2.1 — Geometry instantiation (Factory Pattern)
-    # GeometricalParams is the single geometry container. bond_connectivity
+    # ReferenceGeometry is the single geometry container. bond_connectivity
     # is read from the state as a static NumPy array — never a JAX Tracer.
-    geometry = GeometricalParams.from_centroidal_state(valid_state)
+    geometry = ReferenceGeometry.from_centroidal_state(valid_state)
 
     # 2.2 — Energy functional construction
-    # The potential energy is the sum of:
-    #   - Elastic strain energy (axial + shear + rotational, per ligament)
-    #   - Contact energy (penalizes face interpenetration via void angles)
-    bond_energy_fn = ligament_energy_linearized if linearized_strains else ligament_energy
-    strain_energy = build_strain_energy(
+    # build_potential_energy composes elastic strain energy and contact energy
+    # into a single callable, choosing linearized or nonlinear strains.
+    potential_energy = build_potential_energy(
         bond_connectivity=geometry.bond_connectivity,
-        bond_energy_fn=bond_energy_fn,
+        linearized_strains=linearized_strains,
+        use_contact=use_contact,
     )
-    if use_contact:
-        contact_energy = build_contact_energy(bond_connectivity=geometry.bond_connectivity)
-        potential_energy = combine_face_energies(strain_energy, contact_energy)
-    else:
-        potential_energy = strain_energy
 
     # 2.3 — Loading (Neumann BCs)
     # Returns a callable t → force values, or None if no loads are defined.

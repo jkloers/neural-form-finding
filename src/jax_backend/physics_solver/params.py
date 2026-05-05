@@ -2,7 +2,7 @@
 Parameter structures for the JAX physics solver.
 
 All classes are NamedTuples, which JAX automatically registers as Pytrees
-(all fields as dynamic children). The exception is GeometricalParams, which
+(all fields as dynamic children). The exception is ReferenceGeometry, which
 needs a custom Pytree registration to keep bond_connectivity static.
 """
 
@@ -16,18 +16,28 @@ if TYPE_CHECKING:
 # ── Geometry ──────────────────────────────────────────────────────────────────
 
 @jax.tree_util.register_pytree_node_class
-class GeometricalParams(NamedTuple):
-    """JAX-compatible geometry container for the centroidal physics solver.
+class ReferenceGeometry(NamedTuple):
+    """Physics-solver view of the tessellation reference geometry.
 
-    Holds the four arrays that describe the tessellation reference configuration:
-      - face_centroids          (n_faces, 2)            — centroid positions
-      - centroid_node_vectors   (n_faces, n_nodes, 2)   — face shape vectors
-      - bond_connectivity       (n_hinges, 2) [STATIC]  — global node indices
-      - reference_bond_vectors  (n_hinges, 2)           — rest ligament vectors
+    This is a focused, 4-field subset of CentroidalState, designed specifically
+    for use inside ControlParams (the physics solver's parameter bundle).
 
-    Custom Pytree registration: bond_connectivity goes to aux_data (static)
-    so it is never a JAX Tracer. Required by smap.bond's static_bonds argument.
-    All other fields are dynamic children (differentiable).
+    Relationship to CentroidalState:
+      - face_centroids, centroid_node_vectors, bond_connectivity are copied
+        directly from a *validated* CentroidalState.
+      - reference_bond_vectors is computed from the validated geometry via
+        build_reference_bond_vectors() — it does not exist in CentroidalState
+        because it depends on the post-validity-optimization geometry.
+
+    Why not use CentroidalState directly here?
+      - CentroidalState carries 14 fields; the physics solver needs only 4.
+      - bond_connectivity must be in JAX aux_data (static) for smap.bond.
+        CentroidalState is a plain NamedTuple (all fields dynamic), which is
+        correct for the validity solver but incompatible with the physics solver.
+
+    JAX Pytree layout:
+      children  → face_centroids, centroid_node_vectors, reference_bond_vectors
+      aux_data  → bond_connectivity (static — must not be a Tracer for smap.bond)
     """
 
     face_centroids: Any
@@ -51,7 +61,7 @@ class GeometricalParams(NamedTuple):
         return self.face_centroids.shape[0]
 
     @classmethod
-    def from_centroidal_state(cls, state: 'CentroidalState') -> 'GeometricalParams':
+    def from_centroidal_state(cls, state: 'CentroidalState') -> 'ReferenceGeometry':
         """Builds geometry from a CentroidalState.
 
         bond_connectivity is read from the state where it was pre-computed
@@ -68,7 +78,7 @@ class GeometricalParams(NamedTuple):
         )
 
     @classmethod
-    def from_dict(cls, d: dict) -> 'GeometricalParams':
+    def from_dict(cls, d: dict) -> 'ReferenceGeometry':
         """Builds from the raw dict returned by Tessellation._to_dict()."""
         return cls(
             face_centroids=jnp.array(d['face_centroids']),
@@ -133,12 +143,12 @@ class ControlParams(NamedTuple):
     structure that can be passed through jit/grad transparently.
 
     Attrs:
-        geometrical_params: GeometricalParams — geometry in current config
+        reference_geometry: ReferenceGeometry — geometry in current config
         mechanical_params:  MechanicalParams  — stiffness, density, contact
         loading_params:     dict              — extra kwargs for loading_fn
         constraint_params:  dict              — extra kwargs for constraint_fn
     """
-    geometrical_params: GeometricalParams
+    reference_geometry: ReferenceGeometry
     mechanical_params: MechanicalParams
     loading_params: Dict = dict()
     constraint_params: Dict = dict()
@@ -161,7 +171,7 @@ class SolutionData(NamedTuple):
 
 # ── Standalone factory ────────────────────────────────────────────────────────
 
-def build_control_params(geometry: GeometricalParams,
+def build_control_params(geometry: ReferenceGeometry,
                          k_stretch: Any,
                          k_shear: Any,
                          k_rot: Any,
@@ -176,7 +186,7 @@ def build_control_params(geometry: GeometricalParams,
     arguments — no implicit duck-typing or proxy objects needed.
 
     Args:
-        geometry:     GeometricalParams with reference positions and bond vectors.
+        geometry:     ReferenceGeometry with reference positions and bond vectors.
         k_stretch:    Axial stiffness per hinge, shape (n_hinges,).
         k_shear:      Shear stiffness per hinge, shape (n_hinges,).
         k_rot:        Rotational stiffness per hinge, shape (n_hinges,).
@@ -190,7 +200,7 @@ def build_control_params(geometry: GeometricalParams,
         ControlParams ready to be passed to the static solver.
     """
     return ControlParams(
-        geometrical_params=geometry,
+        reference_geometry=geometry,
         mechanical_params=MechanicalParams(
             bond_params=LigamentParams(
                 k_stretch=k_stretch,
