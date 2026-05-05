@@ -96,10 +96,13 @@ def compute_end_to_end_loss(map_params: jnp.ndarray, initial_state: CentroidalSt
     returns a scalar loss. This function chains the forward pass and the loss.
     """
     
-    # 1. Forward Pass
-    pipeline_kwargs['map_type'] = 'conformal_polynomial'
-    pipeline_kwargs['map_params'] = map_params
-    results = forward_pipeline(initial_state, target_params, **pipeline_kwargs)
+    # Build a local kwargs dict — never mutate the caller's dict.
+    run_kwargs = {
+        **pipeline_kwargs,
+        'map_type': 'conformal_polynomial',
+        'map_params': map_params,
+    }
+    results = forward_pipeline(initial_state, target_params, **run_kwargs)
     
     # 2. Evaluate Physical Objective
     base_loss, loss_components = evaluate_physical_loss(results['solution'], results['valid_state'], target_params)

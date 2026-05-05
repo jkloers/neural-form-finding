@@ -25,7 +25,7 @@ mapping:
 optimization_weights:
   connectivity: 700.0
   non_intersection: 1000.0
-  target: 1.0
+  target: 0.1
   arm_symmetry: 1.0
   void_length: 1000.0
   void_collinear: 1000.0
