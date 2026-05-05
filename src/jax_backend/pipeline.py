@@ -31,14 +31,13 @@ from jax_backend.state import CentroidalState
 from jax_backend.geometry import reconstruct_vertices
 from jax_backend.initial_map import apply_initial_map
 from jax_backend.validity_solver import solve_geometric_validity
-from jax_backend.pytrees import TessellationGeometry
 from jax_backend.physics_solver.energy import (
     ligament_energy, ligament_energy_linearized,
     build_strain_energy, build_contact_energy, combine_face_energies,
     build_energy_history,
 )
 from jax_backend.physics_solver.statics import setup_static_solver
-
+from jax_backend.physics_solver.params import GeometricalParams, build_control_params
 
 def get_target_points(target_params: dict, n_points: int = 200) -> jnp.ndarray:
     """Samples a point cloud on the boundary of the target shape.
@@ -126,10 +125,9 @@ def forward_pipeline(
     # ══════════════════════════════════════════════════════════════════════════
 
     # 2.1 — Geometry instantiation (Factory Pattern)
-    # TessellationGeometry wraps the physical reference configuration.
-    # bond_connectivity is read from the state where it was pre-computed
-    # as a static NumPy array, ensuring JAX never sees it as a Tracer.
-    geometry = TessellationGeometry.from_centroidal_state(valid_state)
+    # GeometricalParams is the single geometry container. bond_connectivity
+    # is read from the state as a static NumPy array — never a JAX Tracer.
+    geometry = GeometricalParams.from_centroidal_state(valid_state)
 
     # 2.2 — Energy functional construction
     # The potential energy is the sum of:
@@ -137,11 +135,11 @@ def forward_pipeline(
     #   - Contact energy (penalizes face interpenetration via void angles)
     bond_energy_fn = ligament_energy_linearized if linearized_strains else ligament_energy
     strain_energy = build_strain_energy(
-        bond_connectivity=geometry.bond_connectivity(),
+        bond_connectivity=geometry.bond_connectivity,
         bond_energy_fn=bond_energy_fn,
     )
     if use_contact:
-        contact_energy = build_contact_energy(bond_connectivity=geometry.bond_connectivity())
+        contact_energy = build_contact_energy(bond_connectivity=geometry.bond_connectivity)
         potential_energy = combine_face_energies(strain_energy, contact_energy)
     else:
         potential_energy = strain_energy
@@ -163,10 +161,12 @@ def forward_pipeline(
         num_steps=num_load_steps,
     )
 
-    # 2.5 — ControlParams assembly (delegated to TessellationGeometry)
-    # Encapsulates the mapping (geometry, state) → ControlParams so that
-    # this pipeline does not need to know the internal structure of either.
-    control_params = geometry.build_control_params(
+    # 2.5 — ControlParams assembly
+    # build_control_params is a standalone function (utils.py) that bridges
+    # the geometry container and the mechanical state into a single solver input.
+    # It is not a method on either class, respecting the SRP.
+    control_params = build_control_params(
+        geometry=geometry,
         state=valid_state,
         k_contact=k_contact,
         min_angle=min_angle,
@@ -192,12 +192,12 @@ def forward_pipeline(
 
     # 2.8 — Reconstruct vertex positions in the reference configuration
     vertices_ref = reconstruct_vertices(
-        geometry.face_centroids(), geometry.centroid_node_vectors())
+        geometry.face_centroids, geometry.centroid_node_vectors)
 
     return {
         'mapped_state':           mapped_state,
         'valid_state':            valid_state,
         'solution':               solution,
         'vertices_reference':     vertices_ref,
-        'reference_bond_vectors': geometry.reference_bond_vectors(),
+        'reference_bond_vectors': geometry.reference_bond_vectors,
     }

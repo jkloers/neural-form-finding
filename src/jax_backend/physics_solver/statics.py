@@ -12,7 +12,7 @@ from jax_backend.physics_solver.energy import constrain_energy
 from jax_backend.physics_solver.loading import build_loading
 from jax_backend.physics_solver.kinematics import build_constrained_kinematics, DOFsInfo
 
-from jax_backend.utils.utils import ControlParams, SolutionData
+from jax_backend.physics_solver.params import ControlParams, SolutionData
 
 from jaxopt import LBFGS
 

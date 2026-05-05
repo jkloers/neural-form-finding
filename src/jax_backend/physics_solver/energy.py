@@ -9,7 +9,7 @@ from jax import vmap
 from jax_md import smap
 
 from jax_backend.physics_solver.kinematics import face_to_node_kinematics
-from jax_backend.utils.utils import ControlParams
+from jax_backend.physics_solver.params import ControlParams
 from jax_backend.utils.linalg import vdot, void_angles, build_void_edge_distance
 
 

@@ -15,22 +15,14 @@ from typing import Any, Callable, Optional
 
 import jax.numpy as jnp
 
-from jax_backend.pytrees import TessellationGeometry
-from jax_backend.physics_solver.energy import (
-    build_strain_energy,
-    build_contact_energy,
-    combine_face_energies,
-    ligament_energy,
-    ligament_energy_linearized,
-)
-from jax_backend.physics_solver.statics import setup_static_solver
-from jax_backend.utils.utils import (
-    ControlParams,
+from jax_backend.physics_solver.params import (
     GeometricalParams,
+    ControlParams,
     MechanicalParams,
     LigamentParams,
     ContactParams,
     SolutionData,
+    build_control_params,
 )
 
 
@@ -81,8 +73,9 @@ class StaticForwardProblem:
 
         td = self.tess_dict
 
-        # ── Build a concrete Geometry from the tessellation export ─────────
-        geometry = TessellationGeometry.from_dict(td)
+        # Build geometry from the tessellation export dict.
+        # bond_connectivity is kept as a static NumPy array in GeometricalParams.
+        geometry = GeometricalParams.from_dict(td)
 
         # Resolve mechanical params (override or from tess_dict)
         _k_stretch = jnp.array(self.k_stretch if self.k_stretch is not None else td['k_stretch'])
@@ -90,24 +83,16 @@ class StaticForwardProblem:
         _k_rot     = jnp.array(self.k_rot     if self.k_rot     is not None else td['k_rot'])
         _density   = jnp.array(self.density   if self.density   is not None else td['density'])
 
-        _bond_connectivity      = jnp.array(td['bond_connectivity'])
-        _reference_bond_vectors = jnp.array(td['reference_bond_vectors'])
-        _face_centroids         = jnp.array(td['face_centroids'])
-        _centroid_node_vectors  = jnp.array(td['centroid_node_vectors'])
-
         constrained_face_DOF_pairs = jnp.array(td['constrained_face_DOF_pairs'])
 
-        # ── Loading from tessellation (Neumann BCs) ───────────────────────
+        # Loading from tessellation (Neumann BCs)
         _loaded_pairs = td.get('loaded_face_DOF_pairs')
-        _load_values = td.get('load_values')
+        _load_values  = td.get('load_values')
         
-        # Use tessellation loads if available and no manual override
         if self.loaded_face_DOF_pairs is not None:
-            # Manual override
             loaded_pairs = jnp.array(self.loaded_face_DOF_pairs)
             loading_fn = self.loading_fn
         elif _loaded_pairs is not None and len(_loaded_pairs) > 0:
-            # Auto from tessellation: build a t-dependent loading_fn
             loaded_pairs = jnp.array(_loaded_pairs)
             _force_values = jnp.array(_load_values)
             loading_fn = lambda state, t, **kwargs: t * _force_values
@@ -115,21 +100,26 @@ class StaticForwardProblem:
             loaded_pairs = None
             loading_fn = None
 
-        # ── Energy functional ─────────────────────────────────────────────
+        # Energy functional
+        from jax_backend.physics_solver.energy import (
+            build_strain_energy, build_contact_energy,
+            combine_face_energies, ligament_energy, ligament_energy_linearized,
+        )
+        from jax_backend.physics_solver.statics import setup_static_solver
+
         strain_energy = build_strain_energy(
-            bond_connectivity=_bond_connectivity,
+            bond_connectivity=geometry.bond_connectivity,
             bond_energy_fn=(ligament_energy_linearized
                             if self.linearized_strains else ligament_energy),
         )
 
         if self.use_contact:
-            contact_energy = build_contact_energy(
-                bond_connectivity=_bond_connectivity)
+            contact_energy = build_contact_energy(bond_connectivity=geometry.bond_connectivity)
             potential_energy = combine_face_energies(strain_energy, contact_energy)
         else:
             potential_energy = strain_energy
 
-        # ── Static solver ─────────────────────────────────────────────────
+        # Static solver
         solve_statics = setup_static_solver(
             geometry=geometry,
             energy_fn=potential_energy,
@@ -140,39 +130,25 @@ class StaticForwardProblem:
             num_steps=self.num_load_steps
         )
 
-        # ── Initial state (zero displacements) ────────────────────────────
         state0 = jnp.zeros((geometry.n_faces, 3), dtype=float)
 
-        # ── Forward closure ───────────────────────────────────────────────
-        def forward() -> SolutionData:
-            control_params = ControlParams(
-                geometrical_params=GeometricalParams(
-                    face_centroids=_face_centroids,
-                    centroid_node_vectors=_centroid_node_vectors,
-                    bond_connectivity=_bond_connectivity,
-                    reference_bond_vectors=_reference_bond_vectors,
-                ),
-                mechanical_params=MechanicalParams(
-                    bond_params=LigamentParams(
-                        k_stretch=_k_stretch,
-                        k_shear=_k_shear,
-                        k_rot=_k_rot,
-                        reference_vector=_reference_bond_vectors,
-                    ),
-                    density=_density,
-                    contact_params=ContactParams(
-                        k_contact=self.k_contact,
-                        min_angle=self.min_angle,
-                        cutoff_angle=self.cutoff_angle,
-                    ) if self.use_contact else None,
-                ),
-                constraint_params=dict(),
-            )
+        # Build a mock state for build_control_params using td values
+        class _StateProxy:
+            k_stretch = _k_stretch
+            k_shear   = _k_shear
+            k_rot     = _k_rot
+            density   = _density
 
-            return solve_statics(
-                state0=state0,
-                control_params=control_params,
+        def forward() -> SolutionData:
+            control_params = build_control_params(
+                geometry=geometry,
+                state=_StateProxy(),
+                k_contact=self.k_contact,
+                min_angle=self.min_angle,
+                cutoff_angle=self.cutoff_angle,
+                use_contact=self.use_contact,
             )
+            return solve_statics(state0=state0, control_params=control_params)
 
         self.solve = forward
         self.geometry = geometry
