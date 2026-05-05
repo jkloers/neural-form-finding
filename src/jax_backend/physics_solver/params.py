@@ -1,13 +1,9 @@
 """
-Parameter structures and utility functions for the JAX physics solver.
+Parameter structures for the JAX physics solver.
 
-This module defines:
-  - Data classes (NamedTuples) for all solver parameters, registered as JAX
-    Pytrees so they can carry Tracers through jit/grad boundaries.
-  - GeometricalParams: the single geometry container for the pipeline,
-    replacing the former TessellationGeometry class. It handles the
-    static/dynamic split required by JAX for the bond connectivity.
-  - build_control_params: standalone factory bridging geometry + state → solver.
+All classes are NamedTuples, which JAX automatically registers as Pytrees
+(all fields as dynamic children). The exception is GeometricalParams, which
+needs a custom Pytree registration to keep bond_connectivity static.
 """
 
 import jax
@@ -29,9 +25,9 @@ class GeometricalParams(NamedTuple):
       - bond_connectivity       (n_hinges, 2) [STATIC]  — global node indices
       - reference_bond_vectors  (n_hinges, 2)           — rest ligament vectors
 
-    JAX Pytree layout:
-      children  → dynamic arrays (differentiated during training)
-      aux_data  → bond_connectivity (static — must not be a Tracer for smap.bond)
+    Custom Pytree registration: bond_connectivity goes to aux_data (static)
+    so it is never a JAX Tracer. Required by smap.bond's static_bonds argument.
+    All other fields are dynamic children (differentiable).
     """
 
     face_centroids: Any
@@ -39,13 +35,9 @@ class GeometricalParams(NamedTuple):
     bond_connectivity: Any = None
     reference_bond_vectors: Any = None
 
-    # ── JAX Pytree protocol ───────────────────────────────────────────────────
-
     def tree_flatten(self):
-        # face_centroids, centroid_node_vectors, reference_bond_vectors are dynamic
         children = (self.face_centroids, self.centroid_node_vectors,
                     self.reference_bond_vectors)
-        # bond_connectivity is static topology (pre-computed NumPy array)
         aux_data = {'bond_connectivity': self.bond_connectivity}
         return children, aux_data
 
@@ -54,20 +46,17 @@ class GeometricalParams(NamedTuple):
         return cls(children[0], children[1],
                    aux_data['bond_connectivity'], children[2])
 
-    # ── Convenience properties ────────────────────────────────────────────────
-
     @property
     def n_faces(self) -> int:
         return self.face_centroids.shape[0]
 
-    # ── Factory methods ───────────────────────────────────────────────────────
-
     @classmethod
     def from_centroidal_state(cls, state: 'CentroidalState') -> 'GeometricalParams':
-        """Builds the geometry from a centroidal state.
+        """Builds geometry from a CentroidalState.
 
         bond_connectivity is read from the state where it was pre-computed
-        as a static NumPy array — it will never be a JAX Tracer.
+        as a static NumPy array by Tessellation.to_centroidal_state() — it
+        will never be a JAX Tracer.
         """
         from jax_backend.geometry import build_reference_bond_vectors
 
@@ -90,8 +79,9 @@ class GeometricalParams(NamedTuple):
 
 
 # ── Mechanical parameters ─────────────────────────────────────────────────────
+# These are plain NamedTuples. JAX registers NamedTuples as Pytrees natively,
+# with all fields as dynamic children — no boilerplate needed.
 
-@jax.tree_util.register_pytree_node_class
 class LigamentParams(NamedTuple):
     """Stiffness parameters for ligament bonds.
 
@@ -101,24 +91,15 @@ class LigamentParams(NamedTuple):
         k_rot:            scalar or (n_hinges,) — rotational stiffness
         reference_vector: (n_hinges, 2)         — rest ligament vectors
     """
-
     k_stretch: Any
     k_shear: Any
     k_rot: Any
     reference_vector: Any
 
-    def tree_flatten(self):
-        return (self.k_stretch, self.k_shear, self.k_rot, self.reference_vector), ()
-
-    @classmethod
-    def tree_unflatten(cls, aux, children):
-        return cls(*children)
-
 
 BondParams = LigamentParams
 
 
-@jax.tree_util.register_pytree_node_class
 class ContactParams(NamedTuple):
     """Contact energy parameters.
 
@@ -127,20 +108,11 @@ class ContactParams(NamedTuple):
         cutoff_angle: void angle at which contact energy saturates
         k_contact:    contact stiffness coefficient
     """
-
     min_angle: Any
     cutoff_angle: Any
     k_contact: Any
 
-    def tree_flatten(self):
-        return (self.min_angle, self.cutoff_angle, self.k_contact), ()
 
-    @classmethod
-    def tree_unflatten(cls, aux, children):
-        return cls(*children)
-
-
-@jax.tree_util.register_pytree_node_class
 class MechanicalParams(NamedTuple):
     """Mechanical parameters of the assembly.
 
@@ -149,22 +121,11 @@ class MechanicalParams(NamedTuple):
         density:        scalar or (n_faces,) — face mass density
         contact_params: ContactParams or None if contact is disabled
     """
-
     bond_params: BondParams
     density: Any
     contact_params: Optional[ContactParams] = None
 
-    def tree_flatten(self):
-        return (self.bond_params, self.density, self.contact_params), ()
 
-    @classmethod
-    def tree_unflatten(cls, aux, children):
-        return cls(*children)
-
-
-# ── Solver control ────────────────────────────────────────────────────────────
-
-@jax.tree_util.register_pytree_node_class
 class ControlParams(NamedTuple):
     """Top-level parameter bundle for the static solver.
 
@@ -177,66 +138,49 @@ class ControlParams(NamedTuple):
         loading_params:     dict              — extra kwargs for loading_fn
         constraint_params:  dict              — extra kwargs for constraint_fn
     """
-
     geometrical_params: GeometricalParams
     mechanical_params: MechanicalParams
     loading_params: Dict = dict()
     constraint_params: Dict = dict()
 
-    def tree_flatten(self):
-        return (self.geometrical_params, self.mechanical_params,
-                self.loading_params, self.constraint_params), ()
 
-    @classmethod
-    def tree_unflatten(cls, aux, children):
-        return cls(*children)
-
-
-# ── Solution ──────────────────────────────────────────────────────────────────
-
-@jax.tree_util.register_pytree_node_class
 class SolutionData(NamedTuple):
     """Output of the static solver across all load steps.
 
-    Attrs:
-        face_centroids:         (n_faces, 2)          — reference centroids
-        centroid_node_vectors:  (n_faces, n_nodes, 2) — reference shapes
-        bond_connectivity:      (n_hinges, 2)         — static topology
-        fields:                 (n_steps, n_faces, 3) — displacement history
-        energies:               (n_steps,) or dict    — energy history
-    """
+    Only carries what the solver produces — geometry is available via
+    ControlParams and does not need to be duplicated here.
 
-    face_centroids: Any
-    centroid_node_vectors: Any
-    bond_connectivity: Any
+    Attrs:
+        fields:   (n_steps, n_faces, 3) — displacement history [dx, dy, dtheta]
+        energies: (n_steps,) or dict    — total potential energy per step,
+                                          or decomposed dict after post-processing
+    """
     fields: Any
     energies: Any = None
-
-    def tree_flatten(self):
-        return (self.face_centroids, self.centroid_node_vectors,
-                self.bond_connectivity, self.fields, self.energies), ()
-
-    @classmethod
-    def tree_unflatten(cls, aux, children):
-        return cls(*children)
 
 
 # ── Standalone factory ────────────────────────────────────────────────────────
 
 def build_control_params(geometry: GeometricalParams,
-                         state: 'CentroidalState',
+                         k_stretch: Any,
+                         k_shear: Any,
+                         k_rot: Any,
+                         density: Any,
                          k_contact: float = 1.0,
                          min_angle: float = 0.0,
                          cutoff_angle: float = 0.1,
                          use_contact: bool = True) -> ControlParams:
-    """Assembles ControlParams from a geometry object and a centroidal state.
+    """Assembles ControlParams from explicit parameters.
 
-    Bridges (GeometricalParams, CentroidalState) → ControlParams without
-    coupling either class to the other's internal structure.
+    Takes the geometry container and all mechanical properties as direct
+    arguments — no implicit duck-typing or proxy objects needed.
 
     Args:
         geometry:     GeometricalParams with reference positions and bond vectors.
-        state:        CentroidalState with mechanical properties.
+        k_stretch:    Axial stiffness per hinge, shape (n_hinges,).
+        k_shear:      Shear stiffness per hinge, shape (n_hinges,).
+        k_rot:        Rotational stiffness per hinge, shape (n_hinges,).
+        density:      Mass density per face, shape (n_faces,).
         k_contact:    Contact stiffness coefficient.
         min_angle:    Minimum void angle before contact activates.
         cutoff_angle: Void angle at which contact energy saturates.
@@ -249,12 +193,12 @@ def build_control_params(geometry: GeometricalParams,
         geometrical_params=geometry,
         mechanical_params=MechanicalParams(
             bond_params=LigamentParams(
-                k_stretch=state.k_stretch,
-                k_shear=state.k_shear,
-                k_rot=state.k_rot,
+                k_stretch=k_stretch,
+                k_shear=k_shear,
+                k_rot=k_rot,
                 reference_vector=geometry.reference_bond_vectors,
             ),
-            density=state.density,
+            density=density,
             contact_params=ContactParams(
                 k_contact=k_contact,
                 min_angle=min_angle,

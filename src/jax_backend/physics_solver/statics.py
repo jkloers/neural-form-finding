@@ -116,11 +116,8 @@ def setup_static_solver(
         history_displacement = mapped_kinematics(history_free, t_array, control_params.constraint_params)
 
         return SolutionData(
-            face_centroids=control_params.geometrical_params.face_centroids,
-            centroid_node_vectors=control_params.geometrical_params.centroid_node_vectors,
-            bond_connectivity=control_params.geometrical_params.bond_connectivity,
             fields=history_displacement,
-            energies=history_energy
+            energies=history_energy,
         )
 
     return solve_statics

@@ -97,7 +97,7 @@ if __name__ == "__main__":
     print("=" * 60)
     
     # Run training loop
-    num_epochs = 300
+    num_epochs = 500
     learning_rate = 0.01
     
     optimized_params, history_loss = train_pipeline(

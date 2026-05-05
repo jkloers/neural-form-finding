@@ -38,24 +38,8 @@ from jax_backend.physics_solver.energy import (
 )
 from jax_backend.physics_solver.statics import setup_static_solver
 from jax_backend.physics_solver.params import GeometricalParams, build_control_params
+from problem.targets import get_target_points
 
-def get_target_points(target_params: dict, n_points: int = 200) -> jnp.ndarray:
-    """Samples a point cloud on the boundary of the target shape.
-
-    Args:
-        target_params: dict with keys 'type', 'center', 'radius'.
-        n_points: number of boundary sample points.
-
-    Returns:
-        jnp.ndarray of shape (n_points, 2).
-    """
-    t = jnp.linspace(0, 2 * jnp.pi, n_points)
-    if target_params['type'] == 'circle':
-        r = target_params['radius']
-        c = jnp.array(target_params['center'])
-        return c + r * jnp.stack([jnp.cos(t), jnp.sin(t)], axis=1)
-    # Additional shapes (heart, ellipse, …) can be added here.
-    return jnp.zeros((n_points, 2))
 
 
 def forward_pipeline(
@@ -162,12 +146,14 @@ def forward_pipeline(
     )
 
     # 2.5 — ControlParams assembly
-    # build_control_params is a standalone function (utils.py) that bridges
-    # the geometry container and the mechanical state into a single solver input.
-    # It is not a method on either class, respecting the SRP.
+    # build_control_params takes all mechanical parameters explicitly —
+    # no proxy objects or implicit duck-typing.
     control_params = build_control_params(
         geometry=geometry,
-        state=valid_state,
+        k_stretch=valid_state.k_stretch,
+        k_shear=valid_state.k_shear,
+        k_rot=valid_state.k_rot,
+        density=valid_state.density,
         k_contact=k_contact,
         min_angle=min_angle,
         cutoff_angle=cutoff_angle,
