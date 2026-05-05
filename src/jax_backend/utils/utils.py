@@ -1,61 +1,60 @@
+
+import jax
+import jax.numpy as jnp
 from typing import Any, Dict, NamedTuple, Optional, Union
 
-import jax.numpy as jnp
-import numpy as np
+# Registering all parameter classes as JAX Pytrees ensures they can carry Tracers 
+# through JIT boundaries without "not a valid JAX type" errors.
 
-
+@jax.tree_util.register_pytree_node_class
 class SolutionData(NamedTuple):
-    """Solution data for the static problem.
-
-    Attrs:
-        face_centroids (jnp.ndarray): shape (n_faces, 2) — reference centroids of the faces.
-        centroid_node_vectors (jnp.ndarray): shape (n_faces, n_nodes_per_face, 2).
-        bond_connectivity (jnp.ndarray): shape (n_bonds, 2).
-        fields (jnp.ndarray): shape (n_faces, 3) for statics.
-    """
-
     face_centroids: Any
     centroid_node_vectors: Any
     bond_connectivity: Any
     fields: Any
     energies: Any = None
 
+    def tree_flatten(self):
+        return (self.face_centroids, self.centroid_node_vectors, self.bond_connectivity, self.fields, self.energies), ()
 
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        return cls(*children)
+
+
+@jax.tree_util.register_pytree_node_class
 class GeometricalParams(NamedTuple):
-    """Geometrical parameters of the system.
-
-    Attrs:
-        face_centroids (jnp.ndarray): shape (n_faces, 2) — centroid coordinates.
-        centroid_node_vectors (jnp.ndarray): shape (n_faces, n_nodes_per_face, 2).
-        bond_connectivity (jnp.ndarray): shape (n_bonds, 2). Optional, used for energy computation.
-        reference_bond_vectors (jnp.ndarray): shape (n_bonds, 2). Optional.
-    """
-
     face_centroids: Any
     centroid_node_vectors: Any
     bond_connectivity: Any = None
     reference_bond_vectors: Any = None
 
+    def tree_flatten(self):
+        return (self.face_centroids, self.centroid_node_vectors, self.bond_connectivity, self.reference_bond_vectors), ()
 
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        return cls(*children)
+
+
+@jax.tree_util.register_pytree_node_class
 class LigamentParams(NamedTuple):
-    """Parameters for the bonds modeled as finite-length ligaments.
-
-    Attrs:
-        k_stretch (jnp.ndarray): Either a scalar or an array of shape (n_bonds,) representing the stretch stiffness of each bond.
-        k_shear (jnp.ndarray): Either a scalar or an array of shape (n_bonds,) representing the shear stiffness of each bond.
-        k_rot (jnp.ndarray): Either a scalar or an array of shape (n_bonds,) representing the rotational stiffness of each bond.
-        reference_bond_vectors (jnp.ndarray): Array of shape (n_bonds, 2) representing the reference configuration of the bond (length matters). These are typically computed from a given geometry class.
-    """
-
     k_stretch: Any
     k_shear: Any
     k_rot: Any
     reference_vector: Any
 
+    def tree_flatten(self):
+        return (self.k_stretch, self.k_shear, self.k_rot, self.reference_vector), ()
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        return cls(*children)
 
 BondParams = LigamentParams
 
 
+@jax.tree_util.register_pytree_node_class
 class ContactParams(NamedTuple):
     """Contact parameters for the simplified contact model.
 
@@ -72,10 +71,15 @@ class ContactParams(NamedTuple):
     cutoff_angle: Any
     k_contact: Any
 
+    def tree_flatten(self):
+        return (self.min_angle, self.cutoff_angle, self.k_contact), ()
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        return cls(*children)
 
 
-
-
+@jax.tree_util.register_pytree_node_class
 class MechanicalParams(NamedTuple):
     """Mechanical parameters of the system.
 
@@ -89,7 +93,15 @@ class MechanicalParams(NamedTuple):
     density: Any
     contact_params: Optional[ContactParams] = None
 
+    def tree_flatten(self):
+        return (self.bond_params, self.density, self.contact_params), ()
 
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        return cls(*children)
+
+
+@jax.tree_util.register_pytree_node_class
 class ControlParams(NamedTuple):
     """Control parameters for the static solver.
     The control parameters are used to define the geometry, the mechanical properties, loading parameters, etc.
@@ -107,8 +119,11 @@ class ControlParams(NamedTuple):
     loading_params: Dict = dict()
     constraint_params: Dict = dict()
 
+    def tree_flatten(self):
+        # We treat Dicts as auxiliary data if they don't contain tracers,
+        # but here we keep them as children to be safe if they ever do.
+        return (self.geometrical_params, self.mechanical_params, self.loading_params, self.constraint_params), ()
 
-
-
-
-
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        return cls(*children)

@@ -518,11 +518,21 @@ class Tessellation:
         constrained_pairs = self.build_constrained_face_DOF_pairs()
         loaded_pairs, load_values = self.build_loaded_face_DOF_pairs()
 
+        # Pre-compute bond connectivity as static NumPy array.
+        # Corresponds to: face_id * n_nodes_per_face + local_node_id
+        cnv = self.build_centroid_node_vectors()
+        n_nodes = cnv.shape[1]
+        bond_connectivity = np.stack([
+            h_node_pairs[:, 0, 0] * n_nodes + h_node_pairs[:, 0, 1],
+            h_node_pairs[:, 1, 0] * n_nodes + h_node_pairs[:, 1, 1]
+        ], axis=1).astype(np.int32)
+
         return {
             'face_centroids': self.get_face_centroids(),
-            'centroid_node_vectors': self.build_centroid_node_vectors(),
+            'centroid_node_vectors': cnv,
             'hinge_face_pairs': h_face_pairs,
             'hinge_node_pairs': h_node_pairs,
+            'bond_connectivity': bond_connectivity,
             'hinge_adj_info': h_adj_info,
             'boundary_face_node_ids': boundary_ids,
             'void_opposite_node_pairs': void_node_pairs,

@@ -1,205 +1,203 @@
 """
-Unified centroidal pipeline: initial map → geometric validity → physics solver.
+Forward pipeline for neural form-finding.
 
-This module orchestrates the three-stage sequential pipeline:
-0. Initial mapping (c, s) → (c_mapped, s_mapped) — spatial deformation to target shape
-1. Geometric validity optimization on (c, s) — face shapes & positions
-2. Static physics solve for q = [dx, dy, dθ] — face displacements at equilibrium
+The pipeline is composed of three sequential stages:
+
+    Stage 0 — Initial Mapping
+        Maps the flat Kirigami tessellation into a target shape using a
+        conformal-like polynomial mapping. This stage will eventually be
+        replaced by a Graph Neural Network (GNN) that learns the mapping
+        directly from data.
+
+    Stage 1 — Geometric Validity
+        Optimizes the centroidal coordinates (face positions and shapes) to
+        satisfy geometric constraints: connectivity, non-intersection, target
+        boundary fitting, and arm symmetry. This is a differentiable
+        optimization via gradient descent.
+
+    Stage 2 — Static Physics Solver
+        Given the geometrically valid configuration, sets up and solves the
+        static equilibrium problem by minimizing the total potential energy
+        (elastic strain energy + contact energy − external work) using L-BFGS.
+
+The pipeline is fully differentiable end-to-end via JAX, enabling
+gradient-based optimization of the mapping parameters.
 """
 
 import jax.numpy as jnp
-import numpy as np
-import jax
+from typing import Optional
 
 from jax_backend.state import CentroidalState
-from jax_backend.geometry import reconstruct_vertices, hinge_vertex_positions, build_reference_bond_vectors
+from jax_backend.geometry import reconstruct_vertices
 from jax_backend.initial_map import apply_initial_map
 from jax_backend.validity_solver import solve_geometric_validity
 from jax_backend.pytrees import TessellationGeometry
-from jax_backend.physics_solver.statics import setup_static_solver
-from jax_backend.physics_solver.kinematics import face_to_node_kinematics, rotation_matrix
-from jax_backend.utils.utils import (
-    ControlParams, GeometricalParams, MechanicalParams,
-    LigamentParams, ContactParams, SolutionData,
-)
-
 from jax_backend.physics_solver.energy import (
+    ligament_energy, ligament_energy_linearized,
     build_strain_energy, build_contact_energy, combine_face_energies,
-    ligament_energy, ligament_energy_linearized, build_decompose_energy_fn,
+    build_energy_history,
 )
-from problem.targets import get_target_points
+from jax_backend.physics_solver.statics import setup_static_solver
+
+
+def get_target_points(target_params: dict, n_points: int = 200) -> jnp.ndarray:
+    """Samples a point cloud on the boundary of the target shape.
+
+    Args:
+        target_params: dict with keys 'type', 'center', 'radius'.
+        n_points: number of boundary sample points.
+
+    Returns:
+        jnp.ndarray of shape (n_points, 2).
+    """
+    t = jnp.linspace(0, 2 * jnp.pi, n_points)
+    if target_params['type'] == 'circle':
+        r = target_params['radius']
+        c = jnp.array(target_params['center'])
+        return c + r * jnp.stack([jnp.cos(t), jnp.sin(t)], axis=1)
+    # Additional shapes (heart, ellipse, …) can be added here.
+    return jnp.zeros((n_points, 2))
+
 
 def forward_pipeline(
         initial_state: CentroidalState,
         target_params: dict,
         map_type: str = 'elliptical_grip',
         scale_factor: float = 1.0,
-        map_params: jnp.ndarray = None,
-        geom_weights: dict = None,
+        map_params: Optional[dict] = None,
+        geom_weights: Optional[dict] = None,
         use_contact: bool = True,
-        k_contact: float = 1.,
-        min_angle: float = 0.,
+        k_contact: float = 1.0,
+        min_angle: float = 0.1 * jnp.pi / 180,
         cutoff_angle: float = 5. * jnp.pi / 180,
         linearized_strains: bool = True,
         incremental: bool = False,
         num_load_steps: int = 10) -> dict:
-    """Full pipeline: initial map → geometric validity → static physics solver.
-
-    Stage 0: Map flat tessellation into target shape (→ replaced by GNN later)
-    Stage 1: Optimize (c, s) for geometric validity
-    Stage 2: Build physics reference from (c*, s*), solve for q*
+    """Full differentiable pipeline: initial map → geometric validity → static equilibrium.
 
     Args:
-        initial_state: CentroidalState from tessellation export (flat geometry).
-        target_params: dict with 'type', 'center', 'radius' for the target shape.
-        map_type: initial mapping type ('elliptical_grip' or 'boundary_projection').
-        scale_factor: scaling applied after initial mapping.
-        geom_weights: dict of constraint weights for the geometric optimizer.
-        use_contact: whether to include contact energy.
-        k_contact, min_angle, cutoff_angle: contact parameters.
-        linearized_strains: use linearized strain energy.
-        incremental: use incremental loading.
-        num_load_steps: number of steps for incremental loading.
+        initial_state: Flat CentroidalState exported from the Tessellation.
+        target_params: Target shape config dict ('type', 'center', 'radius').
+        map_type: Initial mapping type ('elliptical_grip' or 'boundary_projection').
+        scale_factor: Scaling applied after initial mapping.
+        map_params: Optional polynomial coefficients for the conformal mapping.
+        geom_weights: Constraint weights for the geometric validity optimizer.
+        use_contact: Whether to include contact/non-intersection energy.
+        k_contact: Contact stiffness coefficient.
+        min_angle: Minimum void angle before contact activates.
+        cutoff_angle: Void angle at which contact energy saturates.
+        linearized_strains: Use linearized (vs. nonlinear) strain measures.
+        incremental: Use incremental load stepping (for large deformations).
+        num_load_steps: Number of load steps for incremental solving.
 
     Returns:
-        dict with:
-            'mapped_state': CentroidalState after initial mapping (Stage 0)
-            'valid_state': CentroidalState after geometric optimization (Stage 1)
-            'solution': SolutionData with equilibrium fields (n_faces, 3) (Stage 2)
-            'vertices_reference': (n_faces, max_nodes, 2) reference vertex positions
-            'reference_bond_vectors': (n_hinges, 2)
+        dict with keys:
+            'mapped_state'          — CentroidalState after Stage 0
+            'valid_state'           — CentroidalState after Stage 1
+            'solution'              — SolutionData with equilibrium fields + energy history
+            'vertices_reference'    — (n_faces, n_nodes, 2) reference vertex positions
+            'reference_bond_vectors'— (n_hinges, 2) reference ligament vectors
     """
 
     # ══════════════════════════════════════════════════════════════════════════
-    # Stage 0 — Initial Mapping (to be replaced by GNN)
+    # Stage 0 — Initial Mapping
+    # Maps the flat tessellation into the target shape using a conformal
+    # polynomial (or other parametric) mapping. `map_params` are the
+    # differentiable variables being optimized during training.
     # ══════════════════════════════════════════════════════════════════════════
     mapped_state = apply_initial_map(
         initial_state, target_params,
-        map_type=map_type, scale_factor=scale_factor,
-        map_params=map_params)
+        map_type=map_type,
+        scale_factor=scale_factor,
+        map_params=map_params,
+    )
 
     # ══════════════════════════════════════════════════════════════════════════
     # Stage 1 — Geometric Validity
+    # Optimizes face centroids and shapes to satisfy: connectivity (hinges
+    # must share a point), non-intersection, target fitting, and symmetry.
     # ══════════════════════════════════════════════════════════════════════════
     target_cloud = jnp.array(get_target_points(target_params, n_points=200))
     valid_state = solve_geometric_validity(
         mapped_state, target_cloud, weights=geom_weights)
 
-    # # ══════════════════════════════════════════════════════════════════════════
-    # # Stage 2 — Physics Solver
-    # # ══════════════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════════════
+    # Stage 2 — Static Physics Solver
+    # ══════════════════════════════════════════════════════════════════════════
 
-    # Build reference geometry from validated (c*, s*)
-    _face_centroids = valid_state.face_centroids
-    _cnv = valid_state.centroid_node_vectors
-    _reference_bond_vectors = build_reference_bond_vectors(valid_state)
-    
-    # Correct node indexing for smap.bond: face_id * n_nodes + local_node_id
-    hnp = valid_state.hinge_node_pairs
-    n_faces, n_nodes, _ = _cnv.shape
-    _bond_connectivity = np.stack([
-        hnp[:, 0, 0] * n_nodes + hnp[:, 0, 1],
-        hnp[:, 1, 0] * n_nodes + hnp[:, 1, 1]
-    ], axis=1)
+    # 2.1 — Geometry instantiation (Factory Pattern)
+    # TessellationGeometry wraps the physical reference configuration.
+    # bond_connectivity is read from the state where it was pre-computed
+    # as a static NumPy array, ensuring JAX never sees it as a Tracer.
+    geometry = TessellationGeometry.from_centroidal_state(valid_state)
 
-    # Build Geometry object for the physics solver
-    tess_dict = {
-        'face_centroids': _face_centroids,
-        'centroid_node_vectors': _cnv,
-        'bond_connectivity': _bond_connectivity,
-        'reference_bond_vectors': _reference_bond_vectors,
-    }
-    geometry = TessellationGeometry.from_dict(tess_dict)
-
-    # Energy
+    # 2.2 — Energy functional construction
+    # The potential energy is the sum of:
+    #   - Elastic strain energy (axial + shear + rotational, per ligament)
+    #   - Contact energy (penalizes face interpenetration via void angles)
     bond_energy_fn = ligament_energy_linearized if linearized_strains else ligament_energy
     strain_energy = build_strain_energy(
-        bond_connectivity=_bond_connectivity,
+        bond_connectivity=geometry.bond_connectivity(),
         bond_energy_fn=bond_energy_fn,
     )
     if use_contact:
-        contact_energy = build_contact_energy(bond_connectivity=_bond_connectivity)
+        contact_energy = build_contact_energy(bond_connectivity=geometry.bond_connectivity())
         potential_energy = combine_face_energies(strain_energy, contact_energy)
     else:
         potential_energy = strain_energy
 
-    # Loading
-    loaded_pairs = valid_state.loaded_face_DOF_pairs
-    if len(loaded_pairs) > 0:
-        _force_values = valid_state.load_values
-        loading_fn = lambda state, t, **kwargs: t * _force_values
-    else:
-        loaded_pairs = None
-        loading_fn = None
+    # 2.3 — Loading (Neumann BCs)
+    # Returns a callable t → force values, or None if no loads are defined.
+    loading_fn = valid_state.get_loading_function()
 
-    # Solver
+    # 2.4 — Static solver setup
+    # Wraps the L-BFGS minimizer with the constrained kinematics (Dirichlet BCs)
+    # and optional incremental load stepping.
     solve_statics = setup_static_solver(
         geometry=geometry,
         energy_fn=potential_energy,
-        loaded_face_DOF_pairs=loaded_pairs,
+        loaded_face_DOF_pairs=valid_state.loaded_face_DOF_pairs if loading_fn else None,
         loading_fn=loading_fn,
         constrained_face_DOF_pairs=valid_state.constrained_face_DOF_pairs,
         incremental=incremental,
-        num_steps=num_load_steps
+        num_steps=num_load_steps,
     )
 
-    # Control params
-    control_params = ControlParams(
-        geometrical_params=GeometricalParams(
-            face_centroids=_face_centroids,
-            centroid_node_vectors=_cnv,
-            bond_connectivity=_bond_connectivity,
-            reference_bond_vectors=_reference_bond_vectors,
-        ),
-        mechanical_params=MechanicalParams(
-            bond_params=LigamentParams(
-                k_stretch=valid_state.k_stretch,
-                k_shear=valid_state.k_shear,
-                k_rot=valid_state.k_rot,
-                reference_vector=_reference_bond_vectors,
-            ),
-            density=valid_state.density,
-            contact_params=ContactParams(
-                k_contact=k_contact,
-                min_angle=min_angle,
-                cutoff_angle=cutoff_angle,
-            ) if use_contact else None,
-        ),
-        constraint_params=dict(),
+    # 2.5 — ControlParams assembly (delegated to TessellationGeometry)
+    # Encapsulates the mapping (geometry, state) → ControlParams so that
+    # this pipeline does not need to know the internal structure of either.
+    control_params = geometry.build_control_params(
+        state=valid_state,
+        k_contact=k_contact,
+        min_angle=min_angle,
+        cutoff_angle=cutoff_angle,
+        use_contact=use_contact,
     )
 
-    state0 = jnp.zeros((n_faces, 3), dtype=float)
+    # 2.6 — Solve for static equilibrium
+    # Initial displacement guess is zero (undeformed configuration).
+    state0 = jnp.zeros((geometry.n_faces, 3), dtype=float)
     solution = solve_statics(state0=state0, control_params=control_params)
-    
-    decompose_energy_fn = build_decompose_energy_fn(
+
+    # 2.7 — Energy history decomposition (delegated to energy module)
+    # Decomposes the total energy into components (stretch, shear, rot, contact)
+    # across all load steps and packages them into a dictionary.
+    energies_dict = build_energy_history(
+        solution=solution,
         control_params=control_params,
         linearized_strains=linearized_strains,
         use_contact=use_contact,
-        angle_based=True  # As in the default contact builder
     )
-    
-    energy_components_history = jax.vmap(decompose_energy_fn)(solution.fields)
-    
-    # Pack them into a dictionary
-    u_int = jnp.sum(energy_components_history, axis=1)
-    w_ext = u_int - solution.energies  # Since E_total = U_int - W_ext
-    
-    energies_dict = {
-        'total': solution.energies,
-        'stretch': energy_components_history[:, 0],
-        'shear': energy_components_history[:, 1],
-        'rot': energy_components_history[:, 2],
-        'contact': energy_components_history[:, 3],
-        'work': w_ext
-    }
     solution = solution._replace(energies=energies_dict)
 
-    vertices_ref = reconstruct_vertices(_face_centroids, _cnv)
+    # 2.8 — Reconstruct vertex positions in the reference configuration
+    vertices_ref = reconstruct_vertices(
+        geometry.face_centroids(), geometry.centroid_node_vectors())
 
     return {
-        'mapped_state': mapped_state,
-        'valid_state': valid_state,
-        'solution': solution,
-        'vertices_reference': vertices_ref,
-        'reference_bond_vectors': _reference_bond_vectors,
+        'mapped_state':           mapped_state,
+        'valid_state':            valid_state,
+        'solution':               solution,
+        'vertices_reference':     vertices_ref,
+        'reference_bond_vectors': geometry.reference_bond_vectors(),
     }

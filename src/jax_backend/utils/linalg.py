@@ -1,6 +1,6 @@
 import jax.numpy as jnp
-from jax import vmap, jit
-from typing import Tuple, Union
+from jax import vmap
+from typing import Tuple
 
 
 def vdot(v1, v2):
@@ -24,113 +24,15 @@ def rotation_matrix(angle):
                       [jnp.sin(angle), jnp.cos(angle)]])
 
 
-def current_coordinates(vertices, centroids, angles, displacements):
-    """
-    Computes the deformed configuration coordinates.
-    """
-
-    def _current_coordinates(v, Q, c, d):
-        return (Q @ v.T).T + c + d
-
-    rotations = vmap(rotation_matrix)(angles)
-    current_coordinates_v = vmap(_current_coordinates, in_axes=(0, 0, 0, 0))  # Vectorize over faces
-    return current_coordinates_v(vertices, rotations, centroids, displacements)
-
-
-def get_point_ids_in_bounding_box(points: jnp.ndarray, bounding_box: jnp.ndarray):
-    """Returns the indices of the points that lie within the bounding box.
-
-    Args:
-        points (jnp.ndarray): array of shape (n_points, 2) collecting the coordinates of the points.
-        bounding_box (jnp.ndarray): array of shape (2, 2) collecting the coordinates of the bounding box. The first row collects the coordinates of the bottom-left corner and the second row collects the coordinates of the top-right corner.
-
-    Returns:
-        jnp.ndarray: array of shape (n_points_in_bounding_box,) collecting the indices of the points that lie within the bounding box.
-    """
-
-    return jnp.where(
-        (points[:, 0] >= bounding_box[0, 0]) & (points[:, 0] <= bounding_box[1, 0]) &
-        (points[:, 1] >= bounding_box[0, 1]) & (points[:, 1] <= bounding_box[1, 1])
-    )[0]
-
-
-def get_point_ids_in_circle(points: jnp.ndarray, center: jnp.ndarray, radius: float):
-    """Returns the indices of the points that lie within the circle.
-
-    Args:
-        points (jnp.ndarray): array of shape (n_points, 2) collecting the coordinates of the points.
-        center (jnp.ndarray): array of shape (2,) collecting the coordinates of the center of the circle.
-        radius (float): radius of the circle.
-
-    Returns:
-        jnp.ndarray: array of shape (n_points_in_circle,) collecting the indices of the points that lie within the circle.
-    """
-
-    return jnp.where(jnp.linalg.norm(points - center, axis=1) <= radius)[0]
-
-
-def polygon_area(vertices: jnp.ndarray):
-    """Computes area of a polygon with `vertices` ordered counter-clockwise.
-
-    Args:
-        vertices (jnp.ndarray): array of shape (n_vertices, 2).
-
-    Returns:
-        float: Area of the polygon.
-    """
-
-    v1 = jnp.roll(vertices, shift=1, axis=0)
-    v2 = vertices
-
-    return jnp.abs(jnp.sum(v1[:, 0] * v2[:, 1] - v1[:, 1] * v2[:, 0]) / 2)
-
-
-def polygon_centroid(vertices: jnp.ndarray):
-    """Computes centroid of a polygon with `vertices` ordered counter-clockwise.
-
-    Args:
-        vertices (jnp.ndarray): array of shape (n_vertices, 2).
-
-    Returns:
-        jnp.ndarray: Centroid of the polygon.
-    """
-
-    area = polygon_area(vertices)
-    v1 = jnp.roll(vertices, shift=1, axis=0)
-    v2 = vertices
-    x_plus_y = v1 + v2
-    v_cross = v1[:, 0] * v2[:, 1] - v1[:, 1] * v2[:, 0]
-
-    return jnp.array([
-        jnp.sum(x_plus_y[:, 0] * v_cross),
-        jnp.sum(x_plus_y[:, 1] * v_cross)
-    ]) / (6 * area)
-
-
-@vmap
-def polygons_geometric_properties(vertices: jnp.ndarray):
-    """Computes area, centroid, and polar moment of area of an array of polygons defined by `vertices`.
-
-    Args:
-        vertices (jnp.ndarray): array of shape (n_faces, n_nodes_per_face, 2).
-
-    Returns:
-        Tuple[jnp.ndarray, jnp.ndarray]: centroid and area of the polygons.
-    """
-
-    return polygon_centroid(vertices), polygon_area(vertices)
-
-
-
 def compute_edge_unit_vectors(current_face_nodes: jnp.ndarray, node_id: int):
     """Computes unit vectors from bond node to the two closest nodes of the same face.
 
     Args:
-        current_face_coordinates (jnp.ndarray): array of shape (n_faces, n_nodes_per_face, 2) defining the position of all the faces' vertices.
+        current_face_nodes (jnp.ndarray): array of shape (n_faces, n_nodes_per_face, 2) defining the position of all the faces' vertices.
         node_id (int): global node index.
 
     Returns:
-        Tuple[jnp.array, jnp.array]: void and face angles.
+        Tuple[jnp.ndarray, jnp.ndarray]: unit vectors.
     """
 
     _, n_sides, _ = current_face_nodes.shape
@@ -144,22 +46,6 @@ def compute_edge_unit_vectors(current_face_nodes: jnp.ndarray, node_id: int):
     unit_vector_2 = unit_vector_2/jnp.linalg.norm(unit_vector_2)
 
     return unit_vector_1, unit_vector_2
-
-
-def compute_edge_lengths(centroid_node_vectors: jnp.ndarray):
-    """Computes edge lengths of the faces.
-
-    Args:
-        centroid_node_vectors (jnp.ndarray): array of shape (n_faces, n_nodes_per_face, 2) defining the position of all the faces' vertices relative to the centroids.
-
-    Returns:
-        jnp.ndarray: array of shape (n_faces, n_nodes_per_face) collecting the edge lengths of the faces.
-    """
-
-    return jnp.linalg.norm(
-        jnp.roll(centroid_node_vectors, 1, axis=1) - centroid_node_vectors,
-        axis=2
-    )
 
 
 def angle_between_unit_vectors(u1, u2):
@@ -179,7 +65,7 @@ def compute_edge_angles(current_face_nodes: jnp.ndarray, nodes: Tuple[int, int])
     """Computes the two face and two void angles.
 
     Args:
-        current_face_coordinates (jnp.ndarray): array of shape (n_faces, n_nodes_per_face, 2) defining the position of all the faces' vertices.
+        current_face_nodes (jnp.ndarray): array of shape (n_faces, n_nodes_per_face, 2) defining the position of all the faces' vertices.
         nodes (Tuple[int, int]): tuple of node indices connected by a bond.
 
     Returns:
@@ -196,15 +82,129 @@ def compute_edge_angles(current_face_nodes: jnp.ndarray, nodes: Tuple[int, int])
 
     return void_angle_1, void_angle_2, face_angle_1, face_angle_2
 
-
-def compute_xy_limits(points: jnp.ndarray):
-    """Computes the the pair xlim, ylim for the given set of points.
+def void_angles(current_face_nodes: jnp.ndarray, bond_connectivity: jnp.ndarray):
+    """Computes angles between faces connected by the bonds.
 
     Args:
-        points (jnp.ndarray): array of shape (n, 2)
+        current_face_nodes (jnp.ndarray): array of shape (n_faces, n_nodes_per_face, 2) defining the current position of the faces.
+        bond_connectivity (jnp.ndarray): array of shape (n_bonds, 2) where each row [n1, n2] defines a bond connecting nodes n1 and n2.
 
     Returns:
-        jnp.ndarray: array of xlim, ylim
+        jnp.ndarray: array of shape (2*n_bonds,) defining the void angles.
     """
 
-    return jnp.array([points.min(axis=0), points.max(axis=0)]).T
+    angles = vmap(lambda bond: compute_edge_angles(
+        current_face_nodes, bond))(bond_connectivity)
+    void_angles = jnp.array(angles)[:2].ravel()
+
+    return void_angles
+
+
+def point_to_edge_distance(point: jnp.ndarray, edge: jnp.ndarray):
+    """Computes the distance between a point and an edge.
+
+    Args:
+        point (jnp.ndarray): array of shape (2,) defining the point.
+        edge (jnp.ndarray): array of shape (2, 2) defining the edge.
+
+    Returns:
+        jnp.ndarray: distance between the point and the edge.
+    """
+
+    x0 = edge[0]
+    x1 = edge[1]
+    t = jnp.dot(point-x0, x1-x0)/jnp.dot(x1-x0, x1-x0)
+    x_distance_to_e = jnp.where(
+        (t >= 0) & (t <= 1),
+        # Projected point is on the edge
+        jnp.sum((point-x0)**2 - (t*(x1-x0))**2)**0.5,
+        jnp.where(
+            # Projected point is outside the edge
+            t < 0,
+            # Distance to first point
+            jnp.sum((point-x0)**2)**0.5,
+            # Distance to second point
+            jnp.sum((point-x1)**2)**0.5
+        )
+    )
+    return x_distance_to_e
+
+
+# Contact model based edge-to-edge distances
+def edges_distance(edge_1: jnp.ndarray, edge_2: jnp.ndarray):
+    """Computes the distance between two edges.
+
+    Args:
+        edge_1 (jnp.ndarray): array of shape (2, 2) defining the first edge.
+        edge_2 (jnp.ndarray): array of shape (2, 2) defining the second edge.
+
+    Returns:
+        jnp.ndarray: scalar distance between the two edges.
+    """
+
+    # Compute the distance projecting second edge on the first edge
+    e2_onto_e1_distance = vmap(
+        point_to_edge_distance, in_axes=(0, None))(edge_2, edge_1)
+    # Compute the distance projecting first edge on the second edge
+    e1_onto_e2_distance = vmap(
+        point_to_edge_distance, in_axes=(0, None))(edge_1, edge_2)
+    # Return the minimum distance
+    distances = jnp.concatenate((e2_onto_e1_distance, e1_onto_e2_distance))
+
+    return jnp.min(distances)
+
+# Vectorized version of edges_distance (vectorized over arrays of edges)
+edges_distance_mapped = vmap(edges_distance, in_axes=(0, 0))
+
+
+def build_void_edge_distance(bond_connectivity: jnp.ndarray):
+    """Builds a function that computes the distance between edges connected by the bonds.
+
+    Args:
+        bond_connectivity (jnp.ndarray): array of shape (n_bonds, 2) where each row [n1, n2] defines a bond connecting nodes n1 and n2.
+
+    Returns:
+        Callable: function that computes all the pairwise distances between edges connected by the bonds.
+    """
+
+    def void_edge_distance(current_face_nodes: jnp.ndarray):
+        """Computes the distance between edges connected by the bonds.
+
+        Args:
+            current_face_nodes (jnp.ndarray): array of shape (n_faces, n_nodes_per_face, 2) defining the current position of the faces.
+
+        Returns:
+            jnp.ndarray: array of shape (2*n_bonds,) defining the distances between edges connected by the bonds.
+        """
+
+        _, n_nodes_per_face, _ = current_face_nodes.shape
+        nodes_1_id = bond_connectivity[:, 0]
+        nodes_2_id = bond_connectivity[:, 1]
+        pts1 = current_face_nodes[nodes_1_id //
+                                   n_nodes_per_face, nodes_1_id % n_nodes_per_face]
+        pts1_prev = current_face_nodes[nodes_1_id //
+                                        n_nodes_per_face, (nodes_1_id-1) % n_nodes_per_face]
+        pts1_next = current_face_nodes[nodes_1_id //
+                                        n_nodes_per_face, (nodes_1_id+1) % n_nodes_per_face]
+
+        pts2 = current_face_nodes[nodes_2_id //
+                                   n_nodes_per_face, nodes_2_id % n_nodes_per_face]
+        pts2_prev = current_face_nodes[nodes_2_id //
+                                        n_nodes_per_face, (nodes_2_id-1) % n_nodes_per_face]
+        pts2_next = current_face_nodes[nodes_2_id //
+                                        n_nodes_per_face, (nodes_2_id+1) % n_nodes_per_face]
+
+        # Distance between edges on one side of the bond
+        void_distances1 = edges_distance_mapped(
+            jnp.concatenate((pts1[:, None], pts1_next[:, None]), axis=1),
+            jnp.concatenate((pts2[:, None], pts2_prev[:, None]), axis=1)
+        )
+        # Distance between edges on the other side of the bond
+        void_distances2 = edges_distance_mapped(
+            jnp.concatenate((pts1[:, None], pts1_prev[:, None]), axis=1),
+            jnp.concatenate((pts2[:, None], pts2_next[:, None]), axis=1)
+        )
+
+        return jnp.concatenate((void_distances1, void_distances2))
+
+    return void_edge_distance

@@ -8,9 +8,9 @@ import jax.numpy as jnp
 from jax import vmap
 from jax_md import smap
 
-from jax_backend.utils.linalg import rotation_matrix, compute_edge_angles, vdot
 from jax_backend.physics_solver.kinematics import face_to_node_kinematics
 from jax_backend.utils.utils import ControlParams
+from jax_backend.utils.linalg import vdot, void_angles, build_void_edge_distance
 
 
 
@@ -107,8 +107,8 @@ def ligament_strains(DOFs1: jnp.ndarray, DOFs2: jnp.ndarray, reference_vector: j
     reference_bond_pushed_angle = jnp.arctan2(ref_pushed_y, ref_pushed_x + eps)
     
     # 1. Axial Strain: (L - L0) / L0
-    l0_sq = jnp.sum(reference_vector**2, axis=-1) + eps
-    l_sq = jnp.sum(current_bond_vector**2, axis=-1)
+    l0_sq = vdot(reference_vector, reference_vector) + eps
+    l_sq = vdot(current_bond_vector, current_bond_vector)
     axial_strain = jnp.sqrt(l_sq / l0_sq) - 1.0
     
     # 2. Shear Strain: angle difference (modulo 2pi)
@@ -162,134 +162,6 @@ def strain_energy_bond(bond_connectivity: jnp.ndarray, bond_energy_fn: Callable 
 # Contact energy between adjacent edges
 # NOTE: This is a simplified way to handle contact. The energy is just based on the angle between faces connected by a bond.
 # NOTE: This is also not based on general data structures for defining edges (see geometry.compute_edge_angles).
-
-def void_angles(current_face_nodes: jnp.ndarray, bond_connectivity: jnp.ndarray):
-    """Computes angles between faces connected by the bonds.
-
-    Args:
-        current_face_nodes (jnp.ndarray): array of shape (n_faces, n_nodes_per_face, 2) defining the current position of the faces.
-        bond_connectivity (jnp.ndarray): array of shape (n_bonds, 2) where each row [n1, n2] defines a bond connecting nodes n1 and n2.
-
-    Returns:
-        jnp.ndarray: array of shape (2*n_bonds,) defining the void angles.
-    """
-
-    angles = vmap(lambda bond: compute_edge_angles(
-        current_face_nodes, bond))(bond_connectivity)
-    void_angles = jnp.array(angles)[:2].ravel()
-
-    return void_angles
-
-
-def point_to_edge_distance(point: jnp.ndarray, edge: jnp.ndarray):
-    """Computes the distance between a point and an edge.
-
-    Args:
-        point (jnp.ndarray): array of shape (2,) defining the point.
-        edge (jnp.ndarray): array of shape (2, 2) defining the edge.
-
-    Returns:
-        jnp.ndarray: distance between the point and the edge.
-    """
-
-    x0 = edge[0]
-    x1 = edge[1]
-    t = jnp.dot(point-x0, x1-x0)/jnp.dot(x1-x0, x1-x0)
-    x_distance_to_e = jnp.where(
-        (t >= 0) & (t <= 1),
-        # Projected point is on the edge
-        jnp.sum((point-x0)**2 - (t*(x1-x0))**2)**0.5,
-        jnp.where(
-            # Projected point is outside the edge
-            t < 0,
-            # Distance to first point
-            jnp.sum((point-x0)**2)**0.5,
-            # Distance to second point
-            jnp.sum((point-x1)**2)**0.5
-        )
-    )
-    return x_distance_to_e
-
-
-# Contact model based edge-to-edge distances
-def edges_distance(edge_1: jnp.ndarray, edge_2: jnp.ndarray):
-    """Computes the distance between two edges.
-
-    Args:
-        edge_1 (jnp.ndarray): array of shape (2, 2) defining the first edge.
-        edge_2 (jnp.ndarray): array of shape (2, 2) defining the second edge.
-
-    Returns:
-        jnp.ndarray: scalar distance between the two edges.
-    """
-
-    # Compute the distance projecting second edge on the first edge
-    e2_onto_e1_distance = vmap(
-        point_to_edge_distance, in_axes=(0, None))(edge_2, edge_1)
-    # Compute the distance projecting first edge on the second edge
-    e1_onto_e2_distance = vmap(
-        point_to_edge_distance, in_axes=(0, None))(edge_1, edge_2)
-    # Return the minimum distance
-    distances = jnp.concatenate((e2_onto_e1_distance, e1_onto_e2_distance))
-
-    return jnp.min(distances)
-
-
-# Vectorized version of edges_distance (vectorized over arrays of edges)
-edges_distance_mapped = vmap(edges_distance, in_axes=(0, 0))
-
-
-def build_void_edge_distance(bond_connectivity: jnp.ndarray):
-    """Builds a function that computes the distance between edges connected by the bonds.
-
-    Args:
-        bond_connectivity (jnp.ndarray): array of shape (n_bonds, 2) where each row [n1, n2] defines a bond connecting nodes n1 and n2.
-
-    Returns:
-        Callable: function that computes all the pairwise distances between edges connected by the bonds.
-    """
-
-    def void_edge_distance(current_face_nodes: jnp.ndarray):
-        """Computes the distance between edges connected by the bonds.
-
-        Args:
-            current_face_nodes (jnp.ndarray): array of shape (n_faces, n_nodes_per_face, 2) defining the current position of the faces.
-
-        Returns:
-            jnp.ndarray: array of shape (2*n_bonds,) defining the distances between edges connected by the bonds.
-        """
-
-        _, n_nodes_per_face, _ = current_face_nodes.shape
-        nodes_1_id = bond_connectivity[:, 0]
-        nodes_2_id = bond_connectivity[:, 1]
-        pts1 = current_face_nodes[nodes_1_id //
-                                   n_nodes_per_face, nodes_1_id % n_nodes_per_face]
-        pts1_prev = current_face_nodes[nodes_1_id //
-                                        n_nodes_per_face, (nodes_1_id-1) % n_nodes_per_face]
-        pts1_next = current_face_nodes[nodes_1_id //
-                                        n_nodes_per_face, (nodes_1_id+1) % n_nodes_per_face]
-
-        pts2 = current_face_nodes[nodes_2_id //
-                                   n_nodes_per_face, nodes_2_id % n_nodes_per_face]
-        pts2_prev = current_face_nodes[nodes_2_id //
-                                        n_nodes_per_face, (nodes_2_id-1) % n_nodes_per_face]
-        pts2_next = current_face_nodes[nodes_2_id //
-                                        n_nodes_per_face, (nodes_2_id+1) % n_nodes_per_face]
-
-        # Distance between edges on one side of the bond
-        void_distances1 = edges_distance_mapped(
-            jnp.concatenate((pts1[:, None], pts1_next[:, None]), axis=1),
-            jnp.concatenate((pts2[:, None], pts2_prev[:, None]), axis=1)
-        )
-        # Distance between edges on the other side of the bond
-        void_distances2 = edges_distance_mapped(
-            jnp.concatenate((pts1[:, None], pts1_prev[:, None]), axis=1),
-            jnp.concatenate((pts2[:, None], pts2_next[:, None]), axis=1)
-        )
-
-        return jnp.concatenate((void_distances1, void_distances2))
-
-    return void_edge_distance
 
 
 def contact_energy(current_void_angles: jnp.ndarray, min_angle: jnp.ndarray = jnp.array(0.), cutoff_angle: jnp.ndarray = jnp.array(2.0*jnp.pi/180), k_contact=1.0):
@@ -523,3 +395,56 @@ def build_decompose_energy_fn(control_params: ControlParams, linearized_strains:
         return jnp.array([E_stretch, E_shear, E_rot, E_contact])
 
     return decompose_energy_fn
+
+
+def build_energy_history(solution, control_params: ControlParams,
+                          linearized_strains: bool = True,
+                          use_contact: bool = True) -> dict:
+    """Computes and packages the energy history across all load steps.
+
+    Encapsulates the vmap + indexing logic so that pipeline.py can simply
+    call this function and receive a ready-to-use dictionary.
+
+    Args:
+        solution: SolutionData with `.fields` (n_steps, n_faces, 3) and `.energies`.
+        control_params (ControlParams): physics control parameters.
+        linearized_strains (bool): whether to use linearized strains.
+        use_contact (bool): whether to include contact energy.
+
+    Returns:
+        dict: {
+            'total': total energy per step,
+            'stretch': axial strain energy per step,
+            'shear': shear strain energy per step,
+            'rot': rotational strain energy per step,
+            'contact': contact energy per step,
+            'work': external work per step,
+        }
+    """
+    import jax
+
+    # Build the per-step decomposition function
+    decompose_fn = build_decompose_energy_fn(
+        control_params=control_params,
+        linearized_strains=linearized_strains,
+        use_contact=use_contact,
+        angle_based=True,
+    )
+
+    # Vectorize over load steps: (n_steps, n_faces, 3) → (n_steps, 4)
+    components = jax.vmap(decompose_fn)(solution.fields)
+
+    # Internal energy = sum of all components at each step
+    u_int = jnp.sum(components, axis=1)
+
+    # External work derived from energy balance: W_ext = U_int - E_total
+    w_ext = u_int - solution.energies
+
+    return {
+        'total':   solution.energies,
+        'stretch': components[:, 0],
+        'shear':   components[:, 1],
+        'rot':     components[:, 2],
+        'contact': components[:, 3],
+        'work':    w_ext,
+    }
