@@ -55,7 +55,7 @@ class GeometricalParams(NamedTuple):
         """Builds geometry from a CentroidalState.
 
         bond_connectivity is read from the state where it was pre-computed
-        as a static NumPy array by Tessellation.to_centroidal_state() — it
+        as a static NumPy array by CentroidalState.from_tessellation() — it
         will never be a JAX Tracer.
         """
         from jax_backend.geometry import build_reference_bond_vectors
@@ -69,7 +69,7 @@ class GeometricalParams(NamedTuple):
 
     @classmethod
     def from_dict(cls, d: dict) -> 'GeometricalParams':
-        """Builds from the dict returned by Tessellation.to_centroidal_state()."""
+        """Builds from the raw dict returned by Tessellation._to_dict()."""
         return cls(
             face_centroids=jnp.array(d['face_centroids']),
             centroid_node_vectors=jnp.array(d['centroid_node_vectors']),

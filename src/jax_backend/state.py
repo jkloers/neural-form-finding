@@ -66,9 +66,32 @@ class CentroidalState(NamedTuple):
     density: jnp.ndarray
 
     # ── Methods ──────────────────────────────────────────────────────────────
+
     def get_loading_function(self):
         """Returns the loading function or None if no loads are defined."""
         if len(self.loaded_face_DOF_pairs) > 0:
             force_values = self.load_values
             return lambda state, t, **kwargs: t * force_values
         return None
+
+    @classmethod
+    def from_tessellation(cls, tessellation) -> 'CentroidalState':
+        """Builds a CentroidalState from a configured Tessellation object.
+
+        Handles the NumPy→JAX conversion:
+          - Dynamic arrays (positions, loads) → jnp.array
+          - Static topology (connectivity, BCs) → np.array
+            so JAX treats them as compile-time constants.
+        """
+        import numpy as np
+
+        cs_dict = tessellation._to_dict()
+
+        # Fields that are dynamic (JAX arrays, may be differentiated)
+        dynamic_fields = {'face_centroids', 'centroid_node_vectors', 'load_values'}
+
+        state_kwargs = {
+            k: jnp.array(v) if k in dynamic_fields else np.array(v)
+            for k, v in cs_dict.items()
+        }
+        return cls(**state_kwargs)

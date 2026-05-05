@@ -116,15 +116,7 @@ if __name__ == "__main__":
     # 3. Export to CentroidalState
     # ══════════════════════════════════════════════════════════════════════════
     print("\nExporting to CentroidalState...")
-    cs_dict = tessellation.to_centroidal_state()
-    state_kwargs = {}
-    for k, v in cs_dict.items():
-        if k in ['face_centroids', 'centroid_node_vectors', 'load_values']:
-            state_kwargs[k] = jnp.array(v)
-        else:
-            state_kwargs[k] = np.array(v)
-            
-    initial_state = CentroidalState(**state_kwargs)
+    initial_state = CentroidalState.from_tessellation(tessellation)
 
     n_faces = initial_state.face_centroids.shape[0]
     n_hinges = initial_state.hinge_face_pairs.shape[0]

@@ -507,8 +507,12 @@ class Tessellation:
             
         return np.array(v_opp_node_pairs, dtype=np.int32)
 
-    def to_centroidal_state(self):
-        """Export tessellation as a dict ready to build a CentroidalState."""
+    def _to_dict(self):
+        """Serializes the tessellation topology to a plain dict.
+
+        This is a private helper used exclusively by CentroidalState.from_tessellation().
+        Callers should use that factory method instead of calling this directly.
+        """
         v_to_fn = self._build_vertex_to_face_mapping()
         
         h_face_pairs, h_node_pairs, h_adj_info = self._build_hinge_topology(v_to_fn)
