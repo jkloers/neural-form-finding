@@ -288,12 +288,12 @@ def compute_geometric_objective(face_centroids, cnv, state, target_cloud, weight
 
     e_inversion = face_non_inversion(cnv)
 
-    return (weights.get('connectivity', 700.) * e_connect +
-            weights.get('non_intersection', 1000.) * e_non_inv +
-            weights.get('target', 1.) * e_target +
-            weights.get('arm_symmetry', 1.) * e_symmetry +
-            weights.get('void_length', 1.) * e_void_l +
-            weights.get('void_collinear', 1.) * e_void_c +
-            weights.get('anchoring', 100.) * e_anchoring +
-            weights.get('boundary_rigidity', 10.) * e_bound_rigid +
-            weights.get('face_inversion', 1000.) * e_inversion)
+    return (weights['connectivity']      * e_connect +
+            weights['non_intersection']  * e_non_inv +
+            weights['target']            * e_target +
+            weights['arm_symmetry']      * e_symmetry +
+            weights['void_length']       * e_void_l +
+            weights['void_collinear']    * e_void_c +
+            weights['anchoring']         * e_anchoring +
+            weights['boundary_rigidity'] * e_bound_rigid +
+            weights['face_inversion']    * e_inversion)
