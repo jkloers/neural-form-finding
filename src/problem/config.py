@@ -1,177 +1,215 @@
 import yaml
 import os
 import numpy as np
-from dataclasses import dataclass
-from typing import Tuple, Callable, Any
-from src.problem.targets import DEFAULT_TARGET
-from src.topology.core import UnitPattern
+from typing import Dict, Tuple
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 1. Schema Definition
-# ─────────────────────────────────────────────────────────────────────────────
+import equinox as eqx
+import jax.numpy as jnp
 
-@dataclass
-class CentroidalConfig:
-    # Tessellation
-    width: int
-    height: int
-    pattern: UnitPattern  # Now holds the instantiated object
 
-    # Target shape
-    target_type: str
-    target_center: Tuple[float, float]
-    target_radius: float
+class TargetConfig(eqx.Module):
+    type: str
+    center: Tuple[float, float]
+    radius: float
 
-    # Material properties
-    k_stretch: float
-    k_shear: float
-    k_rot: float
-    density: float
+    def __init__(self, type: str, center: Tuple[float, float], radius: float):
+        self.type = type
+        self.center = center
+        self.radius = radius
 
-    # Initial mapping
-    map_type: str
+
+class PhysicsConfig(eqx.Module):
     scale_factor: float
-    map_params: list
-
-    # Geometric validity weights
-    w_connectivity: float
-    w_non_intersection: float
-    w_target: float
-    w_arm_symmetry: float
-    w_void_length: float
-    w_void_collinear: float
-    w_boundary_rigidity: float
-
-    # Physics
     use_contact: bool
-    linearized_strains: bool
     k_contact: float
-    min_angle: float
+    min_angle: float  # radians
     cutoff_angle: float
+    linearized_strains: bool
     incremental: bool
     num_load_steps: int
+    geom_weights: Dict[str, float]
+    solver_maxiter: int = 1000
+    solver_tol: float = 1e-5
 
-    # Boundary Conditions & Loading
-    bc_clamped: Any
-    loads: list
+    def __init__(self,
+                 scale_factor: float,
+                 use_contact: bool,
+                 k_contact: float,
+                 min_angle: float,
+                 cutoff_angle: float,
+                 linearized_strains: bool,
+                 incremental: bool,
+                 num_load_steps: int,
+                 geom_weights: Dict[str, float],
+                 solver_maxiter: int = 1000,
+                 solver_tol: float = 1e-5):
+        self.scale_factor = scale_factor
+        self.use_contact = use_contact
+        self.k_contact = k_contact
+        self.min_angle = min_angle
+        self.cutoff_angle = cutoff_angle
+        self.linearized_strains = linearized_strains
+        self.incremental = incremental
+        self.num_load_steps = num_load_steps
+        self.geom_weights = geom_weights
+        self.solver_maxiter = solver_maxiter
+        self.solver_tol = solver_tol
 
-    # Visualization
+
+class TrainingConfig(eqx.Module):
+    num_epochs: int
+    learning_rate: float
+    optimizer: str = "adam"
+
+    def __init__(self, num_epochs: int, learning_rate: float, optimizer: str = "adam"):
+        self.num_epochs = num_epochs
+        self.learning_rate = learning_rate
+        self.optimizer = optimizer
+
+
+class VisualizationConfig(eqx.Module):
     show_stage0: bool
     show_stage1: bool
     show_stage2: bool
     save_plots: bool
     save_animation: bool
 
+    def __init__(self, show_stage0: bool, show_stage1: bool, show_stage2: bool, save_plots: bool, save_animation: bool):
+        self.show_stage0 = show_stage0
+        self.show_stage1 = show_stage1
+        self.show_stage2 = show_stage2
+        self.save_plots = save_plots
+        self.save_animation = save_animation
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 2. Loading Logic
-# ─────────────────────────────────────────────────────────────────────────────
 
-def _instantiate_pattern(name, data):
-    """Converts raw YAML data into a UnitPattern object."""
-    # Process internal hinges to handle np.pi
-    internal_hinges = []
-    for h in data.get('internal_hinges', []):
-        h_copy = h.copy()
-        if 'angle_factor' in h_copy:
-            h_copy['angle'] = h_copy.pop('angle_factor') * np.pi
-        internal_hinges.append(h_copy)
-        
-    return UnitPattern(
-        vertices=data['vertices'],
-        faces=data['faces'],
-        internal_hinges=internal_hinges,
-        external_hinges=data.get('external_hinges', []),
-        border_edges=data.get('border_edges', {})
-    )
+class ExperimentConfig(eqx.Module):
+    topology: dict
+    target: TargetConfig
+    physics: PhysicsConfig
+    training: TrainingConfig
+    visualization: VisualizationConfig
 
-def load_config(yaml_path: str) -> CentroidalConfig:
-    """Loads a CentroidalConfig from a YAML file.
-    
-    If the file doesn't exist or is empty, returns a config with built-in defaults.
+    def __init__(self, topology: dict, target: TargetConfig, physics: PhysicsConfig, training: TrainingConfig, visualization: VisualizationConfig):
+        self.topology = topology
+        self.target = target
+        self.physics = physics
+        self.training = training
+        self.visualization = visualization
+
+
+def load_and_parse_config(yaml_path: str) -> ExperimentConfig:
+    """Read a YAML file and instantiate an immutable ExperimentConfig.
+    Angles are converted from degrees to radians.
     """
+    with open(yaml_path, "r") as f:
+        raw = yaml.safe_load(f)
+
+    deg_to_rad = jnp.pi / 180.0
+
     # 1. Load patterns library
-    patterns_path = os.path.join(os.path.dirname(yaml_path), "../library/patterns.yaml")
+    patterns_path = "data/library/patterns.yaml"
     if not os.path.exists(patterns_path):
-        # Fallback for when running from root
-        patterns_path = "data/library/patterns.yaml"
+        patterns_path = os.path.join(os.path.dirname(yaml_path), "../library/patterns.yaml")
         
     with open(patterns_path, 'r') as f:
         patterns_data = yaml.safe_load(f)
 
-    # 2. Load problem config
-    data = {}
-    if os.path.exists(yaml_path):
-        with open(yaml_path, 'r') as f:
-            data = yaml.safe_load(f) or {}
-    else:
-        print(f"Warning: Configuration file {yaml_path} not found. Using built-in defaults.")
-
-    config_dict = {}
+    # 1. Topology / Tessellation / Mapping
+    topo_raw = raw.get("tessellation", {})
+    mapping_raw = raw.get("mapping", {})
     
-    # Tessellation
-    tess = data.get('tessellation', {})
-    config_dict['width'] = tess.get('width', 2)
-    config_dict['height'] = tess.get('height', 2)
-    
-    pattern_name = tess.get('pattern', "unit_RDQK_D")
+    pattern_name = topo_raw.get('pattern', "unit_RDQK_D")
     if pattern_name in patterns_data:
-        config_dict['pattern'] = _instantiate_pattern(pattern_name, patterns_data[pattern_name])
+        pattern_raw = patterns_data[pattern_name]
+        
+        # Instantiate UnitPattern
+        internal_hinges = []
+        for h in pattern_raw.get('internal_hinges', []):
+            h_copy = h.copy()
+            if 'angle_factor' in h_copy:
+                h_copy['angle'] = h_copy.pop('angle_factor') * jnp.pi
+            internal_hinges.append(h_copy)
+            
+        from src.topology.core import UnitPattern
+        pattern_obj = UnitPattern(
+            vertices=np.array(pattern_raw['vertices']),
+            faces=pattern_raw['faces'],
+            internal_hinges=internal_hinges,
+            external_hinges=pattern_raw.get('external_hinges', []),
+            border_edges=pattern_raw.get('border_edges', {})
+        )
     else:
-        # Fallback to first pattern if requested name not found
-        first_name = list(patterns_data.keys())[0]
-        config_dict['pattern'] = _instantiate_pattern(first_name, patterns_data[first_name])
+        raise ValueError(f"Pattern '{pattern_name}' not found in {patterns_path}")
 
-    # Target
-    target = data.get('target', {})
-    config_dict['target_type'] = target.get('type', DEFAULT_TARGET['type'])
-    config_dict['target_center'] = tuple(target.get('center', [0.0, 0.0]))
-    config_dict['target_radius'] = target.get('radius', DEFAULT_TARGET['radius'])
-
-    # Material
-    mat = data.get('material', {})
-    config_dict['k_stretch'] = mat.get('k_stretch', 10.0)
-    config_dict['k_shear'] = mat.get('k_shear', 5.0)
-    config_dict['k_rot'] = mat.get('k_rot', 1.0)
-    config_dict['density'] = mat.get('density', 1.0)
-
-    # Mapping
-    mapping = data.get('mapping', {})
-    config_dict['map_type'] = mapping.get('type', 'elliptical_grip')
-    config_dict['scale_factor'] = mapping.get('scale_factor', 1.0)
-    config_dict['map_params'] = mapping.get('params', [0.0, 0.0, 0.0, 1.0, 0.0])
-
-    # Weights
-    w = data.get('optimization_weights', {})
-    config_dict['w_connectivity'] = w.get('connectivity', 700.0)
-    config_dict['w_non_intersection'] = w.get('non_intersection', 1000.0)
-    config_dict['w_target'] = w.get('target', 1.0)
-    config_dict['w_arm_symmetry'] = w.get('arm_symmetry', 1.0)
-    config_dict['w_void_length'] = w.get('void_length', 1000.0)
-    config_dict['w_void_collinear'] = w.get('void_collinear', 1000.0)
-    config_dict['w_boundary_rigidity'] = w.get('boundary_rigidity', 10.0)
-
-    # Physics
-    phys = data.get('physics', {})
-    config_dict['use_contact'] = phys.get('use_contact', True)
-    config_dict['linearized_strains'] = phys.get('linearized_strains', True)
-    config_dict['k_contact'] = float(phys.get('k_contact', 1.0))
-    config_dict['min_angle'] = float(phys.get('min_angle', 0.0))
-    config_dict['cutoff_angle'] = float(phys.get('cutoff_angle', 5.0))
-    config_dict['incremental'] = phys.get('incremental', False)
-    config_dict['num_load_steps'] = int(phys.get('num_load_steps', 10))
-
-    # BCs & Loads
-    bc = data.get('boundary_conditions', {})
-    config_dict['bc_clamped'] = bc.get('clamped_faces', "boundary")
-    config_dict['loads'] = data.get('loads', [{'face': 'central', 'dof': 1, 'value': -1.0}])
-
-    # Visualization
-    vis = data.get('visualization', {})
-    config_dict['show_stage0'] = vis.get('show_stage0', data.get('show_stage0', False))
-    config_dict['show_stage1'] = vis.get('show_stage1', data.get('show_stage1', False))
-    config_dict['show_stage2'] = vis.get('show_stage2', data.get('show_stage2', True))
-    config_dict['save_plots'] = vis.get('save_plots', data.get('save_plots', False))
-    config_dict['save_animation'] = vis.get('save_animation', data.get('save_animation', True))
-
-    return CentroidalConfig(**config_dict)
+    # Material properties
+    mat_raw = raw.get("material", {})
+    
+    # BCs and Loads
+    bc_raw = raw.get("boundary_conditions", {})
+    loads_raw = raw.get("loads", [])
+    
+    # Merge everything for configure_tessellation()
+    topo_combined = {
+        **topo_raw, 
+        **mapping_raw, 
+        **mat_raw,
+        'pattern': pattern_obj,
+        'bc_clamped': bc_raw.get('clamped_faces', "boundary"),
+        'loads': loads_raw
+    }
+    
+    # Handle 'params' vs 'map_params' alias for initial mapping
+    m_params = mapping_raw.get("map_params", mapping_raw.get("params", []))
+    topo_combined["map_params"] = m_params
+    
+    # 2. Physics & Weights
+    phys_raw = raw.get("physics", {})
+    weights_raw = raw.get("optimization_weights", {})
+    
+    physics_cfg = PhysicsConfig(
+        scale_factor=mapping_raw.get("scale_factor", 1.0),
+        use_contact=phys_raw.get("use_contact", True),
+        k_contact=phys_raw.get("k_contact", 1.0),
+        min_angle=phys_raw.get("min_angle", 0.1) * deg_to_rad,
+        cutoff_angle=phys_raw.get("cutoff_angle", 5.0) * deg_to_rad,
+        linearized_strains=phys_raw.get("linearized_strains", True),
+        incremental=phys_raw.get("incremental", False),
+        num_load_steps=phys_raw.get("num_load_steps", 10),
+        geom_weights=weights_raw,
+        solver_maxiter=int(phys_raw.get("solver_maxiter", 1000)),
+        solver_tol=float(phys_raw.get("solver_tol", 1e-5)),
+    )
+    
+    # 3. Target
+    target_raw = raw.get("target", {})
+    target_cfg = TargetConfig(
+        type=target_raw.get("type", "circle"),
+        center=tuple(target_raw.get("center", (0.0, 0.0))),
+        radius=float(target_raw.get("radius", 1.0))
+    )
+    
+    # 4. Training (with defaults if missing)
+    train_raw = raw.get("training", {})
+    training_cfg = TrainingConfig(
+        num_epochs=int(train_raw.get("num_epochs", 500)),
+        learning_rate=float(train_raw.get("learning_rate", 0.01)),
+        optimizer=str(train_raw.get("optimizer", "adam") or "adam")
+    )
+    
+    # 5. Visualization
+    vis_raw = raw.get("visualization", {})
+    vis_cfg = VisualizationConfig(
+        show_stage0=bool(vis_raw.get("show_stage0", False)),
+        show_stage1=bool(vis_raw.get("show_stage1", False)),
+        show_stage2=bool(vis_raw.get("show_stage2", True)),
+        save_plots=bool(vis_raw.get("save_plots", True)),
+        save_animation=bool(vis_raw.get("save_animation", True))
+    )
+    
+    return ExperimentConfig(
+        topology=topo_combined,
+        target=target_cfg,
+        physics=physics_cfg,
+        training=training_cfg,
+        visualization=vis_cfg,
+    )

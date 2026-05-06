@@ -12,8 +12,9 @@ import jax.numpy as jnp
 from jax_backend.pipeline import forward_pipeline
 from jax_backend.state import CentroidalState
 from problem.targets import get_target_points
+from problem.config import TargetConfig, PhysicsConfig
 
-def evaluate_physical_loss(solution, valid_state, target_params=None):
+def evaluate_physical_loss(solution, valid_state, target_cfg: TargetConfig):
     """Computes the pure physical objective from the pipeline results.
     
     This is independent of HOW the results were generated. It only looks at 
@@ -49,6 +50,7 @@ def evaluate_physical_loss(solution, valid_state, target_params=None):
     boundary_positions = final_positions[b_faces]
     
     # Generate the 2D point cloud for the target
+    target_params = {'type': target_cfg.type, 'center': target_cfg.center, 'radius': target_cfg.radius}
     target_cloud = get_target_points(target_params, n_points=500)
     target_cloud = jnp.asarray(target_cloud, dtype=float)
     
@@ -89,23 +91,24 @@ def evaluate_physical_loss(solution, valid_state, target_params=None):
     return loss, loss_components
 
 
-def compute_end_to_end_loss(map_params: jnp.ndarray, initial_state: CentroidalState, target_params: dict, pipeline_kwargs: dict) -> float:
+def compute_end_to_end_loss(map_params: jnp.ndarray, initial_state: CentroidalState, target_cfg: TargetConfig, physics_cfg: PhysicsConfig):
     """Wrapper function required by JAX for gradient computation.
     
     In JAX, jax.grad needs a single function that takes parameters and 
     returns a scalar loss. This function chains the forward pass and the loss.
     """
     
-    # Build a local kwargs dict — never mutate the caller's dict.
-    run_kwargs = {
-        **pipeline_kwargs,
-        'map_type': 'conformal_polynomial',
-        'map_params': map_params,
-    }
-    results = forward_pipeline(initial_state, target_params, **run_kwargs)
+    # 1. Run the forward pipeline
+    results = forward_pipeline(
+        initial_state,
+        target_cfg,
+        physics_cfg,
+        map_type='conformal_polynomial',
+        map_params=map_params,
+    )
     
     # 2. Evaluate Physical Objective
-    base_loss, loss_components = evaluate_physical_loss(results['solution'], results['valid_state'], target_params)
+    base_loss, loss_components = evaluate_physical_loss(results['solution'], results['valid_state'], target_cfg)
     
     # 3. Regularization (Optional, prevents map_params from exploding)
     reg_loss = 1e-3 * jnp.sum(map_params**2)
@@ -114,4 +117,5 @@ def compute_end_to_end_loss(map_params: jnp.ndarray, initial_state: CentroidalSt
     loss_components['reg'] = reg_loss
     loss_components['total'] = total_loss
     
+    return total_loss, loss_components
     return total_loss, loss_components

@@ -17,7 +17,7 @@ def visualize_pipeline_results(result, tessellation, config, target_params, conf
     """
     output_dir = "data/outputs/runs"
     plots_dir = os.path.join(output_dir, "plots")
-    if config.save_plots:
+    if config.visualization.save_plots:
         os.makedirs(plots_dir, exist_ok=True)
 
     def plot_stage(state, title, show=True, save=False):
@@ -47,19 +47,19 @@ def visualize_pipeline_results(result, tessellation, config, target_params, conf
             plt.close(fig)
 
     # Stage 0
-    if config.show_stage0 or config.save_plots:
+    if config.visualization.show_stage0 or config.visualization.save_plots:
         print("Displaying Stage 0: Initial Mapping...")
         plot_stage(result['mapped_state'], "Stage 0: Initial Mapping", 
-                   show=config.show_stage0, save=config.save_plots)
+                   show=config.visualization.show_stage0, save=config.visualization.save_plots)
 
     # Stage 1
-    if config.show_stage1 or config.save_plots:
+    if config.visualization.show_stage1 or config.visualization.save_plots:
         print("Displaying Stage 1: Geometric Validity...")
         plot_stage(result['valid_state'], "Stage 1: Geometric Validity", 
-                   show=config.show_stage1, save=config.save_plots)
+                   show=config.visualization.show_stage1, save=config.visualization.save_plots)
 
     # Stage 2
-    if config.show_stage2 or config.save_plots:
+    if config.visualization.show_stage2 or config.visualization.save_plots:
         print("Displaying Stage 2: Static Equilibrium...")
         sol = result['solution']
         valid_state = result['valid_state']
@@ -71,11 +71,11 @@ def visualize_pipeline_results(result, tessellation, config, target_params, conf
         
         equilibrium_state = valid_state._replace(face_centroids=c_eq, centroid_node_vectors=s_eq)
         plot_stage(equilibrium_state, "Stage 2: Static Equilibrium", 
-                   show=config.show_stage2, save=config.save_plots)
+                   show=config.visualization.show_stage2, save=config.visualization.save_plots)
 
     # Animation
-    if config.incremental and config.save_animation:
-        print(f"\nGenerating animation from history ({config.num_load_steps} frames)...")
+    if config.physics.incremental and config.visualization.save_animation:
+        print(f"\nGenerating animation from history ({config.physics.num_load_steps} frames)...")
         sol = result['solution']
         valid_state = result['valid_state']
         state_history = []
@@ -96,7 +96,7 @@ def visualize_pipeline_results(result, tessellation, config, target_params, conf
         os.makedirs(ani_dir, exist_ok=True)
         ani_path = os.path.join(ani_dir, f"{config_name}_incremental.gif")
         
-        fps = max(5, config.num_load_steps // 3)
+        fps = max(5, config.physics.num_load_steps // 3)
         animate_tessellation(tessellation, state_history, filepath=ani_path, fps=fps, target_params=target_params)
 
     # Energy Plot
@@ -119,8 +119,8 @@ def visualize_pipeline_results(result, tessellation, config, target_params, conf
         fig, ax = plt.subplots(figsize=(8, 6))
         
         # Theme: Princeton Orange, Green, and Black
-        if config.incremental:
-            steps = np.linspace(1.0 / config.num_load_steps, 1.0, config.num_load_steps)
+        if config.physics.incremental:
+            steps = np.linspace(1.0 / config.physics.num_load_steps, 1.0, config.physics.num_load_steps)
             ax.plot(steps, total_energy, marker='o', linestyle='-', color='#000000', linewidth=2, label='Total Energy')
             if stretch_energy is not None:
                 ax.plot(steps, stretch_energy, marker='x', linestyle='--', color='#F58025', label='Stretch Energy')
@@ -156,12 +156,12 @@ def visualize_pipeline_results(result, tessellation, config, target_params, conf
         for text in legend.get_texts():
             text.set_color("black")
         
-        if config.save_plots:
+        if config.visualization.save_plots:
             save_path = os.path.join(plots_dir, "energy_plot.png")
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
             print(f"  Saved energy plot to {save_path}")
             
-        if config.show_stage2 or config.save_plots: 
+        if config.visualization.show_stage2 or config.visualization.save_plots: 
             plt.show()
         else:
             plt.close(fig)

@@ -38,39 +38,23 @@ from jax_backend.physics_solver.energy import (
 from jax_backend.physics_solver.statics import setup_static_solver
 from jax_backend.physics_solver.params import ReferenceGeometry, build_control_params
 from problem.targets import get_target_points
-
+from problem.config import TargetConfig, PhysicsConfig
 
 
 def forward_pipeline(
         initial_state: CentroidalState,
-        target_params: dict,
-        map_type: str = 'elliptical_grip',
-        scale_factor: float = 1.0,
-        map_params: Optional[dict] = None,
-        geom_weights: Optional[dict] = None,
-        use_contact: bool = True,
-        k_contact: float = 1.0,
-        min_angle: float = 0.1 * jnp.pi / 180,
-        cutoff_angle: float = 5. * jnp.pi / 180,
-        linearized_strains: bool = True,
-        incremental: bool = False,
-        num_load_steps: int = 10) -> dict:
+        target_cfg: TargetConfig,
+        physics_cfg: PhysicsConfig,
+        map_type: str = 'conformal_polynomial',
+        map_params: Optional[jnp.ndarray] = None) -> dict:
     """Full differentiable pipeline: initial map → geometric validity → static equilibrium.
 
     Args:
         initial_state: Flat CentroidalState exported from the Tessellation.
-        target_params: Target shape config dict ('type', 'center', 'radius').
-        map_type: Initial mapping type ('elliptical_grip' or 'boundary_projection').
-        scale_factor: Scaling applied after initial mapping.
-        map_params: Optional polynomial coefficients for the conformal mapping.
-        geom_weights: Constraint weights for the geometric validity optimizer.
-        use_contact: Whether to include contact/non-intersection energy.
-        k_contact: Contact stiffness coefficient.
-        min_angle: Minimum void angle before contact activates.
-        cutoff_angle: Void angle at which contact energy saturates.
-        linearized_strains: Use linearized (vs. nonlinear) strain measures.
-        incremental: Use incremental load stepping (for large deformations).
-        num_load_steps: Number of load steps for incremental solving.
+        target_cfg:    Structured TargetConfig (type, center, radius).
+        physics_cfg:   Structured PhysicsConfig (material, contact, weights, solver).
+        map_type:      Initial mapping type.
+        map_params:    Differentiable parameters for the mapping.
 
     Returns:
         dict with keys:
@@ -87,10 +71,16 @@ def forward_pipeline(
     # polynomial (or other parametric) mapping. `map_params` are the
     # differentiable variables being optimized during training.
     # ══════════════════════════════════════════════════════════════════════════
+    target_params = {
+        'type': target_cfg.type,
+        'center': target_cfg.center,
+        'radius': target_cfg.radius
+    }
+
     mapped_state = apply_initial_map(
         initial_state, target_params,
         map_type=map_type,
-        scale_factor=scale_factor,
+        scale_factor=physics_cfg.scale_factor,
         map_params=map_params,
     )
 
@@ -101,7 +91,7 @@ def forward_pipeline(
     # ══════════════════════════════════════════════════════════════════════════
     target_cloud = jnp.array(get_target_points(target_params, n_points=200))
     valid_state = solve_geometric_validity(
-        mapped_state, target_cloud, weights=geom_weights)
+        mapped_state, target_cloud, weights=physics_cfg.geom_weights)
 
     # ══════════════════════════════════════════════════════════════════════════
     # Stage 2 — Static Physics Solver
@@ -117,8 +107,8 @@ def forward_pipeline(
     # into a single callable, choosing linearized or nonlinear strains.
     potential_energy = build_potential_energy(
         bond_connectivity=geometry.bond_connectivity,
-        linearized_strains=linearized_strains,
-        use_contact=use_contact,
+        linearized_strains=physics_cfg.linearized_strains,
+        use_contact=physics_cfg.use_contact,
     )
 
     # 2.3 — Loading (Neumann BCs)
@@ -134,8 +124,8 @@ def forward_pipeline(
         loaded_face_DOF_pairs=valid_state.loaded_face_DOF_pairs if loading_fn else None,
         loading_fn=loading_fn,
         constrained_face_DOF_pairs=valid_state.constrained_face_DOF_pairs,
-        incremental=incremental,
-        num_steps=num_load_steps,
+        incremental=physics_cfg.incremental,
+        num_steps=physics_cfg.num_load_steps,
     )
 
     # 2.5 — ControlParams assembly
@@ -147,10 +137,10 @@ def forward_pipeline(
         k_shear=valid_state.k_shear,
         k_rot=valid_state.k_rot,
         density=valid_state.density,
-        k_contact=k_contact,
-        min_angle=min_angle,
-        cutoff_angle=cutoff_angle,
-        use_contact=use_contact,
+        k_contact=physics_cfg.k_contact,
+        min_angle=physics_cfg.min_angle,
+        cutoff_angle=physics_cfg.cutoff_angle,
+        use_contact=physics_cfg.use_contact,
     )
 
     # 2.6 — Solve for static equilibrium
@@ -164,8 +154,8 @@ def forward_pipeline(
     energies_dict = build_energy_history(
         solution=solution,
         control_params=control_params,
-        linearized_strains=linearized_strains,
-        use_contact=use_contact,
+        linearized_strains=physics_cfg.linearized_strains,
+        use_contact=physics_cfg.use_contact,
     )
     solution = solution._replace(energies=energies_dict)
 

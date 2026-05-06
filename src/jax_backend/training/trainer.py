@@ -11,17 +11,19 @@ import optax
 
 from jax_backend.training.loss import compute_end_to_end_loss
 
-def create_train_step(initial_state, target_params, pipeline_kwargs, learning_rate=0.01):
+from problem.config import TargetConfig, PhysicsConfig, TrainingConfig
+
+def create_train_step(initial_state, target_cfg: TargetConfig, physics_cfg: PhysicsConfig, learning_rate=0.01):
     """Creates a compiled training step for optimizing map_params.
     
     Args:
         initial_state: The flat tessellation CentroidalState.
-        target_params: Target shape config.
-        pipeline_kwargs: Keyword arguments for forward_pipeline.
+        target_cfg: Structured TargetConfig.
+        physics_cfg: Structured PhysicsConfig.
         learning_rate: Learning rate for Adam optimizer.
         
     Returns:
-        optimizer, opt_state, train_step_fn
+        optimizer, train_step_fn
     """
     
     # We use Adam for smooth optimization
@@ -30,7 +32,7 @@ def create_train_step(initial_state, target_params, pipeline_kwargs, learning_ra
     # The loss function closed over the constants
     def loss_fn(map_params):
         return compute_end_to_end_loss(
-            map_params, initial_state, target_params, pipeline_kwargs
+            map_params, initial_state, target_cfg, physics_cfg
         )
         
     @jax.jit
@@ -46,11 +48,12 @@ def create_train_step(initial_state, target_params, pipeline_kwargs, learning_ra
 
     return optimizer, train_step
 
-def train_pipeline(initial_map_params, initial_state, target_params, pipeline_kwargs, num_epochs=50, lr=0.01):
+def train_pipeline(initial_map_params, initial_state, target_cfg: TargetConfig, 
+                   physics_cfg: PhysicsConfig, training_cfg: TrainingConfig):
     """Run the training loop to find optimal mapping parameters."""
     
     optimizer, train_step = create_train_step(
-        initial_state, target_params, pipeline_kwargs, learning_rate=lr
+        initial_state, target_cfg, physics_cfg, learning_rate=training_cfg.learning_rate
     )
     
     opt_state = optimizer.init(initial_map_params)
@@ -58,11 +61,11 @@ def train_pipeline(initial_map_params, initial_state, target_params, pipeline_kw
     
     history_loss = []
     
-    for epoch in range(num_epochs):
+    for epoch in range(training_cfg.num_epochs):
         current_params, opt_state, loss, aux = train_step(current_params, opt_state)
         history_loss.append(aux)
         
-        if epoch % 5 == 0 or epoch == num_epochs - 1:
+        if epoch % 5 == 0 or epoch == training_cfg.num_epochs - 1:
             print(f"Epoch {epoch:03d} | Total Loss: {aux['total']:.6f} | Chamfer: {aux['chamfer']:.6f} | Energy: {aux['energy']:.6f}")
             
     return current_params, history_loss

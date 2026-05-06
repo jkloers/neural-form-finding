@@ -18,58 +18,44 @@ import jax.numpy as jnp
 
 from src.topology.builder import build_tessellation
 from src.problem.conditions import configure_tessellation
-from src.problem.config import load_config
+from src.problem.config import load_and_parse_config
 from src.jax_backend.state import CentroidalState
 from src.jax_backend.pipeline import forward_pipeline
 from src.jax_backend.training.trainer import train_pipeline
 from src.utils.pipeline_viz import visualize_pipeline_results
 from src.utils.training_viz import plot_training_loss
-
+from src.jax_backend.physics_solver.statics import LBFGS
 
 if __name__ == "__main__":
 
     # ── Configuration ─────────────────────────────────────────────────────────
-    config_path = "data/configs/complex_mapping/2_cs_asy_complex.yaml"
-    config = load_config(config_path)
-    config_name = os.path.splitext(os.path.basename(config_path))[0]
+    import argparse
+    parser = argparse.ArgumentParser(description="Neural Form-Finding Training.")
+    parser.add_argument("--config-dir", type=str, default="complex_mapping")
+    parser.add_argument("--config-name", type=str, required=True)
+    args = parser.parse_args()
+
+    config_path = f"data/configs/{args.config_dir}/{args.config_name}.yaml"
+    config = load_and_parse_config(config_path)
     print(f"Loaded config: {config_path}")
 
-    target_params = {
-        'type':   config.target_type,
-        'center': list(config.target_center),
-        'radius': config.target_radius,
-    }
+    # Apply solver hyper‑parameters to LBFGS
+    LBFGS.maxiter = config.physics.solver_maxiter
+    LBFGS.tol = config.physics.solver_tol
 
     # ── Tessellation setup ────────────────────────────────────────────────────
-    tessellation = build_tessellation(config.pattern, config.width, config.height)
-    configure_tessellation(tessellation, config)
+    from types import SimpleNamespace
+    topo = config.topology
+    topo_obj = SimpleNamespace(**topo)
+    
+    tessellation = build_tessellation(topo.get('pattern'), 
+                                      topo.get('width', 5), 
+                                      topo.get('height', 5))
+    configure_tessellation(tessellation, topo_obj)
     initial_state = CentroidalState.from_tessellation(tessellation)
 
-    # ── Pipeline parameters ───────────────────────────────────────────────────
-    geom_weights = {
-        'connectivity':       config.w_connectivity,
-        'non_intersection':   config.w_non_intersection,
-        'target':             config.w_target,
-        'arm_symmetry':       config.w_arm_symmetry,
-        'void_length':        config.w_void_length,
-        'void_collinear':     config.w_void_collinear,
-        'boundary_rigidity':  config.w_boundary_rigidity,
-    }
-
-    pipeline_kwargs = {
-        'scale_factor':      config.scale_factor,
-        'geom_weights':      geom_weights,
-        'use_contact':       config.use_contact,
-        'k_contact':         config.k_contact,
-        'min_angle':         config.min_angle * jnp.pi / 180.0,
-        'cutoff_angle':      config.cutoff_angle * jnp.pi / 180.0,
-        'linearized_strains': config.linearized_strains,
-        'incremental':       config.incremental,
-        'num_load_steps':    config.num_load_steps,
-    }
-
     # ── Training ──────────────────────────────────────────────────────────────
-    initial_map_params = jnp.array(config.map_params)
+    initial_map_params = jnp.array(topo.get('map_params', []))
 
     print("\n" + "=" * 60)
     print("STARTING END-TO-END TRAINING")
@@ -78,10 +64,9 @@ if __name__ == "__main__":
     optimized_params, history_loss = train_pipeline(
         initial_map_params,
         initial_state,
-        target_params,
-        pipeline_kwargs,
-        num_epochs=500,
-        lr=0.01,
+        config.target,
+        config.physics,
+        config.training
     )
 
     print(f"\nOptimization complete. Optimal params: {optimized_params}")
@@ -90,14 +75,22 @@ if __name__ == "__main__":
     print("\nRunning final forward pass for visualization...")
 
     result = forward_pipeline(
-        initial_state, target_params,
+        initial_state,
+        config.target,
+        config.physics,
         map_type='conformal_polynomial',
         map_params=optimized_params,
-        **pipeline_kwargs,
     )
 
-    visualize_pipeline_results(result, tessellation, config, target_params, config_name + "_trained")
-    plot_training_loss(history_loss, save_dir="data/outputs/runs/plots", show=config.save_plots)
+    # Convert TargetConfig to dict for visualization compatibility
+    target_params = {
+        'type': config.target.type,
+        'center': config.target.center,
+        'radius': config.target.radius
+    }
+
+    visualize_pipeline_results(result, tessellation, config, target_params, args.config_name + "_trained")
+    plot_training_loss(history_loss, save_dir="data/outputs/runs/plots", show=config.visualization.save_plots)
 
     print("\n" + "=" * 60)
     print("Training complete. Let's all pat ourselves on the back! 💕")
