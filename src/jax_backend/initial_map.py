@@ -1,195 +1,86 @@
 """
 Initial mapping in centroidal coordinates.
 
-Maps a flat tessellation (c, s) into a target shape by deforming the
-reconstructed vertices and then decomposing back into (c_new, s_new).
+Maps a flat tessellation (c, s) into a target shape by defining a continuous
+mapping function f: R^2 -> R^2 and applying it strictly to face centroids.
+The face shapes (centroid_node_vectors) are then transformed using the Jacobian
+matrix J_f evaluated at each centroid, resulting in a continuous, differentiable
+Rigid-Face mapping that prevents internal criss-crossing for ANY arbitrary mapping.
 
 This module is designed to be replaced by a GNN in the future.
 The interface is: CentroidalState → CentroidalState, pure JAX, differentiable.
 """
-
+import jax
 import jax.numpy as jnp
 from jax_backend.state import CentroidalState
 from jax_backend.geometry import reconstruct_vertices
-
-# Need boundary points — import here to avoid circular deps
 from problem.targets import get_target_points
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Low-level mapping functions (operate on raw vertex arrays)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _elliptical_grip_mapping(vertices_flat, center, radius):
-    """Rectangle-to-ellipse conformal-like mapping.
-
-    Args:
-        vertices_flat: (N, 2) — flat vertex positions.
-        center: (2,) — target center.
-        radius: float — target radius.
-
-    Returns:
-        (N, 2) — mapped vertex positions.
-    """
-    center = jnp.asarray(center, dtype=float)
-    min_xy = jnp.min(vertices_flat, axis=0)
-    max_xy = jnp.max(vertices_flat, axis=0)
-    box_center = (min_xy + max_xy) / 2.0
-    half_sizes = (max_xy - min_xy) / 2.0
-    half_sizes = jnp.where(half_sizes == 0.0, 1.0, half_sizes)
-
-    normalized = (vertices_flat - box_center) / half_sizes
-    u = normalized[:, 0]
-    v = normalized[:, 1]
-
+def map_elliptical_grip(p, box_center, half_sizes, center, radius, scale_factor):
+    h_sizes = jnp.where(half_sizes == 0.0, 1.0, half_sizes)
+    normalized = (p - box_center) / h_sizes
+    u, v = normalized[0], normalized[1]
     x_disk = u * jnp.sqrt(jnp.maximum(0.0, 1.0 - (v ** 2) / 2.0))
     y_disk = v * jnp.sqrt(jnp.maximum(0.0, 1.0 - (u ** 2) / 2.0))
+    mapped = jnp.array([x_disk, y_disk]) * radius + center
+    return center + (mapped - center) * scale_factor
 
-    return jnp.column_stack((x_disk, y_disk)) * radius + center
-
-
-def _conformal_polynomial_mapping(vertices_flat, center, radius, params):
-    """Complex polynomial conformal mapping to a circle.
-
-    Evaluates the polynomial mapping given the parameters [scale, c_1, ..., c_K].
-
-    Args:
-        vertices_flat: (N, 2) — flat vertex positions.
-        center: (2,) — target center.
-        radius: float — target radius.
-        params: jnp.ndarray — array of [scale, c_1, ..., c_K].
-
-    Returns:
-        (N, 2) — mapped vertex positions.
-    """
-    center_jnp = jnp.asarray(center, dtype=float)
-    min_xy = jnp.min(vertices_flat, axis=0)
-    max_xy = jnp.max(vertices_flat, axis=0)
-    box_center = (min_xy + max_xy) / 2.0
-    half_sizes = (max_xy - min_xy) / 2.0
-    half_size = jnp.maximum(jnp.max(half_sizes), 1e-6)
-
-    normalized = (vertices_flat - box_center) / half_size
-    u = normalized[:, 0]
-    v = normalized[:, 1]
-    z = u + 1j * v
-
-    # Fallback to default params if none provided or too short
-    # Format: [tx, ty, theta, scale, c1, c2, ...]
-    if params is None or len(params) < 4:
-        params = jnp.concatenate([jnp.array([0.0, 0.0, 0.0, 1.0]), jnp.zeros(1)])
-
-    tx = params[0]
-    ty = params[1]
-    theta = params[2]
-    s_val = params[3]
-    c_val = params[4:]
-    K = len(c_val)
-
-    w_opt = z
-    for k in range(K):
-        w_opt = w_opt + c_val[k] * (z ** (4 * (k + 1) + 1))
+def map_conformal_polynomial(p, box_center, half_size, domain_restriction, map_params, center, radius, scale_factor):
+    normalized_p = (p - box_center) / half_size
+    z = (normalized_p[0] + 1j * normalized_p[1]) * domain_restriction
     
-    # Apply Scale and Rotation
-    w_opt = s_val * w_opt * jnp.exp(1j * theta)
+    if map_params is None or map_params.shape[0] < 4:
+        prms = jnp.concatenate([jnp.array([0.0, 0.0, 0.0, 1.0]), jnp.zeros(1)])
+    else:
+        prms = map_params
     
-    # Apply Translation
-    x_new = jnp.real(w_opt) * radius + center_jnp[0] + tx
-    y_new = jnp.imag(w_opt) * radius + center_jnp[1] + ty
+    tx, ty, theta, s_val = prms[0], prms[1], prms[2], prms[3]
+    c_val = prms[4:]
     
-    return jnp.column_stack((x_new, y_new))
+    w = z
+    for k in range(c_val.shape[0]):
+        power = 4 * (k + 1) + 1
+        w = w + c_val[k] * (z ** power)
+        
+    w = s_val * w * jnp.exp(1j * theta)
+    x_new = jnp.real(w) * radius + center[0] + tx
+    y_new = jnp.imag(w) * radius + center[1] + ty
+    mapped = jnp.array([x_new, y_new])
+    return center + (mapped - center) * scale_factor
 
-
-def _boundary_projection_mapping(vertices_flat, boundary_points):
-    """Proportional warping to fill an arbitrary target shape.
-
-    Args:
-        vertices_flat: (N, 2) — flat vertex positions.
-        boundary_points: (M, 2) — target boundary point cloud.
-
-    Returns:
-        (N, 2) — mapped vertex positions.
-    """
-    boundary = jnp.asarray(boundary_points, dtype=float)
-    shape_center = jnp.mean(boundary, axis=0)
-    boundary_vec = boundary - shape_center
-    boundary_angles = jnp.arctan2(boundary_vec[:, 1], boundary_vec[:, 0])
-    boundary_radii = jnp.linalg.norm(boundary_vec, axis=1)
-
-    order = jnp.argsort(boundary_angles)
-    b_angles = boundary_angles[order]
-    b_radii = boundary_radii[order]
-    b_angles = jnp.concatenate([b_angles - 2 * jnp.pi, b_angles, b_angles + 2 * jnp.pi])
-    b_radii = jnp.tile(b_radii, 3)
-
-    points = jnp.asarray(vertices_flat, dtype=float)
-    p_min, p_max = jnp.min(points, axis=0), jnp.max(points, axis=0)
-    p_center = (p_min + p_max) / 2.0
-
-    offsets = points - p_center
-    p_angles = jnp.arctan2(offsets[:, 1], offsets[:, 0])
-    p_norms = jnp.linalg.norm(offsets, axis=1)
-
-    w = (p_max[0] - p_min[0]) / 2.0
-    h = (p_max[1] - p_min[1]) / 2.0
+def map_boundary_projection(p, box_center, half_sizes, shape_center, b_angles, b_radii, scale_factor):
+    offset = p - box_center
+    p_angle = jnp.arctan2(offset[1], offset[0])
+    p_norm = jnp.linalg.norm(offset)
+    
+    w_box = half_sizes[0]
+    h_box = half_sizes[1]
     norm_max_tess = 1.0 / jnp.maximum(
-        jnp.abs(jnp.cos(p_angles)) / w,
-        jnp.abs(jnp.sin(p_angles)) / h)
-
-    target_boundary_radii = jnp.interp(p_angles, b_angles, b_radii)
-    scale = jnp.where(p_norms > 0, target_boundary_radii / norm_max_tess, 0.0)
-
-    return shape_center + offsets * scale[:, None]
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Decomposition: mapped vertices → (c_new, s_new)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _vertices_to_centroidal(mapped_vertices, n_faces, max_nodes):
-    """Decompose mapped vertex positions back into (face_centroids, cnv).
-
-    Args:
-        mapped_vertices: (n_faces, max_nodes, 2) — mapped absolute vertex positions.
-        n_faces: int
-        max_nodes: int
-
-    Returns:
-        face_centroids: (n_faces, 2)
-        centroid_node_vectors: (n_faces, max_nodes, 2)
-    """
-    face_centroids = jnp.mean(mapped_vertices, axis=1)           # (n_faces, 2)
-    cnv = mapped_vertices - face_centroids[:, None, :]            # (n_faces, max_nodes, 2)
-    return face_centroids, cnv
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Public API
-# ─────────────────────────────────────────────────────────────────────────────
+        jnp.abs(jnp.cos(p_angle)) / w_box,
+        jnp.abs(jnp.sin(p_angle)) / h_box)
+        
+    target_boundary_radius = jnp.interp(p_angle, b_angles, b_radii)
+    scale_rad = jnp.where(p_norm > 0, target_boundary_radius / norm_max_tess, 0.0)
+    
+    mapped = shape_center + offset * scale_rad
+    return shape_center + (mapped - shape_center) * scale_factor
 
 def apply_initial_map(
         state: CentroidalState,
         target_params: dict,
         map_type: str = 'elliptical_grip',
         scale_factor: float = 1.0,
-        map_params: jnp.ndarray = None) -> CentroidalState:
-    """Apply an initial mapping to a CentroidalState.
-
-    Deforms the flat tessellation into the target shape by:
-    1. Reconstructing vertices from (c, s)
-    2. Applying a spatial mapping to all vertices
-    3. Decomposing mapped vertices back into (c_new, s_new)
-
-    This function is designed to be a drop-in replacement for a GNN:
-    both take a CentroidalState and return a CentroidalState.
+        map_params: jnp.ndarray = None,
+        domain_restriction: float = 0.8) -> CentroidalState:
+    """Apply an initial mapping to a CentroidalState using Rigid-Face generalized mapping.
 
     Args:
         state: CentroidalState with flat tessellation geometry.
-        target_params: dict with 'type', 'center', 'radius' (and optionally
-                       a precomputed 'boundary_points' array).
+        target_params: dict with 'type', 'center', 'radius'
         map_type: 'elliptical_grip', 'boundary_projection' or 'conformal_polynomial'.
         scale_factor: scaling applied after mapping.
         map_params: parameters for the parameterized map (e.g. polynomial coefficients).
+        domain_restriction: limits evaluation to a fraction of the domain to avoid singularities.
 
     Returns:
         CentroidalState with updated (face_centroids, centroid_node_vectors).
@@ -198,37 +89,69 @@ def apply_initial_map(
     s = state.centroid_node_vectors
     n_faces, max_nodes, dim = s.shape
 
-    # 1. Reconstruct all vertices: (n_faces, max_nodes, 2)
+    # 1. Gather global context for the mapping (bounding box)
     all_vertices = reconstruct_vertices(c, s)
-
-    # 2. Flatten to (n_faces * max_nodes, 2) for the mapping
     vertices_flat = all_vertices.reshape(-1, dim)
+    
+    min_xy = jnp.min(vertices_flat, axis=0)
+    max_xy = jnp.max(vertices_flat, axis=0)
+    box_center = (min_xy + max_xy) / 2.0
+    half_sizes = (max_xy - min_xy) / 2.0
+    half_size = jnp.maximum(jnp.max(half_sizes), 1e-6)
 
-    # 3. Apply spatial mapping
     shape_type = target_params.get('type', 'circle')
     center = jnp.asarray(target_params.get('center', [0.0, 0.0]), dtype=float)
     radius = float(target_params.get('radius', 1.0))
 
-    if map_type == 'elliptical_grip' and shape_type == 'circle':
-        mapped_flat = _elliptical_grip_mapping(vertices_flat, center, radius)
-        mapped_flat = center + (mapped_flat - center) * scale_factor
-    elif map_type == 'conformal_polynomial' and shape_type == 'circle':
-        mapped_flat = _conformal_polynomial_mapping(vertices_flat, center, radius, map_params)
-        mapped_flat = center + (mapped_flat - center) * scale_factor
-    elif map_type == 'boundary_projection' or shape_type != 'circle':
-        boundary_pts = get_target_points(target_params, n_points=500)
-        mapped_flat = _boundary_projection_mapping(vertices_flat, boundary_pts)
-        center_bp = jnp.mean(jnp.asarray(boundary_pts), axis=0)
-        mapped_flat = center_bp + (mapped_flat - center_bp) * scale_factor
+    # Pre-computation for boundary_projection
+    if map_type == 'boundary_projection' or shape_type != 'circle':
+        boundary_pts = jnp.asarray(get_target_points(target_params, n_points=500), dtype=float)
+        shape_center = jnp.mean(boundary_pts, axis=0)
+        boundary_vec = boundary_pts - shape_center
+        boundary_angles = jnp.arctan2(boundary_vec[:, 1], boundary_vec[:, 0])
+        boundary_radii = jnp.linalg.norm(boundary_vec, axis=1)
+
+        order = jnp.argsort(boundary_angles)
+        b_angles = boundary_angles[order]
+        b_radii = boundary_radii[order]
+        b_angles = jnp.concatenate([b_angles - 2 * jnp.pi, b_angles, b_angles + 2 * jnp.pi])
+        b_radii = jnp.tile(b_radii, 3)
     else:
-        # Fallback: simple scaling
-        mapped_flat = vertices_flat * scale_factor
+        shape_center = center
+        b_angles = jnp.zeros(3)
+        b_radii = jnp.zeros(3)
 
-    # 4. Reshape back to (n_faces, max_nodes, 2)
-    mapped_vertices = mapped_flat.reshape(n_faces, max_nodes, dim)
+    # 2. Define the generic point mapping function f: R^2 -> R^2
+    def f_point(p):
+        if map_type == 'elliptical_grip' and shape_type == 'circle':
+            return map_elliptical_grip(p, box_center, half_sizes, center, radius, scale_factor)
+            
+        elif map_type == 'conformal_polynomial' and shape_type == 'circle':
+            return map_conformal_polynomial(p, box_center, half_size, domain_restriction, map_params, center, radius, scale_factor)
+            
+        elif map_type == 'boundary_projection' or shape_type != 'circle':
+            return map_boundary_projection(p, box_center, half_sizes, shape_center, b_angles, b_radii, scale_factor)
+            
+        else:
+            return p * scale_factor
 
-    # 5. Decompose into (c_new, s_new)
-    c_new, s_new = _vertices_to_centroidal(mapped_vertices, n_faces, max_nodes)
+    # 3. Compute Jacobian matrix function using JAX
+    jac_f = jax.jacfwd(f_point)
+    
+    # 4. Vectorize across all centroids
+    f_vmap = jax.vmap(f_point)
+    jac_vmap = jax.vmap(jac_f)
+    
+    # 5. Map centroids
+    c_new = f_vmap(c)
+    
+    # 6. Transform CNVs using the Jacobian
+    # jac_matrices shape: (n_faces, 2, 2)
+    # s shape: (n_faces, max_nodes, 2)
+    jac_matrices = jac_vmap(c)
+    
+    # s_new[i, j, :] = jac_matrices[i, :, :] @ s[i, j, :]
+    s_new = jnp.einsum('fab,fnb->fna', jac_matrices, s)
 
     return state._replace(
         face_centroids=c_new,

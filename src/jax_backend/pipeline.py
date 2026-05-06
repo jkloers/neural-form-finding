@@ -82,6 +82,7 @@ def forward_pipeline(
         map_type=map_type,
         scale_factor=physics_cfg.scale_factor,
         map_params=map_params,
+        domain_restriction=physics_cfg.domain_restriction,
     )
 
     # ══════════════════════════════════════════════════════════════════════════

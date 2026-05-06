@@ -20,6 +20,7 @@ class TargetConfig(eqx.Module):
 
 class PhysicsConfig(eqx.Module):
     scale_factor: float
+    domain_restriction: float
     use_contact: bool
     k_contact: float
     min_angle: float  # radians
@@ -33,6 +34,7 @@ class PhysicsConfig(eqx.Module):
 
     def __init__(self,
                  scale_factor: float,
+                 domain_restriction: float,
                  use_contact: bool,
                  k_contact: float,
                  min_angle: float,
@@ -44,6 +46,7 @@ class PhysicsConfig(eqx.Module):
                  solver_maxiter: int = 1000,
                  solver_tol: float = 1e-5):
         self.scale_factor = scale_factor
+        self.domain_restriction = domain_restriction
         self.use_contact = use_contact
         self.k_contact = k_contact
         self.min_angle = min_angle
@@ -60,26 +63,47 @@ class TrainingConfig(eqx.Module):
     num_epochs: int
     learning_rate: float
     optimizer: str = "adam"
+    loss_weights: dict
+    geometric_loss_type: str = "boundary_vertices"
 
-    def __init__(self, num_epochs: int, learning_rate: float, optimizer: str = "adam"):
+    def __init__(self, num_epochs: int, learning_rate: float, optimizer: str = "adam", loss_weights: dict = None, geometric_loss_type: str = "boundary_vertices"):
         self.num_epochs = num_epochs
         self.learning_rate = learning_rate
         self.optimizer = optimizer
+        self.loss_weights = loss_weights if loss_weights is not None else {"geometric": 1.0, "physics": 0.1, "regularization": 1e-3}
+        self.geometric_loss_type = geometric_loss_type
 
 
 class VisualizationConfig(eqx.Module):
-    show_stage0: bool
-    show_stage1: bool
-    show_stage2: bool
-    save_plots: bool
-    save_animation: bool
+    stage0: bool
+    stage1: bool
+    stage2: bool
+    energy_plot: bool
+    animation: bool
+    show_plots: bool
+    save_outputs: bool
+    
+    show_hinges: bool
+    show_hinge_indices: bool
+    show_face_indices: bool
+    show_external_forces: bool
+    show_kinematic_blocks: bool
 
-    def __init__(self, show_stage0: bool, show_stage1: bool, show_stage2: bool, save_plots: bool, save_animation: bool):
-        self.show_stage0 = show_stage0
-        self.show_stage1 = show_stage1
-        self.show_stage2 = show_stage2
-        self.save_plots = save_plots
-        self.save_animation = save_animation
+    def __init__(self, stage0: bool, stage1: bool, stage2: bool, energy_plot: bool, animation: bool, show_plots: bool, save_outputs: bool,
+                 show_hinges: bool = True, show_hinge_indices: bool = True, show_face_indices: bool = True, show_external_forces: bool = False, show_kinematic_blocks: bool = False):
+        self.stage0 = stage0
+        self.stage1 = stage1
+        self.stage2 = stage2
+        self.energy_plot = energy_plot
+        self.animation = animation
+        self.show_plots = show_plots
+        self.save_outputs = save_outputs
+        
+        self.show_hinges = show_hinges
+        self.show_hinge_indices = show_hinge_indices
+        self.show_face_indices = show_face_indices
+        self.show_external_forces = show_external_forces
+        self.show_kinematic_blocks = show_kinematic_blocks
 
 
 class ExperimentConfig(eqx.Module):
@@ -167,7 +191,8 @@ def load_and_parse_config(yaml_path: str) -> ExperimentConfig:
     weights_raw = raw.get("optimization_weights", {})
     
     physics_cfg = PhysicsConfig(
-        scale_factor=mapping_raw.get("scale_factor", 1.0),
+        scale_factor=mapping_raw.get("scale_factor") if mapping_raw.get("scale_factor") is not None else 1.0,
+        domain_restriction=mapping_raw.get("domain_restriction", 0.8),
         use_contact=phys_raw.get("use_contact", True),
         k_contact=phys_raw.get("k_contact", 1.0),
         min_angle=phys_raw.get("min_angle", 0.1) * deg_to_rad,
@@ -193,17 +218,27 @@ def load_and_parse_config(yaml_path: str) -> ExperimentConfig:
     training_cfg = TrainingConfig(
         num_epochs=int(train_raw.get("num_epochs", 500)),
         learning_rate=float(train_raw.get("learning_rate", 0.01)),
-        optimizer=str(train_raw.get("optimizer", "adam") or "adam")
+        optimizer=str(train_raw.get("optimizer", "adam") or "adam"),
+        loss_weights=raw.get("loss_weights", train_raw.get("loss_weights", {"geometric": 1.0, "physics": 0.1, "regularization": 1e-3})),
+        geometric_loss_type=str(train_raw.get("geometric_loss_type", "boundary_vertices"))
     )
     
     # 5. Visualization
     vis_raw = raw.get("visualization", {})
     vis_cfg = VisualizationConfig(
-        show_stage0=bool(vis_raw.get("show_stage0", False)),
-        show_stage1=bool(vis_raw.get("show_stage1", False)),
-        show_stage2=bool(vis_raw.get("show_stage2", True)),
-        save_plots=bool(vis_raw.get("save_plots", True)),
-        save_animation=bool(vis_raw.get("save_animation", True))
+        stage0=bool(vis_raw.get("stage0", False)),
+        stage1=bool(vis_raw.get("stage1", False)),
+        stage2=bool(vis_raw.get("stage2", True)),
+        energy_plot=bool(vis_raw.get("energy_plot", True)),
+        animation=bool(vis_raw.get("animation", True)),
+        show_plots=bool(vis_raw.get("show_plots", True)),
+        save_outputs=bool(vis_raw.get("save_outputs", True)),
+        
+        show_hinges=bool(vis_raw.get("show_hinges", True)),
+        show_hinge_indices=bool(vis_raw.get("show_hinge_indices", True)),
+        show_face_indices=bool(vis_raw.get("show_face_indices", True)),
+        show_external_forces=bool(vis_raw.get("show_external_forces", False)),
+        show_kinematic_blocks=bool(vis_raw.get("show_kinematic_blocks", False))
     )
     
     return ExperimentConfig(

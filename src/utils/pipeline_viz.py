@@ -17,10 +17,10 @@ def visualize_pipeline_results(result, tessellation, config, target_params, conf
     """
     output_dir = "data/outputs/runs"
     plots_dir = os.path.join(output_dir, "plots")
-    if config.visualization.save_plots:
+    if config.visualization.save_outputs:
         os.makedirs(plots_dir, exist_ok=True)
 
-    def plot_stage(state, title, show=True, save=False):
+    def plot_stage(state, title):
         c = state.face_centroids
         s = state.centroid_node_vectors
         verts_rec = reconstruct_vertices(c, s)
@@ -33,33 +33,40 @@ def visualize_pipeline_results(result, tessellation, config, target_params, conf
         tess_copy.update_vertices(new_verts)
         
         fig, ax = plt.subplots(figsize=(8, 8))
-        plot_tessellation(tess_copy, ax=ax, title=title, 
-                          show_target=True, target_params=target_params)
+        plot_kwargs = {
+            'show_target': True,
+            'target_params': target_params,
+            'show_hinges': config.visualization.show_hinges,
+            'show_hinge_indices': config.visualization.show_hinge_indices,
+            'show_face_indices': config.visualization.show_face_indices,
+            'show_external_forces': config.visualization.show_external_forces,
+            'show_kinematic_blocks': config.visualization.show_kinematic_blocks,
+        }
         
-        if save:
+        plot_tessellation(tess_copy, ax=ax, title=title, **plot_kwargs)
+        
+        if config.visualization.save_outputs:
             filename = title.lower().replace(" ", "_").replace(":", "") + ".png"
             save_path = os.path.join(plots_dir, filename)
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
             print(f"  Saved plot to {save_path}")
-        if show:
+        if config.visualization.show_plots:
             plt.show()
         else:
             plt.close(fig)
 
     # Stage 0
-    if config.visualization.show_stage0 or config.visualization.save_plots:
+    if config.visualization.stage0:
         print("Displaying Stage 0: Initial Mapping...")
-        plot_stage(result['mapped_state'], "Stage 0: Initial Mapping", 
-                   show=config.visualization.show_stage0, save=config.visualization.save_plots)
+        plot_stage(result['mapped_state'], "Stage 0: Initial Mapping")
 
     # Stage 1
-    if config.visualization.show_stage1 or config.visualization.save_plots:
+    if config.visualization.stage1:
         print("Displaying Stage 1: Geometric Validity...")
-        plot_stage(result['valid_state'], "Stage 1: Geometric Validity", 
-                   show=config.visualization.show_stage1, save=config.visualization.save_plots)
+        plot_stage(result['valid_state'], "Stage 1: Geometric Validity")
 
     # Stage 2
-    if config.visualization.show_stage2 or config.visualization.save_plots:
+    if config.visualization.stage2:
         print("Displaying Stage 2: Static Equilibrium...")
         sol = result['solution']
         valid_state = result['valid_state']
@@ -70,11 +77,10 @@ def visualize_pipeline_results(result, tessellation, config, target_params, conf
         s_eq = jnp.einsum('nij, nkj -> nki', R, valid_state.centroid_node_vectors)
         
         equilibrium_state = valid_state._replace(face_centroids=c_eq, centroid_node_vectors=s_eq)
-        plot_stage(equilibrium_state, "Stage 2: Static Equilibrium", 
-                   show=config.visualization.show_stage2, save=config.visualization.save_plots)
+        plot_stage(equilibrium_state, "Stage 2: Static Equilibrium")
 
     # Animation
-    if config.physics.incremental and config.visualization.save_animation:
+    if config.physics.incremental and config.visualization.animation:
         print(f"\nGenerating animation from history ({config.physics.num_load_steps} frames)...")
         sol = result['solution']
         valid_state = result['valid_state']
@@ -96,11 +102,20 @@ def visualize_pipeline_results(result, tessellation, config, target_params, conf
         os.makedirs(ani_dir, exist_ok=True)
         ani_path = os.path.join(ani_dir, f"{config_name}_incremental.gif")
         
+        plot_kwargs = {
+            'show_target': True,
+            'target_params': target_params,
+            'show_hinges': config.visualization.show_hinges,
+            'show_hinge_indices': config.visualization.show_hinge_indices,
+            'show_face_indices': config.visualization.show_face_indices,
+            'show_external_forces': config.visualization.show_external_forces,
+            'show_kinematic_blocks': config.visualization.show_kinematic_blocks,
+        }
         fps = max(5, config.physics.num_load_steps // 3)
-        animate_tessellation(tessellation, state_history, filepath=ani_path, fps=fps, target_params=target_params)
+        animate_tessellation(tessellation, state_history, filepath=ani_path, fps=fps, **plot_kwargs)
 
     # Energy Plot
-    if result.get('solution') and getattr(result['solution'], 'energies', None) is not None:
+    if config.visualization.energy_plot and result.get('solution') and getattr(result['solution'], 'energies', None) is not None:
         energies_dict = result['solution'].energies
         
         if isinstance(energies_dict, dict):
@@ -156,12 +171,12 @@ def visualize_pipeline_results(result, tessellation, config, target_params, conf
         for text in legend.get_texts():
             text.set_color("black")
         
-        if config.visualization.save_plots:
+        if config.visualization.save_outputs:
             save_path = os.path.join(plots_dir, "energy_plot.png")
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
             print(f"  Saved energy plot to {save_path}")
             
-        if config.visualization.show_stage2 or config.visualization.save_plots: 
+        if config.visualization.show_plots: 
             plt.show()
         else:
             plt.close(fig)

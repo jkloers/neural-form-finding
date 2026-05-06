@@ -12,7 +12,10 @@ def plot_tessellation(tessellation, ax=None,
                       show_faces=True, 
                       show_hinges=True, 
                       show_vertices=False, 
-                      show_indices=True, 
+                      show_face_indices=True,
+                      show_hinge_indices=True,
+                      show_external_forces=False,
+                      show_kinematic_blocks=False,
                       show_target=True,
                       target_params=None,
                       show_border_edges=False,
@@ -34,6 +37,10 @@ def plot_tessellation(tessellation, ax=None,
             
             current_color = color_faces[i] if is_color_list else color_faces
             
+            # Color kinematic blocks differently
+            if show_kinematic_blocks and hasattr(face, 'dofs') and len(face.dofs) > 0:
+                current_color = '#6C757D' # Gris pour les faces bloquées (clamped)
+            
             polygon = Polygon(
                 vertices, 
                 closed=True, 
@@ -45,7 +52,7 @@ def plot_tessellation(tessellation, ax=None,
             )
             ax.add_patch(polygon)
 
-            if show_indices:
+            if show_face_indices:
                 centroid = vertices.mean(axis=0)
                 ax.text(centroid[0], centroid[1], str(i), color='black', fontsize=10, 
                         ha='center', va='center', weight='bold', zorder=20)
@@ -54,7 +61,7 @@ def plot_tessellation(tessellation, ax=None,
     if show_vertices:
         X = tessellation.vertices
         ax.scatter(X[:, 0], X[:, 1], color='#E63946', s=20, zorder=25)
-        if show_indices:
+        if show_vertices: # If we show vertices, we might want their indices, but we'll bind it to show_face_indices or just leave it out. For now keeping it linked to show_face_indices for simplicity if needed, or simply not show them. Let's bind it to show_face_indices.
             for i, v in enumerate(X):
                 ax.text(v[0], v[1], f"v{i}", color='#E63946', fontsize=8, ha='right', zorder=26)
 
@@ -82,9 +89,39 @@ def plot_tessellation(tessellation, ax=None,
             
             ax.scatter(midpoint[0], midpoint[1], color='#F1FAEE', edgecolor="#000000", s=30, linewidth=1.5, zorder=14)
             
-            if show_indices:
+            if show_hinge_indices:
                 ax.text(midpoint[0], midpoint[1] + 0.02, f"h{i}", color='#457B9D', fontsize=8, 
                         ha='center', va='bottom', weight='bold', zorder=22)
+
+    # 4. External Forces & Moments
+    if show_external_forces:
+        for face in tessellation.faces:
+            if hasattr(face, 'loads') and face.loads:
+                vertices = tessellation.vertices[face.vertex_indices]
+                centroid = vertices.mean(axis=0)
+                
+                fx = face.loads.get(0, 0.0)
+                fy = face.loads.get(1, 0.0)
+                moment = face.loads.get(2, 0.0)
+                
+                # Draw force vector
+                if fx != 0 or fy != 0:
+                    force_len = np.sqrt(fx**2 + fy**2)
+                    scale = min(0.2 / force_len, 0.05) if force_len > 0 else 0.05
+                    dx = fx * scale
+                    dy = fy * scale
+                    
+                    # Offset start slightly so we don't cover the centroid index
+                    ax.arrow(centroid[0], centroid[1], dx, dy, 
+                             head_width=0.03, head_length=0.03, fc="#D62828", ec="#D62828", 
+                             zorder=30, width=0.005)
+                             
+                # Draw moment
+                if moment != 0:
+                    symbol = "↺" if moment > 0 else "↻"
+                    # Add text to indicate moment, offset slightly above
+                    ax.text(centroid[0], centroid[1] + 0.1, symbol, color="#D62828", 
+                            fontsize=18, ha='center', va='center', weight='bold', zorder=30)
 
     # 4. Target Shape (Cloud representation)
     if show_target:

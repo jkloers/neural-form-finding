@@ -90,7 +90,7 @@ if __name__ == "__main__":
     }
 
     visualize_pipeline_results(result, tessellation, config, target_params, args.config_name + "_trained")
-    plot_training_loss(history_loss, save_dir="data/outputs/runs/plots", show=config.visualization.save_plots)
+    plot_training_loss(history_loss, save_dir="data/outputs/runs/plots", show=config.visualization.save_outputs)
 
     print("\n" + "=" * 60)
     print("Training complete. Let's all pat ourselves on the back! 💕")

@@ -13,26 +13,26 @@ from jax_backend.training.loss import compute_end_to_end_loss
 
 from problem.config import TargetConfig, PhysicsConfig, TrainingConfig
 
-def create_train_step(initial_state, target_cfg: TargetConfig, physics_cfg: PhysicsConfig, learning_rate=0.01):
+def create_train_step(initial_state, target_cfg: TargetConfig, physics_cfg: PhysicsConfig, training_cfg: TrainingConfig):
     """Creates a compiled training step for optimizing map_params.
     
     Args:
         initial_state: The flat tessellation CentroidalState.
         target_cfg: Structured TargetConfig.
         physics_cfg: Structured PhysicsConfig.
-        learning_rate: Learning rate for Adam optimizer.
+        training_cfg: Structured TrainingConfig.
         
     Returns:
         optimizer, train_step_fn
     """
     
     # We use Adam for smooth optimization
-    optimizer = optax.adam(learning_rate=learning_rate)
+    optimizer = optax.adam(learning_rate=training_cfg.learning_rate)
     
     # The loss function closed over the constants
     def loss_fn(map_params):
         return compute_end_to_end_loss(
-            map_params, initial_state, target_cfg, physics_cfg
+            map_params, initial_state, target_cfg, physics_cfg, training_cfg
         )
         
     @jax.jit
@@ -53,7 +53,7 @@ def train_pipeline(initial_map_params, initial_state, target_cfg: TargetConfig,
     """Run the training loop to find optimal mapping parameters."""
     
     optimizer, train_step = create_train_step(
-        initial_state, target_cfg, physics_cfg, learning_rate=training_cfg.learning_rate
+        initial_state, target_cfg, physics_cfg, training_cfg
     )
     
     opt_state = optimizer.init(initial_map_params)
