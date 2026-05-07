@@ -31,7 +31,7 @@ if __name__ == "__main__":
     # ── Configuration ─────────────────────────────────────────────────────────
     import argparse
     parser = argparse.ArgumentParser(description="Neural Form-Finding Training.")
-    parser.add_argument("--config-dir", type=str, default="complex_mapping")
+    parser.add_argument("--config-dir", type=str, default="asymmetric_roots")
     parser.add_argument("--config-name", type=str, required=True)
     args = parser.parse_args()
 

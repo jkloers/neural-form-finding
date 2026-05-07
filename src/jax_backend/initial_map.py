@@ -62,12 +62,65 @@ def map_conformal_polynomial(p_restricted, params, context):
         power = 4 * (k + 1) + 1
         w = w + c_val[k] * (z ** power)
         
-    # Temporarily disable rotation to prevent the optimizer from 'cheating'
-    # by aligning forces with the strongest axis.
-    theta = 0.0
     w = s_val * w * jnp.exp(1j * theta)
     x_new = jnp.real(w) * context['radius'] + context['center'][0] + tx
     y_new = jnp.imag(w) * context['radius'] + context['center'][1] + ty
+    return jnp.array([x_new, y_new])
+
+def map_asymmetric_roots(p_restricted, params, context):
+    """
+    Mapping complexe asymétrique garanti sans criss-cross interne.
+    paramatisé par les racines complexes de la dérivée spatiale.
+    """
+    # 1. Projection de Shirley-Chiu (Carré -> Disque unité)
+    h_sizes = jnp.where(context['half_sizes'] == 0.0, 1.0, context['half_sizes'])
+    normalized = (p_restricted - context['box_center']) / h_sizes
+    u, v = normalized[0], normalized[1]
+    
+    x_disk = u * jnp.sqrt(jnp.maximum(0.0, 1.0 - (v ** 2) / 2.0))
+    y_disk = v * jnp.sqrt(jnp.maximum(0.0, 1.0 - (u ** 2) / 2.0))
+    
+    z = x_disk + 1j * y_disk
+    
+    # 2. Parsing des paramètres sans casser le graphe JAX
+    if params is None or (isinstance(params, jnp.ndarray) and params.shape[0] < 6):
+        # Fallback par défaut
+        tx, ty, theta, s_val = 0.0, 0.0, 0.0, 1.0
+        roots_flat = jnp.array([10.0, 0.0])
+    elif isinstance(params, dict):
+        tx = params.get('tx', 0.0)
+        ty = params.get('ty', 0.0)
+        theta = params.get('theta', 0.0)
+        s_val = params.get('s_val', 1.0)
+        roots_flat = params.get('roots', jnp.array([10.0, 0.0]))
+    else:
+        tx, ty, theta, s_val = params[0], params[1], params[2], params[3]
+        roots_flat = params[4:]
+    roots = roots_flat[0::2] + 1j * roots_flat[1::2]
+    
+    # 3. Construction des coefficients du polynôme dérivé f'(z) = prod(1 - z/r_i)
+    # Note: JAX déroulera (unroll) cette boucle lors du JIT car la taille de 'roots' 
+    # est fixée statiquement par la taille de l'array passé en entrée.
+    coeffs = jnp.array([1.0 + 0j])
+    for i in range(roots.shape[0]):
+        shifted = jnp.pad(coeffs, (1, 0))
+        coeffs = jnp.pad(coeffs, (0, 1)) - (1.0 / roots[i]) * shifted
+        
+    # 4. Intégration analytique exacte : a_k z^k -> (a_k / (k+1)) z^{k+1}
+    k = jnp.arange(1, len(coeffs) + 1)
+    integrated_coeffs = coeffs / k
+    integrated_coeffs = jnp.pad(integrated_coeffs, (1, 0)) # Ajout de f(0) = 0
+    
+    # 5. Évaluation tensorielle (JAX polyval attend les puissances décroissantes)
+    w = jnp.polyval(integrated_coeffs[::-1], z)
+    
+    # 6. Post-transformations (Scale, Rotation, Translation)
+    # On maintient le blocage temporaire de la rotation
+    theta = 0.0 
+    w = s_val * w * jnp.exp(1j * theta)
+    x_new = jnp.real(w) * context['radius'] + context['center'][0] + tx
+    y_new = jnp.imag(w) * context['radius'] + context['center'][1] + ty
+    
     return jnp.array([x_new, y_new])
 
 def map_boundary_projection(p_restricted, params, context):
@@ -158,6 +211,8 @@ def build_mapping_fn(
         core_map = map_elliptical_grip
     elif map_type == 'conformal_polynomial':
         core_map = map_conformal_polynomial
+    elif map_type == 'asymmetric_roots':
+        core_map = map_asymmetric_roots
     elif map_type == 'boundary_projection':
         core_map = map_boundary_projection
     elif map_type == 'homothetic':

@@ -6,7 +6,7 @@ def plot_training_loss(history_loss, save_dir="data/outputs/runs/plots", show=Tr
     Plot the different components of the training loss.
     Uses the Princeton Form Finding Lab theme: Orange and Electric Green.
     """
-    os.makedirs(save_dir, exist_ok=True)
+
     
     epochs = range(len(history_loss))
     total_loss = [h['total'] for h in history_loss]
@@ -63,9 +63,11 @@ def plot_training_loss(history_loss, save_dir="data/outputs/runs/plots", show=Tr
     ax.spines['left'].set_color('black')
     ax.tick_params(colors='black')
     
-    save_path = os.path.join(save_dir, "training_loss.png")
-    plt.savefig(save_path, dpi=300, bbox_inches='tight', facecolor=fig.get_facecolor())
-    print(f"Saved detailed aesthetic loss curves to {save_path}")
+    if save_dir is not None:
+        os.makedirs(save_dir, exist_ok=True)
+        save_path = os.path.join(save_dir, "training_loss.png")
+        plt.savefig(save_path, dpi=300, bbox_inches='tight', facecolor=fig.get_facecolor())
+        print(f"Saved detailed aesthetic loss curves to {save_path}")
     
     if show:
         plt.show()
