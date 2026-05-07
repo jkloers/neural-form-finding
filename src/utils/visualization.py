@@ -1,5 +1,6 @@
 from topology.core import Tessellation
 import numpy as np
+import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon
 import matplotlib.animation as animation
@@ -250,12 +251,12 @@ def plot_tessellation_differences(tessellation, diff_values, ax=None,
     """
     Plots the tessellation where faces are colored based on a difference metric.
     """
-    if not diff_values:
+    if diff_values is None or len(diff_values) == 0:
         print("Warning: diff_values is empty.")
         return ax
         
-    min_val = min(diff_values)
-    max_val = max(diff_values)
+    min_val = jnp.min(diff_values)
+    max_val = jnp.max(diff_values)
     
     if max_val > min_val:
         norm = mcolors.Normalize(vmin=min_val, vmax=max_val)

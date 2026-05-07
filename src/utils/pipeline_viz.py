@@ -15,8 +15,7 @@ def visualize_pipeline_results(result, tessellation, config, target_params, conf
     Orchestrates the visualization of the entire pipeline, including static plots and animations.
     Controlled by the visualization settings in the config.
     """
-
-    def plot_stage(state, title, mapping_fn=None, map_params=None):
+    def update_tessellation_from_state(state):
         c = state.face_centroids
         s = state.centroid_node_vectors
         verts_rec = reconstruct_vertices(c, s)
@@ -27,6 +26,10 @@ def visualize_pipeline_results(result, tessellation, config, target_params, conf
             for j, v_idx in enumerate(face.vertex_indices):
                 new_verts[v_idx] = verts_rec[i, j]
         tess_copy.update_vertices(new_verts)
+        return tess_copy
+
+    def plot_stage(state, title, mapping_fn=None, map_params=None):
+        tess_copy = update_tessellation_from_state(state)
         
         fig, ax = plt.subplots(figsize=(8, 8))
         plot_kwargs = {
@@ -72,13 +75,7 @@ def visualize_pipeline_results(result, tessellation, config, target_params, conf
         area_diff = ((area1 - area0) / area0) * 100.0
         
         # Update tessellation vertices for plotting
-        verts_rec = reconstruct_vertices(result['valid_state'].face_centroids, result['valid_state'].centroid_node_vectors)
-        tess_copy = copy.deepcopy(tessellation)
-        new_verts = np.zeros_like(tess_copy.vertices)
-        for i, face in enumerate(tess_copy.faces):
-            for j, v_idx in enumerate(face.vertex_indices):
-                new_verts[v_idx] = verts_rec[i, j]
-        tess_copy.update_vertices(new_verts)
+        tess_copy = update_tessellation_from_state(result['valid_state'])
         
         fig, ax = plt.subplots(figsize=(8, 8))
         plot_kwargs = {
@@ -125,7 +122,19 @@ def visualize_pipeline_results(result, tessellation, config, target_params, conf
         print(f"\nGenerating animation from history ({config.physics.num_load_steps} frames)...")
         sol = result['solution']
         valid_state = result['valid_state']
+        def interpolate_states(v1, v2, n_frames):
+            return [v1 + (v2 - v1) * (i / (n_frames - 1)) for i in range(n_frames)]
+
         state_history = []
+        
+        # Extrait les vertices de l'état valide (point de départ de la physique)
+        v_valid = update_tessellation_from_state(result['valid_state']).vertices.copy()
+        
+        # Le premier frame de la vidéo est l'état valide
+        state_history.append(v_valid)
+        
+        # Animation : Incremental Physics (Stage 2)
+        v_prev = v_valid
         for i in range(sol.fields.shape[0]):
             fields = sol.fields[i]
             c_i = valid_state.face_centroids + fields[:, :2]
@@ -137,7 +146,10 @@ def visualize_pipeline_results(result, tessellation, config, target_params, conf
             for j, face in enumerate(tessellation.faces):
                 for k, v_idx in enumerate(face.vertex_indices):
                     new_verts[v_idx] = verts_rec[j, k]
-            state_history.append(new_verts)
+            
+            interp_frames = interpolate_states(v_prev, new_verts, 5)
+            state_history.extend(interp_frames[1:])
+            v_prev = new_verts
             
         if config.visualization.save_outputs and run_dir:
             ani_path = os.path.join(run_dir, "animation.gif")

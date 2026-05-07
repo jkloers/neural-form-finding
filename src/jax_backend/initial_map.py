@@ -87,24 +87,36 @@ def map_asymmetric_roots(p_restricted, params, context):
         # Fallback par défaut
         tx, ty, theta, s_val = 0.0, 0.0, 0.0, 1.0
         roots_flat = jnp.array([10.0, 0.0])
+        weights = jnp.array([1.0])
     elif isinstance(params, dict):
         tx = params.get('tx', 0.0)
         ty = params.get('ty', 0.0)
         theta = params.get('theta', 0.0)
         s_val = params.get('s_val', 1.0)
         roots_flat = params.get('roots', jnp.array([10.0, 0.0]))
+        weights = params.get('weights', jnp.ones(roots_flat.shape[0] // 2))
     else:
         tx, ty, theta, s_val = params[0], params[1], params[2], params[3]
-        roots_flat = params[4:]
+        rem = params.shape[0] - 4
+        if rem % 3 == 0:
+            n_roots = rem // 3
+            roots_flat = params[4 : 4 + 2 * n_roots]
+            weights = params[4 + 2 * n_roots : ]
+        else:
+            n_roots = rem // 2
+            roots_flat = params[4:]
+            weights = jnp.ones(n_roots)
+            
     roots = roots_flat[0::2] + 1j * roots_flat[1::2]
     
-    # 3. Construction des coefficients du polynôme dérivé f'(z) = prod(1 - z/r_i)
+    # 3. Construction des coefficients du polynôme dérivé f'(z) = prod(1 - w_i * z / r_i)
     # Note: JAX déroulera (unroll) cette boucle lors du JIT car la taille de 'roots' 
     # est fixée statiquement par la taille de l'array passé en entrée.
     coeffs = jnp.array([1.0 + 0j])
     for i in range(roots.shape[0]):
         shifted = jnp.pad(coeffs, (1, 0))
-        coeffs = jnp.pad(coeffs, (0, 1)) - (1.0 / roots[i]) * shifted
+        # Topologically safe fixed-capacity soft masking
+        coeffs = jnp.pad(coeffs, (0, 1)) - (weights[i] / roots[i]) * shifted
         
     # 4. Intégration analytique exacte : a_k z^k -> (a_k / (k+1)) z^{k+1}
     k = jnp.arange(1, len(coeffs) + 1)
