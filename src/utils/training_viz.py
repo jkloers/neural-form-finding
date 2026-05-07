@@ -10,9 +10,15 @@ def plot_training_loss(history_loss, save_dir="data/outputs/runs/plots", show=Tr
     
     epochs = range(len(history_loss))
     total_loss = [h['total'] for h in history_loss]
-    chamfer_loss = [h['chamfer'] for h in history_loss]
+    chamfer_total = [h.get('chamfer_total', h.get('chamfer', 0)) for h in history_loss]
     energy_loss = [h['energy'] for h in history_loss]
     
+    # Check for decomposition
+    has_decomp = 'chamfer_precision' in history_loss[0]
+    if has_decomp:
+        chamfer_prec = [h['chamfer_precision'] for h in history_loss]
+        chamfer_cov = [h['chamfer_coverage'] for h in history_loss]
+
     # Aesthetic styling for scientific papers (White background)
     plt.style.use('default')
     fig, ax = plt.subplots(figsize=(10, 6))
@@ -21,13 +27,22 @@ def plot_training_loss(history_loss, save_dir="data/outputs/runs/plots", show=Tr
     color_total = '#333333'     # Dark gray
     color_geom = '#F58025'      # Princeton Orange
     color_phys = '#009900'      # Readable Green
+    color_prec = '#FFD700'      # Gold for Precision
+    color_cov = '#457B9D'       # Blue for Coverage
     
     ax.plot(epochs, total_loss, linestyle='-', linewidth=3, color=color_total, 
             label='Total Loss', alpha=0.9)
-    ax.plot(epochs, chamfer_loss, linestyle='--', linewidth=2.5, color=color_geom, 
-            label='Geometric (Chamfer)', alpha=0.9)
-    ax.plot(epochs, energy_loss, linestyle=':', linewidth=2.5, color=color_phys, 
-            label='Physical (Energy Penalty)', alpha=0.9)
+    ax.plot(epochs, chamfer_total, linestyle='--', linewidth=2.5, color=color_geom, 
+            label='Geometric (Total Chamfer)', alpha=0.9)
+    
+    if has_decomp:
+        ax.plot(epochs, chamfer_prec, linestyle=':', linewidth=1.5, color=color_prec, 
+                label='Precision Component', alpha=0.7)
+        ax.plot(epochs, chamfer_cov, linestyle=':', linewidth=1.5, color=color_cov, 
+                label='Coverage Component', alpha=0.7)
+        
+    ax.plot(epochs, energy_loss, linestyle='-', linewidth=2.0, color=color_phys, 
+            label='Physical (Energy Penalty)', alpha=0.8)
     
     # Modern grid and labels
     ax.set_title("End-to-End Optimization Loss", fontsize=16, fontweight='bold', color='black', pad=20)

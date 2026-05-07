@@ -31,8 +31,16 @@ def map_homothetic(p_restricted, params, context):
     return context['center'] + offset
 
 def map_conformal_polynomial(p_restricted, params, context):
-    normalized_p = (p_restricted - context['box_center']) / context['max_half_size']
-    z = normalized_p[0] + 1j * normalized_p[1]
+    # 1. Map square to unit disk (Shirley-Chiu mapping)
+    # This ensures the domain is contained within the target circle.
+    h_sizes = jnp.where(context['half_sizes'] == 0.0, 1.0, context['half_sizes'])
+    normalized = (p_restricted - context['box_center']) / h_sizes
+    u, v = normalized[0], normalized[1]
+    
+    x_disk = u * jnp.sqrt(jnp.maximum(0.0, 1.0 - (v ** 2) / 2.0))
+    y_disk = v * jnp.sqrt(jnp.maximum(0.0, 1.0 - (u ** 2) / 2.0))
+    
+    z = x_disk + 1j * y_disk
     # Support both dictionary (new) and array (legacy) map_params
     if isinstance(params, dict):
         tx = params.get('tx', 0.0)

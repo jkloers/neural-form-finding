@@ -66,6 +66,6 @@ def train_pipeline(initial_map_params, initial_state, target_cfg: TargetConfig,
         history_loss.append(aux)
         
         if epoch % 5 == 0 or epoch == training_cfg.num_epochs - 1:
-            print(f"Epoch {epoch:03d} | Total Loss: {aux['total']:.6f} | Chamfer: {aux['chamfer']:.6f} | Energy: {aux['energy']:.6f}")
+            print(f"Epoch {epoch:03d} | Total Loss: {aux['total']:.6f} | Chamfer: {aux['chamfer_total']:.6f} | Energy: {aux['energy']:.6f}")
             
     return current_params, history_loss

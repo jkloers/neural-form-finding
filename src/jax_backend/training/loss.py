@@ -69,12 +69,19 @@ def evaluate_physical_loss(solution, valid_state, target_cfg: TargetConfig, trai
     # Compute pairwise squared distances: (N_boundary, M_target)
     dist_matrix = jnp.sum((geometric_positions[:, None, :] - target_cloud[None, :, :])**2, axis=-1)
     
-    # Bidirectional Chamfer distance was forcing the structure to scale up 
-    # to cover the ENTIRE circle. We only want the structure to lie ON the circle.
-    # 1. Distance from each boundary point to the closest target point
+    # 1. Distance from each boundary point to the closest target point (Precision)
     min_to_target = jnp.min(dist_matrix, axis=1)
+    precision_loss = jnp.mean(min_to_target)
     
-    chamfer_loss = jnp.mean(min_to_target)
+    # 2. Distance from each target point to the closest boundary point (Coverage)
+    # This prevents the "collapse to a single point" issue. All target points 
+    # want to be satisfied (i.e. have a structure point close to them).
+    min_to_structure = jnp.min(dist_matrix, axis=0)
+    coverage_loss = jnp.mean(min_to_structure)
+    
+    # Combine them. We allow tuning the coverage weight in the config.
+    coverage_weight = training_cfg.loss_weights.get("coverage", 1.0)
+    chamfer_loss = precision_loss + coverage_weight * coverage_loss
     
     # 3. Add Physical Energy Penalty
     # We want to minimize the internal strain energy (stretch + shear + rot + contact)
@@ -96,7 +103,9 @@ def evaluate_physical_loss(solution, valid_state, target_cfg: TargetConfig, trai
     loss = (weight_geometric * chamfer_loss) + energy_loss
     
     loss_components = {
-        'chamfer': chamfer_loss,
+        'chamfer_precision': precision_loss,
+        'chamfer_coverage': coverage_loss,
+        'chamfer_total': chamfer_loss,
         'energy': energy_loss
     }
     
