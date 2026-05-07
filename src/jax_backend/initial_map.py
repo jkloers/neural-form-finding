@@ -63,8 +63,16 @@ def map_conformal_polynomial(p_restricted, params, context):
         w = w + c_val[k] * (z ** power)
         
     w = s_val * w * jnp.exp(1j * theta)
-    x_new = jnp.real(w) * context['radius'] + context['center'][0] + tx
-    y_new = jnp.imag(w) * context['radius'] + context['center'][1] + ty
+    
+    w_angle = jnp.angle(w)
+    target_rad = jnp.where(
+        jnp.max(context['b_radii']) > 0.0,
+        jnp.interp(w_angle, context['b_angles'], context['b_radii']),
+        context['radius']
+    )
+    
+    x_new = jnp.real(w) * target_rad + context['center'][0] + tx
+    y_new = jnp.imag(w) * target_rad + context['center'][1] + ty
     return jnp.array([x_new, y_new])
 
 def map_asymmetric_roots(p_restricted, params, context):
@@ -130,8 +138,17 @@ def map_asymmetric_roots(p_restricted, params, context):
     # On maintient le blocage temporaire de la rotation
     theta = 0.0 
     w = s_val * w * jnp.exp(1j * theta)
-    x_new = jnp.real(w) * context['radius'] + context['center'][0] + tx
-    y_new = jnp.imag(w) * context['radius'] + context['center'][1] + ty
+    
+    # Adaptation radiale au contour cible (ex: convex_heart)
+    w_angle = jnp.angle(w)
+    target_rad = jnp.where(
+        jnp.max(context['b_radii']) > 0.0,
+        jnp.interp(w_angle, context['b_angles'], context['b_radii']),
+        context['radius']
+    )
+    
+    x_new = jnp.real(w) * target_rad + context['center'][0] + tx
+    y_new = jnp.imag(w) * target_rad + context['center'][1] + ty
     
     return jnp.array([x_new, y_new])
 

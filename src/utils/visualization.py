@@ -2,7 +2,7 @@ from topology.core import Tessellation
 import numpy as np
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
-from matplotlib.patches import Polygon
+from matplotlib.patches import Polygon, FancyArrowPatch
 import matplotlib.animation as animation
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
@@ -153,10 +153,22 @@ def plot_tessellation(tessellation, ax=None,
                              
                 # Draw moment
                 if moment != 0:
-                    symbol = "↺" if moment > 0 else "↻"
-                    # Add text to indicate moment, offset slightly above
-                    ax.text(centroid[0], centroid[1] + 0.1, symbol, color="#D62828", 
-                            fontsize=18, ha='center', va='center', weight='bold', zorder=30)
+                    r = 0.08
+                    if moment > 0:
+                        # Sens anti-horaire (Counter-clockwise)
+                        start = (centroid[0] + r, centroid[1] - r/2)
+                        end = (centroid[0] - r/2, centroid[1] + r)
+                        rad = 0.6
+                    else:
+                        # Sens horaire (Clockwise)
+                        start = (centroid[0] - r, centroid[1] - r/2)
+                        end = (centroid[0] + r/2, centroid[1] + r)
+                        rad = -0.6
+                        
+                    arrow = FancyArrowPatch(start, end, connectionstyle=f"arc3,rad={rad}", 
+                                            color="#D62828", arrowstyle="Simple, tail_width=1.5, head_width=6, head_length=8",
+                                            zorder=30)
+                    ax.add_patch(arrow)
 
     # 4. Target Shape (Cloud representation)
     if show_target:
