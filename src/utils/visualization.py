@@ -202,6 +202,10 @@ def animate_tessellation(tessellation, state_history, filepath="closing_animatio
     if not state_history:
         print("Warning: state_history is empty, cannot animate.")
         return
+    
+    if filepath is None:
+        print("No filepath provided, skipping animation generation.")
+        return
 
     plt.style.use('default')
     fig, ax = plt.subplots(figsize=(10, 10), facecolor='#FFFFFF')

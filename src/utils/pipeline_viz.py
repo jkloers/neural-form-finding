@@ -7,8 +7,8 @@ import jax.numpy as jnp
 from jax import vmap
 
 from jax_backend.physics_solver.kinematics import rotation_matrix
-from jax_backend.geometry import reconstruct_vertices
-from src.utils.visualization import plot_tessellation, animate_tessellation
+from jax_backend.geometry import reconstruct_vertices, compute_face_areas
+from src.utils.visualization import plot_tessellation, animate_tessellation, plot_tessellation_differences
 
 def visualize_pipeline_results(result, tessellation, config, target_params, config_name, run_dir=None):
     """
@@ -60,10 +60,51 @@ def visualize_pipeline_results(result, tessellation, config, target_params, conf
         map_params = result.get('map_params', None)
         plot_stage(result['mapped_state'], "Stage 0: Initial Mapping", mapping_fn=mapping_fn, map_params=map_params)
 
-    # Stage 1
+    # Stage 1 — Geometric Validity (with Deformation Heatmap)
     if config.visualization.stage1:
-        print("Displaying Stage 1: Geometric Validity...")
-        plot_stage(result['valid_state'], "Stage 1: Geometric Validity")
+        print("Displaying Stage 1: Geometric Validity (Deformation Map)...")
+        
+        # Calculate area deformation relative to Stage 0
+        area0 = compute_face_areas(result['mapped_state'].centroid_node_vectors)
+        area1 = compute_face_areas(result['valid_state'].centroid_node_vectors)
+        
+        # Percentage area change
+        area_diff = ((area1 - area0) / area0) * 100.0
+        
+        # Update tessellation vertices for plotting
+        verts_rec = reconstruct_vertices(result['valid_state'].face_centroids, result['valid_state'].centroid_node_vectors)
+        tess_copy = copy.deepcopy(tessellation)
+        new_verts = np.zeros_like(tess_copy.vertices)
+        for i, face in enumerate(tess_copy.faces):
+            for j, v_idx in enumerate(face.vertex_indices):
+                new_verts[v_idx] = verts_rec[i, j]
+        tess_copy.update_vertices(new_verts)
+        
+        fig, ax = plt.subplots(figsize=(8, 8))
+        plot_kwargs = {
+            'show_target': True,
+            'target_params': target_params,
+            'show_hinges': config.visualization.show_hinges,
+            'show_hinge_indices': config.visualization.show_hinge_indices,
+            'show_face_indices': config.visualization.show_face_indices,
+            'show_external_forces': False, # Hide forces for this view
+            'show_kinematic_blocks': config.visualization.show_kinematic_blocks,
+        }
+        
+        plot_tessellation_differences(tess_copy, area_diff, ax=ax, 
+                                      title="Stage 1: Relative Area Deformation (%)",
+                                      cmap_name='YlOrRd',
+                                      **plot_kwargs)
+        
+        if config.visualization.save_outputs and run_dir:
+            save_path = os.path.join(run_dir, "stage_1_deformation.png")
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"  Saved deformation plot to {save_path}")
+            
+        if config.visualization.show_plots:
+            plt.show()
+        else:
+            plt.close(fig)
 
     # Stage 2
     if config.visualization.stage2:

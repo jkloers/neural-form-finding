@@ -112,3 +112,26 @@ def boundary_vertex_positions(face_centroids, cnv, boundary_face_node_ids):
     fi = boundary_face_node_ids[:, 0]
     lj = boundary_face_node_ids[:, 1]
     return face_centroids[fi] + cnv[fi, lj]
+
+
+def compute_face_areas(centroid_node_vectors):
+    """Compute the area of each face using the Shoelace formula.
+    
+    Args:
+        centroid_node_vectors: (n_faces, max_nodes, 2)
+        
+    Returns:
+        (n_faces,) — area of each face
+    """
+    s = centroid_node_vectors
+    x = s[:, :, 0]
+    y = s[:, :, 1]
+    
+    # Quadrangular Shoelace formula
+    area = 0.5 * jnp.abs(
+        (x[:, 0] * y[:, 1] - x[:, 1] * y[:, 0]) +
+        (x[:, 1] * y[:, 2] - x[:, 2] * y[:, 1]) +
+        (x[:, 2] * y[:, 3] - x[:, 3] * y[:, 2]) +
+        (x[:, 3] * y[:, 0] - x[:, 0] * y[:, 3])
+    )
+    return area
