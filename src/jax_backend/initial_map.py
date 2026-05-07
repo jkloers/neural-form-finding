@@ -62,6 +62,9 @@ def map_conformal_polynomial(p_restricted, params, context):
         power = 4 * (k + 1) + 1
         w = w + c_val[k] * (z ** power)
         
+    # Temporarily disable rotation to prevent the optimizer from 'cheating'
+    # by aligning forces with the strongest axis.
+    theta = 0.0
     w = s_val * w * jnp.exp(1j * theta)
     x_new = jnp.real(w) * context['radius'] + context['center'][0] + tx
     y_new = jnp.imag(w) * context['radius'] + context['center'][1] + ty

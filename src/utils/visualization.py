@@ -230,11 +230,14 @@ def animate_tessellation(tessellation, state_history, filepath="closing_animatio
     print(f"Generating animation with {len(state_history)} frames...")
     ani = animation.FuncAnimation(fig, update, frames=len(state_history), blit=False)
     
-    # Use pillow for GIF, otherwise default
-    writer = 'pillow' if filepath.endswith('.gif') else None
-    ani.save(filepath, writer=writer, fps=fps)
+    if filepath is not None:
+        writer = 'pillow' if filepath.endswith('.gif') else None
+        ani.save(filepath, writer=writer, fps=fps)
+        print(f"Animation successfully saved to {filepath}")
+    else:
+        # If no filepath is provided, do nothing or display it (if in a notebook)
+        pass
     plt.close(fig)
-    print(f"Animation successfully saved to {filepath}")
 
 def plot_tessellation_differences(tessellation, diff_values, ax=None, 
                                   title="Deformation Map",

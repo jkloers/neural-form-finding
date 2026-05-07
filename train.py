@@ -96,8 +96,20 @@ if __name__ == "__main__":
         'radius': config.target.radius
     }
 
-    visualize_pipeline_results(result, tessellation, config, target_params, args.config_name + "_trained")
-    plot_training_loss(history_loss, save_dir="data/outputs/runs/plots", show=config.visualization.save_outputs)
+    import datetime
+    import shutil
+
+    run_dir = None
+    if config.visualization.save_outputs:
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_dir = f"data/outputs/runs/run_{timestamp}_{args.config_name}"
+        os.makedirs(run_dir, exist_ok=True)
+        # Copy the config file to the unified output directory
+        shutil.copy(config_path, os.path.join(run_dir, "config.yaml"))
+        print(f"\nCreated unified output directory: {run_dir}")
+
+    visualize_pipeline_results(result, tessellation, config, target_params, args.config_name + "_trained", run_dir=run_dir)
+    plot_training_loss(history_loss, save_dir=run_dir, show=config.visualization.show_plots)
 
     print("\n" + "=" * 60)
     print("Training complete. Let's all pat ourselves on the back! 💕")

@@ -10,15 +10,11 @@ from jax_backend.physics_solver.kinematics import rotation_matrix
 from jax_backend.geometry import reconstruct_vertices
 from src.utils.visualization import plot_tessellation, animate_tessellation
 
-def visualize_pipeline_results(result, tessellation, config, target_params, config_name):
+def visualize_pipeline_results(result, tessellation, config, target_params, config_name, run_dir=None):
     """
     Orchestrates the visualization of the entire pipeline, including static plots and animations.
     Controlled by the visualization settings in the config.
     """
-    output_dir = "data/outputs/runs"
-    plots_dir = os.path.join(output_dir, "plots")
-    if config.visualization.save_outputs:
-        os.makedirs(plots_dir, exist_ok=True)
 
     def plot_stage(state, title, mapping_fn=None, map_params=None):
         c = state.face_centroids
@@ -47,9 +43,9 @@ def visualize_pipeline_results(result, tessellation, config, target_params, conf
                           mapping_fn=mapping_fn, map_params=map_params, 
                           original_vertices=tessellation.vertices, **plot_kwargs)
         
-        if config.visualization.save_outputs:
+        if config.visualization.save_outputs and run_dir:
             filename = title.lower().replace(" ", "_").replace(":", "") + ".png"
-            save_path = os.path.join(plots_dir, filename)
+            save_path = os.path.join(run_dir, filename)
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
             print(f"  Saved plot to {save_path}")
         if config.visualization.show_plots:
@@ -102,9 +98,10 @@ def visualize_pipeline_results(result, tessellation, config, target_params, conf
                     new_verts[v_idx] = verts_rec[j, k]
             state_history.append(new_verts)
             
-        ani_dir = "data/outputs/animations"
-        os.makedirs(ani_dir, exist_ok=True)
-        ani_path = os.path.join(ani_dir, f"{config_name}_incremental.gif")
+        if config.visualization.save_outputs and run_dir:
+            ani_path = os.path.join(run_dir, "animation.gif")
+        else:
+            ani_path = None
         
         plot_kwargs = {
             'show_target': True,
@@ -117,6 +114,8 @@ def visualize_pipeline_results(result, tessellation, config, target_params, conf
         }
         fps = max(5, config.physics.num_load_steps // 3)
         animate_tessellation(tessellation, state_history, filepath=ani_path, fps=fps, **plot_kwargs)
+        if ani_path:
+            print(f"  Saved animation to {ani_path}")
 
     # Energy Plot
     if config.visualization.energy_plot and result.get('solution') and getattr(result['solution'], 'energies', None) is not None:
@@ -175,8 +174,8 @@ def visualize_pipeline_results(result, tessellation, config, target_params, conf
         for text in legend.get_texts():
             text.set_color("black")
         
-        if config.visualization.save_outputs:
-            save_path = os.path.join(plots_dir, "energy_plot.png")
+        if config.visualization.save_outputs and run_dir:
+            save_path = os.path.join(run_dir, "energy_plot.png")
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
             print(f"  Saved energy plot to {save_path}")
             
