@@ -12,30 +12,42 @@ The interface is: CentroidalState → CentroidalState, pure JAX, differentiable.
 """
 import jax
 import jax.numpy as jnp
+from typing import Callable, Any
 from jax_backend.state import CentroidalState
 from jax_backend.geometry import reconstruct_vertices
 from problem.targets import get_target_points
 
-def map_elliptical_grip(p, box_center, half_sizes, center, radius, scale_factor):
-    h_sizes = jnp.where(half_sizes == 0.0, 1.0, half_sizes)
-    normalized = (p - box_center) / h_sizes
+def map_elliptical_grip(p_restricted, params, context):
+    h_sizes = jnp.where(context['half_sizes'] == 0.0, 1.0, context['half_sizes'])
+    normalized = (p_restricted - context['box_center']) / h_sizes
     u, v = normalized[0], normalized[1]
     x_disk = u * jnp.sqrt(jnp.maximum(0.0, 1.0 - (v ** 2) / 2.0))
     y_disk = v * jnp.sqrt(jnp.maximum(0.0, 1.0 - (u ** 2) / 2.0))
-    mapped = jnp.array([x_disk, y_disk]) * radius + center
-    return center + (mapped - center) * scale_factor
+    mapped = jnp.array([x_disk, y_disk]) * context['radius'] + context['center']
+    return mapped
 
-def map_conformal_polynomial(p, box_center, half_size, domain_restriction, map_params, center, radius, scale_factor):
-    normalized_p = (p - box_center) / half_size
-    z = (normalized_p[0] + 1j * normalized_p[1]) * domain_restriction
-    
-    if map_params is None or map_params.shape[0] < 4:
-        prms = jnp.concatenate([jnp.array([0.0, 0.0, 0.0, 1.0]), jnp.zeros(1)])
+def map_homothetic(p_restricted, params, context):
+    offset = p_restricted - context['box_center']
+    return context['center'] + offset
+
+def map_conformal_polynomial(p_restricted, params, context):
+    normalized_p = (p_restricted - context['box_center']) / context['max_half_size']
+    z = normalized_p[0] + 1j * normalized_p[1]
+    # Support both dictionary (new) and array (legacy) map_params
+    if isinstance(params, dict):
+        tx = params.get('tx', 0.0)
+        ty = params.get('ty', 0.0)
+        theta = params.get('theta', 0.0)
+        s_val = params.get('s_val', 1.0)
+        c_val = params.get('c_val', jnp.zeros(1))
     else:
-        prms = map_params
-    
-    tx, ty, theta, s_val = prms[0], prms[1], prms[2], prms[3]
-    c_val = prms[4:]
+        # Fallback to legacy array format
+        if params is None or params.shape[0] < 4:
+            prms = jnp.concatenate([jnp.array([0.0, 0.0, 0.0, 1.0]), jnp.zeros(1)])
+        else:
+            prms = params
+        tx, ty, theta, s_val = prms[0], prms[1], prms[2], prms[3]
+        c_val = prms[4:]
     
     w = z
     for k in range(c_val.shape[0]):
@@ -43,47 +55,44 @@ def map_conformal_polynomial(p, box_center, half_size, domain_restriction, map_p
         w = w + c_val[k] * (z ** power)
         
     w = s_val * w * jnp.exp(1j * theta)
-    x_new = jnp.real(w) * radius + center[0] + tx
-    y_new = jnp.imag(w) * radius + center[1] + ty
-    mapped = jnp.array([x_new, y_new])
-    return center + (mapped - center) * scale_factor
+    x_new = jnp.real(w) * context['radius'] + context['center'][0] + tx
+    y_new = jnp.imag(w) * context['radius'] + context['center'][1] + ty
+    return jnp.array([x_new, y_new])
 
-def map_boundary_projection(p, box_center, half_sizes, shape_center, b_angles, b_radii, scale_factor):
-    offset = p - box_center
+def map_boundary_projection(p_restricted, params, context):
+    offset = p_restricted - context['box_center']
     p_angle = jnp.arctan2(offset[1], offset[0])
     p_norm = jnp.linalg.norm(offset)
     
-    w_box = half_sizes[0]
-    h_box = half_sizes[1]
+    w_box = context['half_sizes'][0]
+    h_box = context['half_sizes'][1]
     norm_max_tess = 1.0 / jnp.maximum(
         jnp.abs(jnp.cos(p_angle)) / w_box,
         jnp.abs(jnp.sin(p_angle)) / h_box)
         
-    target_boundary_radius = jnp.interp(p_angle, b_angles, b_radii)
+    target_boundary_radius = jnp.interp(p_angle, context['b_angles'], context['b_radii'])
     scale_rad = jnp.where(p_norm > 0, target_boundary_radius / norm_max_tess, 0.0)
     
-    mapped = shape_center + offset * scale_rad
-    return shape_center + (mapped - shape_center) * scale_factor
+    mapped = context['shape_center'] + offset * scale_rad
+    return mapped
 
-def apply_initial_map(
+def build_mapping_fn(
         state: CentroidalState,
         target_params: dict,
         map_type: str = 'elliptical_grip',
         scale_factor: float = 1.0,
-        map_params: jnp.ndarray = None,
-        domain_restriction: float = 0.8) -> CentroidalState:
-    """Apply an initial mapping to a CentroidalState using Rigid-Face generalized mapping.
+        domain_restriction: float = 0.8) -> Callable:
+    """Factory function to build a pure JAX mapping function.
 
     Args:
         state: CentroidalState with flat tessellation geometry.
         target_params: dict with 'type', 'center', 'radius'
         map_type: 'elliptical_grip', 'boundary_projection' or 'conformal_polynomial'.
         scale_factor: scaling applied after mapping.
-        map_params: parameters for the parameterized map (e.g. polynomial coefficients).
         domain_restriction: limits evaluation to a fraction of the domain to avoid singularities.
 
     Returns:
-        CentroidalState with updated (face_centroids, centroid_node_vectors).
+        mapping_fn: A callable `f(p, map_params)` that maps R^2 -> R^2.
     """
     c = state.face_centroids
     s = state.centroid_node_vectors
@@ -97,7 +106,7 @@ def apply_initial_map(
     max_xy = jnp.max(vertices_flat, axis=0)
     box_center = (min_xy + max_xy) / 2.0
     half_sizes = (max_xy - min_xy) / 2.0
-    half_size = jnp.maximum(jnp.max(half_sizes), 1e-6)
+    max_half_size = jnp.maximum(jnp.max(half_sizes), 1e-6)
 
     shape_type = target_params.get('type', 'circle')
     center = jnp.asarray(target_params.get('center', [0.0, 0.0]), dtype=float)
@@ -121,36 +130,79 @@ def apply_initial_map(
         b_angles = jnp.zeros(3)
         b_radii = jnp.zeros(3)
 
-    # 2. Define the generic point mapping function f: R^2 -> R^2
-    def f_point(p):
-        if map_type == 'elliptical_grip' and shape_type == 'circle':
-            return map_elliptical_grip(p, box_center, half_sizes, center, radius, scale_factor)
-            
-        elif map_type == 'conformal_polynomial' and shape_type == 'circle':
-            return map_conformal_polynomial(p, box_center, half_size, domain_restriction, map_params, center, radius, scale_factor)
-            
-        elif map_type == 'boundary_projection' or shape_type != 'circle':
-            return map_boundary_projection(p, box_center, half_sizes, shape_center, b_angles, b_radii, scale_factor)
-            
-        else:
-            return p * scale_factor
+    # 2. Context dictionary passed to pure maps
+    context = {
+        'box_center': box_center,
+        'half_sizes': half_sizes,
+        'max_half_size': max_half_size,
+        'center': center,
+        'radius': radius,
+        'b_angles': b_angles,
+        'b_radii': b_radii,
+        'shape_center': shape_center
+    }
 
-    # 3. Compute Jacobian matrix function using JAX
+    # 3. Select the core mapping function
+    if map_type == 'elliptical_grip':
+        core_map = map_elliptical_grip
+    elif map_type == 'conformal_polynomial':
+        core_map = map_conformal_polynomial
+    elif map_type == 'boundary_projection':
+        core_map = map_boundary_projection
+    elif map_type == 'homothetic':
+        core_map = map_homothetic
+    else:
+        print(f"WARNING: Unknown map_type '{map_type}'. Falling back to Identity mapping.")
+        core_map = lambda p, params, ctx: p
+
+    # 4. Create the generic wrapper
+    def mapping_fn(p, map_params=None):
+        if map_params is None:
+            map_params = {}
+            
+        # Universal Pre-processing: Domain restriction
+        p_restricted = context['box_center'] + (p - context['box_center']) * domain_restriction
+        
+        # Apply the chosen mathematical core
+        mapped_p = core_map(p_restricted, map_params, context)
+        
+        # Universal Post-processing: Rescale global around target center
+        return context['center'] + (mapped_p - context['center']) * scale_factor
+
+    return mapping_fn
+
+def apply_mapping(
+        state: CentroidalState, 
+        mapping_fn: Callable, 
+        map_params: Any = None) -> CentroidalState:
+    """Apply a generic mapping function to a CentroidalState using Rigid-Face generalized mapping.
+    
+    Args:
+        state: CentroidalState with flat tessellation geometry.
+        mapping_fn: callable f(p, params) that maps a point R^2 -> R^2.
+        map_params: parameters for the parameterized map (e.g. polynomial coefficients).
+        
+    Returns:
+        CentroidalState with updated (face_centroids, centroid_node_vectors).
+    """
+    c = state.face_centroids
+    s = state.centroid_node_vectors
+    
+    # 1. Bind parameters to create a function purely of p
+    f_point = lambda p: mapping_fn(p, map_params)
+
+    # 2. Compute Jacobian matrix function using JAX
     jac_f = jax.jacfwd(f_point)
     
-    # 4. Vectorize across all centroids
+    # 3. Vectorize across all centroids
     f_vmap = jax.vmap(f_point)
     jac_vmap = jax.vmap(jac_f)
     
-    # 5. Map centroids
+    # 4. Map centroids
     c_new = f_vmap(c)
     
-    # 6. Transform CNVs using the Jacobian
-    # jac_matrices shape: (n_faces, 2, 2)
-    # s shape: (n_faces, max_nodes, 2)
+    # 5. Transform CNVs using the Jacobian
     jac_matrices = jac_vmap(c)
-    
-    # s_new[i, j, :] = jac_matrices[i, :, :] @ s[i, j, :]
     s_new = jnp.einsum('fab,fnb->fna', jac_matrices, s)
 
     return state._replace(

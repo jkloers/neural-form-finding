@@ -20,7 +20,7 @@ def visualize_pipeline_results(result, tessellation, config, target_params, conf
     if config.visualization.save_outputs:
         os.makedirs(plots_dir, exist_ok=True)
 
-    def plot_stage(state, title):
+    def plot_stage(state, title, mapping_fn=None, map_params=None):
         c = state.face_centroids
         s = state.centroid_node_vectors
         verts_rec = reconstruct_vertices(c, s)
@@ -43,7 +43,9 @@ def visualize_pipeline_results(result, tessellation, config, target_params, conf
             'show_kinematic_blocks': config.visualization.show_kinematic_blocks,
         }
         
-        plot_tessellation(tess_copy, ax=ax, title=title, **plot_kwargs)
+        plot_tessellation(tess_copy, ax=ax, title=title, 
+                          mapping_fn=mapping_fn, map_params=map_params, 
+                          original_vertices=tessellation.vertices, **plot_kwargs)
         
         if config.visualization.save_outputs:
             filename = title.lower().replace(" ", "_").replace(":", "") + ".png"
@@ -58,7 +60,9 @@ def visualize_pipeline_results(result, tessellation, config, target_params, conf
     # Stage 0
     if config.visualization.stage0:
         print("Displaying Stage 0: Initial Mapping...")
-        plot_stage(result['mapped_state'], "Stage 0: Initial Mapping")
+        mapping_fn = result.get('mapping_fn', None)
+        map_params = result.get('map_params', None)
+        plot_stage(result['mapped_state'], "Stage 0: Initial Mapping", mapping_fn=mapping_fn, map_params=map_params)
 
     # Stage 1
     if config.visualization.stage1:

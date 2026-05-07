@@ -103,7 +103,7 @@ def evaluate_physical_loss(solution, valid_state, target_cfg: TargetConfig, trai
     return loss, loss_components
 
 
-def compute_end_to_end_loss(map_params: jnp.ndarray, initial_state: CentroidalState, target_cfg: TargetConfig, physics_cfg: PhysicsConfig, training_cfg: TrainingConfig):
+def compute_end_to_end_loss(map_params: jnp.ndarray, initial_state: CentroidalState, target_cfg: TargetConfig, physics_cfg: PhysicsConfig, training_cfg: TrainingConfig, map_type: str = 'conformal_polynomial'):
     """Wrapper function required by JAX for gradient computation.
     
     In JAX, jax.grad needs a single function that takes parameters and 
@@ -115,7 +115,7 @@ def compute_end_to_end_loss(map_params: jnp.ndarray, initial_state: CentroidalSt
         initial_state,
         target_cfg,
         physics_cfg,
-        map_type='conformal_polynomial',
+        map_type=map_type,
         map_params=map_params,
     )
     
@@ -124,11 +124,13 @@ def compute_end_to_end_loss(map_params: jnp.ndarray, initial_state: CentroidalSt
     
     # 3. Regularization (Optional, prevents map_params from exploding)
     weight_reg = training_cfg.loss_weights.get("regularization", 1e-3)
-    reg_loss = weight_reg * jnp.sum(map_params**2)
+    
+    # map_params can be a JAX PyTree (dict or array)
+    squared_params = jax.tree_util.tree_map(lambda x: jnp.sum(x**2), map_params)
+    reg_loss = weight_reg * jax.tree_util.tree_reduce(lambda a, b: a + b, squared_params)
     
     total_loss = base_loss + reg_loss
     loss_components['reg'] = reg_loss
     loss_components['total'] = total_loss
     
-    return total_loss, loss_components
     return total_loss, loss_components

@@ -29,7 +29,7 @@ from typing import Optional
 
 from jax_backend.state import CentroidalState
 from jax_backend.geometry import reconstruct_vertices
-from jax_backend.initial_map import apply_initial_map
+from jax_backend.initial_map import build_mapping_fn, apply_mapping
 from jax_backend.validity_solver import solve_geometric_validity
 from jax_backend.physics_solver.energy import (
     build_potential_energy,
@@ -77,12 +77,16 @@ def forward_pipeline(
         'radius': target_cfg.radius
     }
 
-    mapped_state = apply_initial_map(
+    mapping_fn = build_mapping_fn(
         initial_state, target_params,
         map_type=map_type,
         scale_factor=physics_cfg.scale_factor,
-        map_params=map_params,
         domain_restriction=physics_cfg.domain_restriction,
+    )
+
+    mapped_state = apply_mapping(
+        initial_state, mapping_fn,
+        map_params=map_params,
     )
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -170,4 +174,6 @@ def forward_pipeline(
         'solution':               solution,
         'vertices_reference':     vertices_ref,
         'reference_bond_vectors': geometry.reference_bond_vectors,
+        'mapping_fn':             mapping_fn,
+        'map_params':             map_params,
     }

@@ -13,7 +13,7 @@ from jax_backend.training.loss import compute_end_to_end_loss
 
 from problem.config import TargetConfig, PhysicsConfig, TrainingConfig
 
-def create_train_step(initial_state, target_cfg: TargetConfig, physics_cfg: PhysicsConfig, training_cfg: TrainingConfig):
+def create_train_step(initial_state, target_cfg: TargetConfig, physics_cfg: PhysicsConfig, training_cfg: TrainingConfig, map_type: str = 'conformal_polynomial'):
     """Creates a compiled training step for optimizing map_params.
     
     Args:
@@ -32,7 +32,7 @@ def create_train_step(initial_state, target_cfg: TargetConfig, physics_cfg: Phys
     # The loss function closed over the constants
     def loss_fn(map_params):
         return compute_end_to_end_loss(
-            map_params, initial_state, target_cfg, physics_cfg, training_cfg
+            map_params, initial_state, target_cfg, physics_cfg, training_cfg, map_type=map_type
         )
         
     @jax.jit
@@ -49,11 +49,11 @@ def create_train_step(initial_state, target_cfg: TargetConfig, physics_cfg: Phys
     return optimizer, train_step
 
 def train_pipeline(initial_map_params, initial_state, target_cfg: TargetConfig, 
-                   physics_cfg: PhysicsConfig, training_cfg: TrainingConfig):
+                   physics_cfg: PhysicsConfig, training_cfg: TrainingConfig, map_type: str = 'conformal_polynomial'):
     """Run the training loop to find optimal mapping parameters."""
     
     optimizer, train_step = create_train_step(
-        initial_state, target_cfg, physics_cfg, training_cfg
+        initial_state, target_cfg, physics_cfg, training_cfg, map_type
     )
     
     opt_state = optimizer.init(initial_map_params)

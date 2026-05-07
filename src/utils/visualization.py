@@ -20,7 +20,10 @@ def plot_tessellation(tessellation, ax=None,
                       target_params=None,
                       show_border_edges=False,
                       title=None,
-                      color_faces='#F58025'):
+                      color_faces='#F58025',
+                      mapping_fn=None,
+                      map_params=None,
+                      original_vertices=None):
     """
     Plots the tessellation with configurable visibility for topological elements.
     """
@@ -28,6 +31,37 @@ def plot_tessellation(tessellation, ax=None,
         plt.style.use('default')
         fig, ax = plt.subplots(figsize=(10, 10), facecolor='#FFFFFF')
         ax.set_facecolor('#FFFFFF')
+
+    # 0. Transformation Grid (if mapping_fn is provided)
+    if mapping_fn is not None and original_vertices is not None:
+        import jax.numpy as jnp
+        import jax
+        
+        min_xy = np.min(original_vertices, axis=0)
+        max_xy = np.max(original_vertices, axis=0)
+        
+        num_lines = 25
+        pts_per_line = 100
+        x_starts = np.linspace(min_xy[0], max_xy[0], num_lines)
+        y_starts = np.linspace(min_xy[1], max_xy[1], num_lines)
+        
+        y_range = jnp.linspace(min_xy[1], max_xy[1], pts_per_line)
+        x_range = jnp.linspace(min_xy[0], max_xy[0], pts_per_line)
+        
+        f_point = lambda p: mapping_fn(p, map_params)
+        f_vmap = jax.vmap(f_point)
+        
+        # Vertical lines
+        for x in x_starts:
+            pts = jnp.column_stack([jnp.full(pts_per_line, x), y_range])
+            mapped_pts = f_vmap(pts)
+            ax.plot(mapped_pts[:, 0], mapped_pts[:, 1], color='#457B9D', alpha=0.4, linewidth=1.0, zorder=6)
+            
+        # Horizontal lines
+        for y in y_starts:
+            pts = jnp.column_stack([x_range, jnp.full(pts_per_line, y)])
+            mapped_pts = f_vmap(pts)
+            ax.plot(mapped_pts[:, 0], mapped_pts[:, 1], color='#457B9D', alpha=0.4, linewidth=1.0, zorder=6)
 
     # 1. Dessin des Faces
     if show_faces:

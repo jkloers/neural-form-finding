@@ -55,18 +55,25 @@ if __name__ == "__main__":
     initial_state = CentroidalState.from_tessellation(tessellation)
 
     # ── Training ──────────────────────────────────────────────────────────────
-    initial_map_params = jnp.array(topo.get('map_params', []))
+    raw_params = topo.get('map_params', [])
+    if isinstance(raw_params, dict):
+        initial_map_params = {k: jnp.array(v, dtype=float) for k, v in raw_params.items()}
+    else:
+        initial_map_params = jnp.array(raw_params, dtype=float)
 
     print("\n" + "=" * 60)
     print("STARTING END-TO-END TRAINING")
     print("=" * 60)
+
+    map_type = topo.get('map_type', 'conformal_polynomial')
 
     optimized_params, history_loss = train_pipeline(
         initial_map_params,
         initial_state,
         config.target,
         config.physics,
-        config.training
+        config.training,
+        map_type=map_type
     )
 
     print(f"\nOptimization complete. Optimal params: {optimized_params}")
@@ -78,7 +85,7 @@ if __name__ == "__main__":
         initial_state,
         config.target,
         config.physics,
-        map_type='conformal_polynomial',
+        map_type=map_type,
         map_params=optimized_params,
     )
 
