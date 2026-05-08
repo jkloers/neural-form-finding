@@ -33,12 +33,15 @@ def map_homothetic(p_restricted, params, context):
 def map_conformal_polynomial(p_restricted, params, context):
     # 1. Map square to unit disk (Shirley-Chiu mapping)
     # This ensures the domain is contained within the target circle.
+    # Support both dictionary (new) and array (legacy) map_params
+    use_shirley_chiu = context.get('use_shirley_chiu', True)
+    
     h_sizes = jnp.where(context['half_sizes'] == 0.0, 1.0, context['half_sizes'])
     normalized = (p_restricted - context['box_center']) / h_sizes
     u, v = normalized[0], normalized[1]
     
-    x_disk = u * jnp.sqrt(jnp.maximum(0.0, 1.0 - (v ** 2) / 2.0))
-    y_disk = v * jnp.sqrt(jnp.maximum(0.0, 1.0 - (u ** 2) / 2.0))
+    x_disk = jnp.where(use_shirley_chiu, u * jnp.sqrt(jnp.maximum(0.0, 1.0 - (v ** 2) / 2.0)), u)
+    y_disk = jnp.where(use_shirley_chiu, v * jnp.sqrt(jnp.maximum(0.0, 1.0 - (u ** 2) / 2.0)), v)
     
     z = x_disk + 1j * y_disk
     # Support both dictionary (new) and array (legacy) map_params
@@ -81,12 +84,14 @@ def map_asymmetric_roots(p_restricted, params, context):
     paramatisé par les racines complexes de la dérivée spatiale.
     """
     # 1. Projection de Shirley-Chiu (Carré -> Disque unité)
+    use_shirley_chiu = context.get('use_shirley_chiu', True)
+    
     h_sizes = jnp.where(context['half_sizes'] == 0.0, 1.0, context['half_sizes'])
     normalized = (p_restricted - context['box_center']) / h_sizes
     u, v = normalized[0], normalized[1]
     
-    x_disk = u * jnp.sqrt(jnp.maximum(0.0, 1.0 - (v ** 2) / 2.0))
-    y_disk = v * jnp.sqrt(jnp.maximum(0.0, 1.0 - (u ** 2) / 2.0))
+    x_disk = jnp.where(use_shirley_chiu, u * jnp.sqrt(jnp.maximum(0.0, 1.0 - (v ** 2) / 2.0)), u)
+    y_disk = jnp.where(use_shirley_chiu, v * jnp.sqrt(jnp.maximum(0.0, 1.0 - (u ** 2) / 2.0)), v)
     
     z = x_disk + 1j * y_disk
     
@@ -174,7 +179,8 @@ def build_mapping_fn(
         target_params: dict,
         map_type: str = 'elliptical_grip',
         scale_factor: float = 1.0,
-        domain_restriction: float = 0.8) -> Callable:
+        domain_restriction: float = 0.8,
+        use_shirley_chiu: bool = True) -> Callable:
     """Factory function to build a pure JAX mapping function.
 
     Args:
@@ -232,23 +238,24 @@ def build_mapping_fn(
         'radius': radius,
         'b_angles': b_angles,
         'b_radii': b_radii,
-        'shape_center': shape_center
+        'shape_center': shape_center,
+        'use_shirley_chiu': use_shirley_chiu
     }
 
     # 3. Select the core mapping function
     if map_type == 'elliptical_grip':
-        core_map = map_elliptical_grip
+        core_map_fn = map_elliptical_grip
     elif map_type == 'conformal_polynomial':
-        core_map = map_conformal_polynomial
+        core_map_fn = map_conformal_polynomial
     elif map_type == 'asymmetric_roots':
-        core_map = map_asymmetric_roots
+        core_map_fn = map_asymmetric_roots
     elif map_type == 'boundary_projection':
-        core_map = map_boundary_projection
+        core_map_fn = map_boundary_projection
     elif map_type == 'homothetic':
-        core_map = map_homothetic
+        core_map_fn = map_homothetic
     else:
         print(f"WARNING: Unknown map_type '{map_type}'. Falling back to Identity mapping.")
-        core_map = lambda p, params, ctx: p
+        core_map_fn = lambda p, params, ctx: p
 
     # 4. Create the generic wrapper
     def mapping_fn(p, map_params=None):
@@ -259,7 +266,7 @@ def build_mapping_fn(
         p_restricted = context['box_center'] + (p - context['box_center']) * domain_restriction
         
         # Apply the chosen mathematical core
-        mapped_p = core_map(p_restricted, map_params, context)
+        mapped_p = core_map_fn(p_restricted, map_params, context)
         
         # Universal Post-processing: Rescale global around target center
         return context['center'] + (mapped_p - context['center']) * scale_factor
@@ -284,20 +291,20 @@ def apply_mapping(
     s = state.centroid_node_vectors
     
     # 1. Bind parameters to create a function purely of p
-    f_point = lambda p: mapping_fn(p, map_params)
+    f_point_fn = lambda p: mapping_fn(p, map_params)
 
     # 2. Compute Jacobian matrix function using JAX
-    jac_f = jax.jacfwd(f_point)
+    jac_f_fn = jax.jacfwd(f_point_fn)
     
     # 3. Vectorize across all centroids
-    f_vmap = jax.vmap(f_point)
-    jac_vmap = jax.vmap(jac_f)
+    f_vmap_fn = jax.vmap(f_point_fn)
+    jac_vmap_fn = jax.vmap(jac_f_fn)
     
     # 4. Map centroids
-    c_new = f_vmap(c)
+    c_new = f_vmap_fn(c)
     
     # 5. Transform CNVs using the Jacobian
-    jac_matrices = jac_vmap(c)
+    jac_matrices = jac_vmap_fn(c)
     s_new = jnp.einsum('fab,fnb->fna', jac_matrices, s)
 
     return state._replace(

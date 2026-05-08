@@ -43,18 +43,18 @@ def setup_static_solver(
             Defaults to 0 (zero displacement = clamped).
 
     Returns:
-        Callable: solve_statics(state0, control_params) -> SolutionData.
+        Callable: solve_statics_fn(initial_displacements, control_params) -> SolutionData.
     """
 
     # Build kinematics: free_DOFs -> full displacement (n_faces, 3)
-    kinematics = build_constrained_kinematics(
+    kinematics_fn = build_constrained_kinematics(
         geometry=geometry,
         constrained_face_DOF_pairs=constrained_face_DOF_pairs,
         constrained_DOFs_fn=constrained_DOFs_fn
     )
 
     # Constrained energy: only depends on free DOFs
-    constrained_energy = constrain_energy(energy_fn, kinematics)
+    constrained_energy_fn = constrain_energy(energy_fn, kinematics_fn)
 
     # Free DOF ids
     free_DOF_ids, _ = DOFsInfo(geometry.n_faces, constrained_face_DOF_pairs)
@@ -72,22 +72,22 @@ def setup_static_solver(
 
     # Total potential energy = U_internal - W_external
     def total_potential_energy(free_DOFs: jnp.ndarray, t: float, control_params: ControlParams) -> float:
-        U_int = constrained_energy(free_DOFs, t, control_params)
+        U_int = constrained_energy_fn(free_DOFs, t, control_params)
         F_ext = _loading_fn(None, t, control_params.loading_params)
         W_ext = jnp.dot(F_ext, free_DOFs)
         return U_int - W_ext
 
-    def solve_statics(state0: jnp.ndarray, control_params: ControlParams) -> SolutionData:
+    def solve_statics_fn(initial_displacements: jnp.ndarray, control_params: ControlParams) -> SolutionData:
         """Solve for the static equilibrium.
 
         Args:
-            state0 (jnp.ndarray): Initial displacement guess, shape (n_faces, 3).
+            initial_displacements (jnp.ndarray): Initial displacement guess, shape (n_faces, 3).
             control_params (ControlParams): Geometrical + mechanical parameters.
 
         Returns:
             SolutionData: Equilibrium solution.
         """
-        initial_free = state0.reshape(-1)[free_DOF_ids]
+        initial_free = initial_displacements.reshape(-1)[free_DOF_ids]
 
         solver = LBFGS(fun=total_potential_energy)
 
@@ -105,12 +105,12 @@ def setup_static_solver(
         )
 
         # Reconstruct displacements for the entire history
-        mapped_kinematics = jax.vmap(kinematics, in_axes=(0, 0, None))
-        history_displacement = mapped_kinematics(history_free, t_array, control_params.constraint_params)
+        mapped_kinematics_fn = jax.vmap(kinematics_fn, in_axes=(0, 0, None))
+        history_displacement = mapped_kinematics_fn(history_free, t_array, control_params.constraint_params)
 
         return SolutionData(
             fields=history_displacement,
             energies=history_energy,
         )
 
-    return solve_statics
+    return solve_statics_fn

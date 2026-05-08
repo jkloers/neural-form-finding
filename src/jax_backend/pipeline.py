@@ -46,7 +46,8 @@ def forward_pipeline(
         target_cfg: TargetConfig,
         physics_cfg: PhysicsConfig,
         map_type: str = 'conformal_polynomial',
-        map_params: Optional[jnp.ndarray] = None) -> dict:
+        map_params: Optional[jnp.ndarray] = None,
+        use_shirley_chiu: bool = True) -> dict:
     """Full differentiable pipeline: initial map → geometric validity → static equilibrium.
 
     Args:
@@ -55,6 +56,7 @@ def forward_pipeline(
         physics_cfg:   Structured PhysicsConfig (material, contact, weights, solver).
         map_type:      Initial mapping type.
         map_params:    Differentiable parameters for the mapping.
+        use_shirley_chiu: Whether to apply Shirley-Chiu projection.
 
     Returns:
         dict with keys:
@@ -82,6 +84,7 @@ def forward_pipeline(
         map_type=map_type,
         scale_factor=physics_cfg.scale_factor,
         domain_restriction=physics_cfg.domain_restriction,
+        use_shirley_chiu=use_shirley_chiu
     )
 
     mapped_state = apply_mapping(
@@ -110,7 +113,7 @@ def forward_pipeline(
     # 2.2 — Energy functional construction
     # build_potential_energy composes elastic strain energy and contact energy
     # into a single callable, choosing linearized or nonlinear strains.
-    potential_energy = build_potential_energy(
+    potential_energy_fn = build_potential_energy(
         bond_connectivity=geometry.bond_connectivity,
         linearized_strains=physics_cfg.linearized_strains,
         use_contact=physics_cfg.use_contact,
@@ -123,9 +126,9 @@ def forward_pipeline(
     # 2.4 — Static solver setup
     # Wraps the L-BFGS minimizer with the constrained kinematics (Dirichlet BCs)
     # and optional incremental load stepping.
-    solve_statics = setup_static_solver(
+    solve_statics_fn = setup_static_solver(
         geometry=geometry,
-        energy_fn=potential_energy,
+        energy_fn=potential_energy_fn,
         loaded_face_DOF_pairs=valid_state.loaded_face_DOF_pairs if loading_fn else None,
         loading_fn=loading_fn,
         constrained_face_DOF_pairs=valid_state.constrained_face_DOF_pairs,
@@ -150,8 +153,8 @@ def forward_pipeline(
 
     # 2.6 — Solve for static equilibrium
     # Initial displacement guess is zero (undeformed configuration).
-    state0 = jnp.zeros((geometry.n_faces, 3), dtype=float)
-    solution = solve_statics(state0=state0, control_params=control_params)
+    initial_displacements = jnp.zeros((geometry.n_faces, 3), dtype=float)
+    solution = solve_statics_fn(state0=initial_displacements, control_params=control_params)
 
     # 2.7 — Energy history decomposition (delegated to energy module)
     # Decomposes the total energy into components (stretch, shear, rot, contact)

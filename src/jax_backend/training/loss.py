@@ -112,7 +112,7 @@ def evaluate_physical_loss(solution, valid_state, target_cfg: TargetConfig, trai
     return loss, loss_components
 
 
-def compute_end_to_end_loss(map_params: jnp.ndarray, initial_state: CentroidalState, target_cfg: TargetConfig, physics_cfg: PhysicsConfig, training_cfg: TrainingConfig, map_type: str = 'conformal_polynomial'):
+def compute_end_to_end_loss(map_params: jnp.ndarray, initial_state: CentroidalState, target_cfg: TargetConfig, physics_cfg: PhysicsConfig, training_cfg: TrainingConfig, map_type: str = 'conformal_polynomial', use_shirley_chiu: bool = True):
     """Wrapper function required by JAX for gradient computation.
     
     In JAX, jax.grad needs a single function that takes parameters and 
@@ -126,6 +126,7 @@ def compute_end_to_end_loss(map_params: jnp.ndarray, initial_state: CentroidalSt
         physics_cfg,
         map_type=map_type,
         map_params=map_params,
+        use_shirley_chiu=use_shirley_chiu
     )
     
     # 2. Evaluate Physical Objective

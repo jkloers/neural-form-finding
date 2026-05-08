@@ -8,7 +8,7 @@ import jax.numpy as jnp
 from jax import vmap
 from jax_md import smap
 
-from jax_backend.physics_solver.kinematics import face_to_node_kinematics
+from jax_backend.physics_solver.kinematics import face_to_node_kinematics_fn
 from jax_backend.physics_solver.params import ControlParams
 from jax_backend.utils.linalg import vdot, void_angles, build_void_edge_distance
 
@@ -229,7 +229,7 @@ def build_contact_energy(bond_connectivity: jnp.ndarray, angle_based=True):
         contact_params = control_params.mechanical_params.contact_params
 
         node_displacements = jnp.array(
-            face_to_node_kinematics(
+            face_to_node_kinematics_fn(
                 face_displacement,
                 centroid_node_vectors
             )
@@ -253,7 +253,7 @@ def build_strain_energy(bond_connectivity: jnp.ndarray, bond_energy_fn: Callable
     """
 
     # Build vectorized bond energy using smap.bond
-    strain_energy_bonds = strain_energy_bond(
+    strain_energy_bonds_fn = strain_energy_bond(
         bond_connectivity=bond_connectivity, bond_energy_fn=bond_energy_fn)
 
     def strain_energy_fn(face_displacement: jnp.ndarray, control_params: ControlParams) -> float:
@@ -271,14 +271,14 @@ def build_strain_energy(bond_connectivity: jnp.ndarray, bond_energy_fn: Callable
         bond_params = control_params.mechanical_params.bond_params
 
         n_faces, n_nodes_per_face, _ = centroid_node_vectors.shape
-        node_displacements = face_to_node_kinematics(
+        node_displacements = face_to_node_kinematics_fn(
             face_displacement,
             centroid_node_vectors
         )
         node_displacements = node_displacements.reshape(
             (n_faces * n_nodes_per_face, 3))
 
-        return strain_energy_bonds(node_displacements, **bond_params._asdict())
+        return strain_energy_bonds_fn(node_displacements, **bond_params._asdict())
 
     return strain_energy_fn
 
@@ -331,12 +331,12 @@ def build_potential_energy(bond_connectivity,
     return strain_energy
 
 
-def constrain_energy(energy_fn: Callable, constrained_kinematics: Callable):
-    """Defines a constrained version of `energy_fn` according to `constrained_kinematics`.
+def constrain_energy(energy_fn: Callable, constrained_kinematics_fn: Callable):
+    """Defines a constrained version of `energy_fn` according to `constrained_kinematics_fn`.
 
     Args:
         energy_fn (Callable): Energy functional to be constrained.
-        constrained_kinematics (Callable): Constraint function mapping the free DOFs and time to the displacement of all the faces. Normally, this is the output of `kineamtics.build_constrained_kinematics`.
+        constrained_kinematics_fn (Callable): Constraint function mapping the free DOFs and time to the displacement of all the faces. Normally, this is the output of `kineamtics.build_constrained_kinematics`.
 
     Returns:
         Callable: Constrained energy functional with signature (free_dofs, time, control_params) -> energy.
@@ -344,7 +344,7 @@ def constrain_energy(energy_fn: Callable, constrained_kinematics: Callable):
 
     def constrained_energy_fn(free_DOFs, t, control_params: ControlParams):
         return energy_fn(
-            constrained_kinematics(
+            constrained_kinematics_fn(
                 free_DOFs, t, control_params.constraint_params),
             control_params
         )
@@ -353,7 +353,7 @@ def constrain_energy(energy_fn: Callable, constrained_kinematics: Callable):
 
 
 def compute_ligament_strains(face_displacement, centroid_node_vectors, bond_connectivity, reference_bond_vectors):
-    node_displacements = face_to_node_kinematics(
+    node_displacements = face_to_node_kinematics_fn(
         face_displacement,
         centroid_node_vectors
     ).reshape(-1, 3)
@@ -396,7 +396,7 @@ def build_decompose_energy_fn(control_params: ControlParams, linearized_strains:
             distance_fn = build_void_edge_distance(bond_connectivity)
             
     def decompose_energy_fn(face_displacement: jnp.ndarray) -> jnp.ndarray:
-        node_displacements = face_to_node_kinematics(face_displacement, centroid_node_vectors).reshape(-1, 3)
+        node_displacements = face_to_node_kinematics_fn(face_displacement, centroid_node_vectors).reshape(-1, 3)
         DOFs1 = node_displacements[bond_connectivity[:, 0]]
         DOFs2 = node_displacements[bond_connectivity[:, 1]]
         

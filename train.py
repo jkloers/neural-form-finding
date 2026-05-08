@@ -57,7 +57,7 @@ if __name__ == "__main__":
     # ── Training ──────────────────────────────────────────────────────────────
     raw_params = topo.get('map_params', [])
     if isinstance(raw_params, dict):
-        initial_map_params = {k: jnp.array(v, dtype=float) for k, v in raw_params.items()}
+        initial_map_params = {k: v if isinstance(v, bool) else jnp.array(v, dtype=float) for k, v in raw_params.items()}
     else:
         initial_map_params = jnp.array(raw_params, dtype=float)
 
@@ -66,6 +66,7 @@ if __name__ == "__main__":
     print("=" * 60)
 
     map_type = topo.get('map_type', 'conformal_polynomial')
+    use_shirley_chiu = topo.get('use_shirley_chiu', True)
 
     optimized_params, history_loss = train_pipeline(
         initial_map_params,
@@ -73,7 +74,8 @@ if __name__ == "__main__":
         config.target,
         config.physics,
         config.training,
-        map_type=map_type
+        map_type=map_type,
+        use_shirley_chiu=use_shirley_chiu
     )
 
     print(f"\nOptimization complete. Optimal params: {optimized_params}")
@@ -87,6 +89,7 @@ if __name__ == "__main__":
         config.physics,
         map_type=map_type,
         map_params=optimized_params,
+        use_shirley_chiu=use_shirley_chiu
     )
 
     # Convert TargetConfig to dict for visualization compatibility

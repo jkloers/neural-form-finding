@@ -31,7 +31,7 @@ def _face_to_node_displacement(face_displacement: jnp.ndarray, centroid_node_vec
 
 
 # Vectorize over nodes per face (inner) and then over faces (outer)
-face_to_node_kinematics = vmap(
+face_to_node_kinematics_fn = vmap(
     vmap(_face_to_node_displacement, in_axes=(None, 0)), in_axes=(0, 0)
 )
 
@@ -83,7 +83,7 @@ def build_constrained_kinematics(
             Defaults to 0 (zero displacement = clamped).
 
     Returns:
-        Callable: ``constrained_kinematics(free_DOFs, t, constraint_params)``
+        Callable: ``constrained_kinematics_fn(free_DOFs, t, constraint_params)``
             returns jnp.ndarray of shape (n_faces, 3).
     """
     n_faces = geometry.n_faces
@@ -91,7 +91,7 @@ def build_constrained_kinematics(
     free_DOF_ids, constrained_DOF_ids = DOFsInfo(
         n_faces, constrained_face_DOF_pairs)
 
-    def constrained_kinematics(
+    def constrained_kinematics_fn(
             free_DOFs: jnp.ndarray,
             t: float = 0.,
             constraint_params: Dict = dict()) -> jnp.ndarray:
@@ -113,4 +113,4 @@ def build_constrained_kinematics(
         all_DOFs = all_DOFs.at[free_DOF_ids].set(free_DOFs)
         return all_DOFs.reshape((n_faces, 3))
 
-    return constrained_kinematics
+    return constrained_kinematics_fn

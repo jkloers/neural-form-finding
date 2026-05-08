@@ -86,12 +86,12 @@ def solve_geometric_validity(
     x0, split_idx = _pack(initial_state.face_centroids,
                            initial_state.centroid_node_vectors)
 
-    def objective(x, state_param):
+    def objective_fn(x, state_param):
         centroids, cnv = _unpack(x, split_idx, n_faces, max_nodes)
         return compute_geometric_objective(
             centroids, cnv, state_param, target_cloud, w)
 
-    result = LBFGS(fun=objective).run(x0, state_param=initial_state)
+    result = LBFGS(fun=objective_fn).run(x0, state_param=initial_state)
 
     centroids_opt, cnv_opt = _unpack(result.params, split_idx, n_faces, max_nodes)
 
