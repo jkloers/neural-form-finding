@@ -134,6 +134,8 @@ def forward_pipeline(
         constrained_face_DOF_pairs=valid_state.constrained_face_DOF_pairs,
         incremental=physics_cfg.incremental,
         num_steps=physics_cfg.num_load_steps,
+        solver_maxiter=physics_cfg.solver_maxiter,
+        solver_tol=physics_cfg.solver_tol,
     )
 
     # 2.5 — ControlParams assembly

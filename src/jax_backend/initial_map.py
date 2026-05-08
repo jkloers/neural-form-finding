@@ -12,7 +12,7 @@ The interface is: CentroidalState → CentroidalState, pure JAX, differentiable.
 """
 import jax
 import jax.numpy as jnp
-from typing import Callable, Any
+from typing import Callable, Any, Union, Dict
 from jax_backend.state import CentroidalState
 from jax_backend.geometry import reconstruct_vertices
 from problem.targets import get_target_points
@@ -34,7 +34,11 @@ def map_conformal_polynomial(p_restricted, params, context):
     # 1. Map square to unit disk (Shirley-Chiu mapping)
     # This ensures the domain is contained within the target circle.
     # Support both dictionary (new) and array (legacy) map_params
-    use_shirley_chiu = context.get('use_shirley_chiu', True)
+    
+    if isinstance(params, dict):
+        use_shirley_chiu = params.get('use_shirley_chiu', context.get('use_shirley_chiu', True))
+    else:
+        use_shirley_chiu = context.get('use_shirley_chiu', True)
     
     h_sizes = jnp.where(context['half_sizes'] == 0.0, 1.0, context['half_sizes'])
     normalized = (p_restricted - context['box_center']) / h_sizes
@@ -84,7 +88,10 @@ def map_asymmetric_roots(p_restricted, params, context):
     paramatisé par les racines complexes de la dérivée spatiale.
     """
     # 1. Projection de Shirley-Chiu (Carré -> Disque unité)
-    use_shirley_chiu = context.get('use_shirley_chiu', True)
+    if isinstance(params, dict):
+        use_shirley_chiu = params.get('use_shirley_chiu', context.get('use_shirley_chiu', True))
+    else:
+        use_shirley_chiu = context.get('use_shirley_chiu', True)
     
     h_sizes = jnp.where(context['half_sizes'] == 0.0, 1.0, context['half_sizes'])
     normalized = (p_restricted - context['box_center']) / h_sizes
@@ -273,6 +280,20 @@ def build_mapping_fn(
 
     return mapping_fn
 
+def parse_map_params(raw_params: Union[Dict, jnp.ndarray, list]) -> Union[Dict, jnp.ndarray]:
+    """Converts raw mapping parameters (from YAML/dict/list) into JAX-compatible format.
+    
+    Dictionaries are preserved but values are converted to jnp.arrays.
+    Lists/arrays are converted to jnp.float64 arrays.
+    """
+    if isinstance(raw_params, dict):
+        return {
+            k: v if isinstance(v, bool) else jnp.array(v, dtype=float)
+            for k, v in raw_params.items()
+        }
+    return jnp.array(raw_params, dtype=float)
+
+
 def apply_mapping(
         state: CentroidalState, 
         mapping_fn: Callable, 
@@ -290,8 +311,11 @@ def apply_mapping(
     c = state.face_centroids
     s = state.centroid_node_vectors
     
+    # 0. Parse parameters if they are in raw format
+    params = parse_map_params(map_params) if map_params is not None else None
+
     # 1. Bind parameters to create a function purely of p
-    f_point_fn = lambda p: mapping_fn(p, map_params)
+    f_point_fn = lambda p: mapping_fn(p, params)
 
     # 2. Compute Jacobian matrix function using JAX
     jac_f_fn = jax.jacfwd(f_point_fn)

@@ -25,7 +25,9 @@ def setup_static_solver(
         constrained_face_DOF_pairs: jnp.ndarray = jnp.array([]),
         constrained_DOFs_fn: Callable = lambda t, **kwargs: 0.,
         incremental: bool = False,
-        num_steps: int = 10) -> Callable:
+        num_steps: int = 10,
+        solver_maxiter: int = 1000,
+        solver_tol: float = 1e-5) -> Callable:
     """Setup a static equilibrium solver by minimizing the total potential energy.
 
     Args:
@@ -89,7 +91,7 @@ def setup_static_solver(
         """
         initial_free = initial_displacements.reshape(-1)[free_DOF_ids]
 
-        solver = LBFGS(fun=total_potential_energy)
+        solver = LBFGS(fun=total_potential_energy, maxiter=solver_maxiter, tol=solver_tol)
 
         def solve_single_step(current_free_DOFs, t):
             result = solver.run(current_free_DOFs, t=t, control_params=control_params)

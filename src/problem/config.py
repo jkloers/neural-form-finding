@@ -3,8 +3,10 @@ import os
 import numpy as np
 from typing import Dict, Tuple
 
-import equinox as eqx
 import jax.numpy as jnp
+import equinox as eqx
+
+from jax_backend.initial_map import parse_map_params
 
 
 class TargetConfig(eqx.Module):
@@ -16,6 +18,21 @@ class TargetConfig(eqx.Module):
         self.type = type
         self.center = center
         self.radius = radius
+
+
+class MappingConfig(eqx.Module):
+    type: str
+    params: Any
+    use_shirley_chiu: bool
+    scale_factor: float
+    domain_restriction: float
+
+    def __init__(self, type: str, params: Any, use_shirley_chiu: bool, scale_factor: float, domain_restriction: float):
+        self.type = type
+        self.params = params
+        self.use_shirley_chiu = use_shirley_chiu
+        self.scale_factor = scale_factor
+        self.domain_restriction = domain_restriction
 
 
 class PhysicsConfig(eqx.Module):
@@ -108,13 +125,15 @@ class VisualizationConfig(eqx.Module):
 
 class ExperimentConfig(eqx.Module):
     topology: dict
+    mapping: MappingConfig
     target: TargetConfig
     physics: PhysicsConfig
     training: TrainingConfig
     visualization: VisualizationConfig
 
-    def __init__(self, topology: dict, target: TargetConfig, physics: PhysicsConfig, training: TrainingConfig, visualization: VisualizationConfig):
+    def __init__(self, topology: dict, mapping: MappingConfig, target: TargetConfig, physics: PhysicsConfig, training: TrainingConfig, visualization: VisualizationConfig):
         self.topology = topology
+        self.mapping = mapping
         self.target = target
         self.physics = physics
         self.training = training
@@ -182,17 +201,35 @@ def load_and_parse_config(yaml_path: str) -> ExperimentConfig:
         'loads': loads_raw
     }
     
-    # Handle 'params' vs 'map_params' alias for initial mapping
-    m_params = mapping_raw.get("map_params", mapping_raw.get("params", []))
-    topo_combined["map_params"] = m_params
+    # 2. Mapping
+    m_type = mapping_raw.get("map_type", "conformal_polynomial")
+    m_use_sc = bool(mapping_raw.get('use_shirley_chiu', True))
     
-    # 2. Physics & Weights
+    # Handle 'params' vs 'map_params' alias for initial mapping
+    m_params_raw = mapping_raw.get("map_params", mapping_raw.get("params", []))
+    
+    # Inject use_shirley_chiu into the raw dictionary if applicable
+    if isinstance(m_params_raw, dict):
+        m_params_raw['use_shirley_chiu'] = m_use_sc
+        
+    # Standardize to JAX PyTree (dict/array)
+    m_params = parse_map_params(m_params_raw)
+        
+    mapping_cfg = MappingConfig(
+        type=m_type,
+        params=m_params,
+        use_shirley_chiu=m_use_sc,
+        scale_factor=mapping_raw.get("scale_factor") if mapping_raw.get("scale_factor") is not None else 1.0,
+        domain_restriction=mapping_raw.get("domain_restriction", 0.8)
+    )
+
+    # 3. Physics & Weights
     phys_raw = raw.get("physics", {})
     weights_raw = raw.get("optimization_weights", {})
     
     physics_cfg = PhysicsConfig(
-        scale_factor=mapping_raw.get("scale_factor") if mapping_raw.get("scale_factor") is not None else 1.0,
-        domain_restriction=mapping_raw.get("domain_restriction", 0.8),
+        scale_factor=mapping_cfg.scale_factor,
+        domain_restriction=mapping_cfg.domain_restriction,
         use_contact=phys_raw.get("use_contact", True),
         k_contact=phys_raw.get("k_contact", 1.0),
         min_angle=phys_raw.get("min_angle", 0.1) * deg_to_rad,
@@ -243,6 +280,7 @@ def load_and_parse_config(yaml_path: str) -> ExperimentConfig:
     
     return ExperimentConfig(
         topology=topo_combined,
+        mapping=mapping_cfg,
         target=target_cfg,
         physics=physics_cfg,
         training=training_cfg,

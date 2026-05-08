@@ -15,21 +15,24 @@ import jax
 jax.config.update("jax_enable_x64", True)
 
 import jax.numpy as jnp
+import argparse
+from types import SimpleNamespace
+import datetime
+import shutil
 
 from src.topology.builder import build_tessellation
 from src.problem.conditions import configure_tessellation
 from src.problem.config import load_and_parse_config
 from src.jax_backend.state import CentroidalState
 from src.jax_backend.pipeline import forward_pipeline
+from src.jax_backend.initial_map import parse_map_params
 from src.jax_backend.training.trainer import train_pipeline
 from src.utils.pipeline_viz import visualize_pipeline_results
 from src.utils.training_viz import plot_training_loss
-from src.jax_backend.physics_solver.statics import LBFGS
 
 if __name__ == "__main__":
 
     # ── Configuration ─────────────────────────────────────────────────────────
-    import argparse
     parser = argparse.ArgumentParser(description="Neural Form-Finding Training.")
     parser.add_argument("--config-dir", type=str, default="asymmetric_roots")
     parser.add_argument("--config-name", type=str, required=True)
@@ -39,12 +42,7 @@ if __name__ == "__main__":
     config = load_and_parse_config(config_path)
     print(f"Loaded config: {config_path}")
 
-    # Apply solver hyper‑parameters to LBFGS
-    LBFGS.maxiter = config.physics.solver_maxiter
-    LBFGS.tol = config.physics.solver_tol
-
     # ── Tessellation setup ────────────────────────────────────────────────────
-    from types import SimpleNamespace
     topo = config.topology
     topo_obj = SimpleNamespace(**topo)
     
@@ -55,11 +53,7 @@ if __name__ == "__main__":
     initial_state = CentroidalState.from_tessellation(tessellation)
 
     # ── Training ──────────────────────────────────────────────────────────────
-    raw_params = topo.get('map_params', [])
-    if isinstance(raw_params, dict):
-        initial_map_params = {k: v if isinstance(v, bool) else jnp.array(v, dtype=float) for k, v in raw_params.items()}
-    else:
-        initial_map_params = jnp.array(raw_params, dtype=float)
+    initial_map_params = parse_map_params(topo.get('map_params', []))
 
     print("\n" + "=" * 60)
     print("STARTING END-TO-END TRAINING")
@@ -98,9 +92,6 @@ if __name__ == "__main__":
         'center': config.target.center,
         'radius': config.target.radius
     }
-
-    import datetime
-    import shutil
 
     run_dir = None
     if config.visualization.save_outputs:
