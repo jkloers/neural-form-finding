@@ -156,7 +156,7 @@ def forward_pipeline(
     # 2.6 — Solve for static equilibrium
     # Initial displacement guess is zero (undeformed configuration).
     initial_displacements = jnp.zeros((geometry.n_faces, 3), dtype=float)
-    solution = solve_statics_fn(state0=initial_displacements, control_params=control_params)
+    solution = solve_statics_fn(initial_displacements=initial_displacements, control_params=control_params)
 
     # 2.7 — Energy history decomposition (delegated to energy module)
     # Decomposes the total energy into components (stretch, shear, rot, contact)

@@ -29,7 +29,6 @@ To ensure clarity in the JAX-based functional pipeline, we follow a strict namin
 ```text
 .
 ├── train.py                # End-to-End Inverse Design Optimizer
-├── main.py                 # Forward Pipeline Execution & Visualization
 ├── src/                    # Source code
 │   ├── jax_backend/        # JAX physics, centroidal states, and solvers
 │   │   ├── physics_solver/ # Energy functionals and static equilibrium (L-BFGS)

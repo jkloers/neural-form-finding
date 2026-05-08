@@ -208,12 +208,15 @@ def load_and_parse_config(yaml_path: str) -> ExperimentConfig:
     # Handle 'params' vs 'map_params' alias for initial mapping
     m_params_raw = mapping_raw.get("map_params", mapping_raw.get("params", []))
     
-    # Inject use_shirley_chiu into the raw dictionary if applicable
+    # If the user put 'use_shirley_chiu' inside map_params in YAML, we extract it
+    # but we STRIP it from the trainable parameters to avoid JAX/Optax errors.
+    m_params_trainable = m_params_raw
     if isinstance(m_params_raw, dict):
-        m_params_raw['use_shirley_chiu'] = m_use_sc
+        m_use_sc = bool(m_params_raw.get('use_shirley_chiu', m_use_sc))
+        m_params_trainable = {k: v for k, v in m_params_raw.items() if k != 'use_shirley_chiu'}
         
     # Standardize to JAX PyTree (dict/array)
-    m_params = parse_map_params(m_params_raw)
+    m_params = parse_map_params(m_params_trainable)
         
     mapping_cfg = MappingConfig(
         type=m_type,
