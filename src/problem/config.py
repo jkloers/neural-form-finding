@@ -1,7 +1,7 @@
 import yaml
 import os
 import numpy as np
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Any
 
 import jax.numpy as jnp
 import equinox as eqx

@@ -6,25 +6,23 @@ Developed at the **Princeton Form Finding Lab**.
 
 ## Overview
 
-This project implements a multi-stage, gradient-based pipeline to seamlessly bridge the gap between flat Kirigami tessellations and target 3D/2D deployed geometries. The pipeline guarantees physical validity by passing gradients backward through an implicit static equilibrium solver.
+This project implements a multi-stage, gradient-based pipeline to bridge the gap between flat Kirigami tessellations and target geometries. The pipeline is fully differentiable, passing gradients through both geometric and physical equilibrium solvers.
 
 ### The Forward Pipeline
 
 1. **Stage 0: Initial Mapping**  
-   Maps a flat tessellation to a target geometry using complex polynomial conformal mapping.
-   *Parameters:* Rigid body degrees of freedom (translation $t_x, t_y$, rotation $\theta$) + scaling factor + polynomial coefficients. 
+   Maps a flat tessellation to a target geometry using parameterized mappings (e.g., conformal polynomial or root-based asymmetric maps).
 2. **Stage 1: Geometric Validity**  
-   Optimizes face shapes and positions to preserve connectivity, enforce arm symmetry, and prevent face intersections.
-3. **Stage 2: Static Solver**  
-   Computes the physical equilibrium state of the tessellation under external loads. Formulated as a gradient-based minimization of mechanical energy (stretch, shear, rotational, and contact penalties).
+   A differentiable optimization stage that ensures face connectivity, enforces arm symmetry, and prevents intersections.
+3. **Stage 2: Static Physics Solver**  
+   Computes the equilibrium state by minimizing potential energy. Supports **incremental load stepping** for large deformations via `jax.lax.scan`.
 
-### End-to-End Optimization (`train.py`)
+## Development Standards
 
-Using `jax.value_and_grad`, the pipeline supports inverse design by propagating gradients through the entire solver chain to optimize the initial mapping parameters.
-
-The **Dual Loss Function** ensures optimal and physically valid designs:
-*   **Geometric Loss (Chamfer Distance):** Penalizes the distance from the outer boundary faces to the target shape (e.g., a circle or heart).
-*   **Physical Loss (Strain Energy Penalty):** Penalizes internal strain energy (stretch, shear, rot, contact) to automatically discard physically invalid solutions (e.g., severe intersections or material tearing).
+### Nomenclature Convention
+To ensure clarity in the JAX-based functional pipeline, we follow a strict naming convention:
+*   **Suffix `_fn`**: Applied to all callable functions produced by factories or passed as arguments (e.g., `potential_energy_fn`, `solve_statics_fn`, `mapping_fn`).
+*   **Data vs. Logic**: Variables representing JAX arrays use descriptive names (e.g., `initial_displacements` instead of `state0`) to distinguish them from `CentroidalState` objects.
 
 ## Project Structure
 
@@ -34,25 +32,40 @@ The **Dual Loss Function** ensures optimal and physically valid designs:
 ├── main.py                 # Forward Pipeline Execution & Visualization
 ├── src/                    # Source code
 │   ├── jax_backend/        # JAX physics, centroidal states, and solvers
-│   │   ├── physics_solver/ # Energy functionals and static equilibrium
-│   │   └── training/       # Loss definitions and Optax training loop
+│   │   ├── physics_solver/ # Energy functionals and static equilibrium (L-BFGS)
+│   │   ├── training/       # Loss definitions and Optax training loop
+│   │   ├── pipeline.py     # Orchestration of the 3 stages
+│   │   └── initial_map.py  # Mapping factories and Shirley-Chiu projection
 │   ├── topology/           # Tessellation and Unit Cell logic
-│   ├── problem/            # Config schemas, BCs, and loading logic
+│   ├── problem/            # Config schemas (Equinox), BCs, and loading
 │   └── utils/              # Visualization (Princeton theme) & Math helpers
 ├── data/                   # Data-centric assets
 │   ├── library/            # Pattern library (YAML)
 │   ├── configs/            # Simulation configurations (YAML)
 │   └── outputs/            # Results (Animations, Plots, JSON backups)
-└── notebooks/              # Interactive exploration
 ```
 
 ## Configuration (YAML)
 
-Experiments are driven by YAML configurations (e.g., `data/configs/complex_mapping/2_cs_asy_complex.yaml`).
+Experiments are driven by structured YAML configurations. The mapping stage is now grouped for better modularity:
 
 ```yaml
 mapping:
-  type: "conformal_polynomial"
-  params: [0.0, 0.0, 0.0, 1.0, 0.0]  # [tx, ty, theta, scale, c1, ...]
+  map_type: "asymmetric_roots"
+  use_shirley_chiu: true
+  map_params: 
+    tx: 0.0
+    ty: 0.0
+    s_val: 1.0
+    roots: [10.0, 0.0]
+    weights: [1.0]
+
+physics:
+  incremental: true
+  num_load_steps: 20
+  solver_maxiter: 1000
 ```
-*The initial parameters encode translation, rotation, scale, and high-order complex deformation coefficients.*
+
+## Optimization
+
+Using `jax.value_and_grad`, the pipeline supports inverse design by propagating gradients through the entire solver chain to optimize mapping parameters against a **Dual Loss Function** (Geometric Chamfer Distance + Physical Strain Energy Penalty).
