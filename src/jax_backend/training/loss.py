@@ -85,19 +85,7 @@ def evaluate_physical_loss(solution, valid_state, target_cfg: TargetConfig, trai
     coverage_loss = jnp.mean(min_to_structure)
     
     # Combine them. We allow tuning the coverage weight in the config.
-    coverage_weight = training_cfg.loss_weights.get("coverage", 1.0)
-    chamfer_loss = precision_loss + coverage_weight * coverage_loss
-    
-    # 3. Add Physical Energy Penalty
-    # We want to minimize the internal strain energy (stretch + shear + rot + contact)
-    # This heavily penalizes solutions that are physically invalid (e.g. extreme stretching,
-    # intersections, or massive contact forces).
-    u_int = (solution.energies['stretch'][-1] + 
-             solution.energies['shear'][-1] + 
-             solution.energies['contact'][-1])
-             
-    # 4. Final Aggregation
-    loss_weights = training_cfg.loss_weights
+    chamfer_loss = precision_loss + training_cfg.loss_weights.coverage * coverage_loss
     
     # Reconstruct Final CNVs to check material area conservation
     # (Rotate CNVs by the final deployment angles)
@@ -118,25 +106,51 @@ def evaluate_physical_loss(solution, valid_state, target_cfg: TargetConfig, trai
         initial_total_material_area = jnp.sum(valid_state.initial_face_areas)
         global_material_loss = (current_total_material_area - initial_total_material_area)**2
 
-    # Weight for the energy loss
-    weight_physics = loss_weights.get("physics", 0.1)
-    energy_loss = weight_physics * u_int
+    # 3. Add Physical Energy Penalty (Decomposed Weights)
+    # Each energy component has its own weight from LossWeights
+    u_stretch = solution.energies['stretch'][-1]
+    u_shear = solution.energies['shear'][-1]
+    u_contact = solution.energies['contact'][-1]
     
-    weight_geometric = loss_weights.get("geometric", 1.0)
-    weight_global = loss_weights.get("global_material_area", 1.0)
+    # Bending (rot) is not explicitly tracked in energies_dict yet, 
+    # but we'll add it for completeness if present, or just use 0.0
+    u_bend = solution.energies.get('rot', jnp.zeros_like(u_stretch))[-1]
+
+    # 4. Final Aggregation
+    weights = training_cfg.loss_weights
     
-    loss = (weight_geometric * chamfer_loss) + energy_loss + (weight_global * global_material_loss)
+    physics_loss = (weights.stretching * u_stretch + 
+                    weights.shearing * u_shear + 
+                    weights.bending * u_bend + 
+                    weights.contact * u_contact)
     
-    loss_components = {
-        'total': loss,
-        'chamfer_precision': precision_loss,
-        'chamfer_coverage': coverage_loss,
-        'chamfer_total': chamfer_loss,
-        'energy': energy_loss,
-        'global_material_area': global_material_loss
+    geometric_loss = weights.chamfer * chamfer_loss + weights.material_area * global_material_loss
+    loss = geometric_loss + physics_loss
+
+    # 4. Detailed Metrics Assembly
+    # We store the weighted values so the plotter reflects their actual impact.
+    metrics = {
+        "loss_total": loss,
+        "loss_geometric": geometric_loss,
+        "loss_physical": physics_loss,
+        "comp_geom_chamfer": weights.chamfer * chamfer_loss,
+        "comp_geom_material_area": weights.material_area * global_material_loss,
+        "comp_phys_stretching": weights.stretching * u_stretch,
+        "comp_phys_shearing": weights.shearing * u_shear,
+        "comp_phys_bending": weights.bending * u_bend,
+        "comp_phys_contact": weights.contact * u_contact,
+        "comp_regularization": weights.regularization
     }
     
-    return loss, loss_components
+    # Backward compatibility for existing plotter keys
+    metrics.update({
+        'total': loss,
+        'chamfer_total': chamfer_loss,
+        'global_material_area': global_material_loss,
+        'energy': u_stretch + u_shear + u_contact + u_bend
+    })
+    
+    return loss, metrics
 
 
 def compute_end_to_end_loss(
@@ -175,15 +189,18 @@ def compute_end_to_end_loss(
         training_cfg
     )
     
-    # 3. Regularization (Optional, prevents map_params from exploding)
-    weight_reg = training_cfg.loss_weights.get("regularization", 1e-3)
+    # 3. Regularization (Prevents map_params from exploding)
+    weight_reg = training_cfg.loss_weights.regularization
     
-    # map_params can be a JAX PyTree (dict or array)
+    # map_params is a JAX PyTree (dict with 'roots', 'tx', 'ty', etc.)
     squared_params = jax.tree_util.tree_map(lambda x: jnp.sum(x**2), map_params)
     reg_loss = weight_reg * jax.tree_util.tree_reduce(lambda a, b: a + b, squared_params, initializer=0.0)
     
     total_loss = base_loss + reg_loss
-    loss_components['reg'] = reg_loss
-    loss_components['total'] = total_loss
+    
+    # Update metrics with regularization and final total
+    loss_components['comp_regularization'] = reg_loss
+    loss_components['loss_total'] = total_loss
+    loss_components['total'] = total_loss # Backward compatibility
     
     return total_loss, loss_components

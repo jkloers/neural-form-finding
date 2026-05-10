@@ -315,13 +315,6 @@ class Tessellation:
             return float('inf')
         return height / width
 
-    def face_features(self):
-        centroids = self.get_face_centroids()
-        areas = self.face_areas().reshape(-1, 1)
-        if centroids.size == 0:
-            return np.zeros((0, self.dim + 1), dtype=float)
-        return np.concatenate([centroids, areas], axis=1)
-    
     def boundary_points(self):
         """Returns the points not involved in any hinge connections, which can be used as boundarys for optimization."""
         vertices = set(range(len(self.vertices)))

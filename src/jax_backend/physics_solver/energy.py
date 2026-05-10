@@ -464,36 +464,31 @@ def build_energy_history(solution, control_params: ControlParams,
     # Internal energy = sum of all components at each step
     u_int = jnp.sum(components, axis=1)
 
-    # 1. Le travail apparent (Rectangle : force de l'étape i * u_i)
+    # Apparent work per step: lambda_i * (F_max · u_i)
     w_ext_rect = u_int - solution.energies
 
-    # 2. Reconstruction de l'intégrale thermodynamique (Méthode des trapèzes)
+    # Trapezoid integration of true external work
     n_steps = solution.fields.shape[0]
 
-    # Définition des facteurs de charge (lambdas) allant de 1/n_steps jusqu'à 1.0
+    # Load factors from 1/n_steps to 1.0
     lambdas = jnp.linspace(1.0 / n_steps, 1.0, n_steps)
 
-    # On isole la projection scalaire P_i = (F_max • u_i)
-    # Sachant que w_ext_rect = lambda_i * (F_max • u_i)
+    # Scalar projection P_i = (F_max · u_i), since w_ext_rect = lambda_i * P_i
     P = w_ext_rect / lambdas
 
-    # Padding pour inclure l'état initial (force nulle, déplacement nul)
+    # Pad to include the initial state (zero force, zero displacement)
     P_pad = jnp.pad(P, (1, 0), constant_values=0.0)
     lambdas_pad = jnp.pad(lambdas, (1, 0), constant_values=0.0)
 
-    # Intégrale trapézoïdale : \sum 0.5 * (F_{i-1} + F_i) * (u_i - u_{i-1})
-    # Ce qui se factorise par : \sum 0.5 * (lambda_{i-1} + lambda_i) * (P_i - P_{i-1})
+    # Trapezoidal rule: 0.5 * (lambda_{i-1} + lambda_i) * (P_i - P_{i-1})
     delta_W = 0.5 * (lambdas_pad[:-1] + lambdas_pad[1:]) * jnp.diff(P_pad)
 
-    # Vrai travail cumulé
     w_ext_true = jnp.cumsum(delta_W)
-
-    # Le vrai bilan thermodynamique (doit être une ligne plate à zéro)
     thermodynamic_balance = u_int - w_ext_true
 
     return {
-        'total_potential': solution.energies, # Pi (négatif, utile pour débugger L-BFGS)
-        'total_thermo': thermodynamic_balance, # Bilan d'énergie (doit rester à 0)
+        'total_potential': solution.energies,  # total potential energy (negative, useful for debugging L-BFGS)
+        'total_thermo': thermodynamic_balance,  # energy balance (should stay near 0)
         'stretch': components[:, 0],
         'shear':   components[:, 1],
         'rot':     components[:, 2],

@@ -88,18 +88,47 @@ class PhysicsConfig(eqx.Module):
         self.solver_tol = solver_tol
 
 
+class LossWeights(eqx.Module):
+    """Flat structure for all loss components (Stage 3)."""
+    # Geometric
+    chamfer: float = 1.0
+    material_area: float = 1.0
+    
+    # Physics (Energies)
+    stretching: float = 0.1
+    shearing: float = 0.1
+    bending: float = 0.1
+    contact: float = 1.0
+    
+    # Regularization
+    regularization: float = 0.001
+    
+    # Chamfer breakdown
+    coverage: float = 1.0
+
+    def __init__(self, **kwargs):
+        # Default values if not provided
+        self.chamfer = float(kwargs.get('chamfer', 1.0))
+        self.material_area = float(kwargs.get('material_area', 1.0))
+        self.stretching = float(kwargs.get('stretching', 0.1))
+        self.shearing = float(kwargs.get('shearing', 0.1))
+        self.bending = float(kwargs.get('bending', 0.1))
+        self.contact = float(kwargs.get('contact', 1.0))
+        self.regularization = float(kwargs.get('regularization', 0.001))
+        self.coverage = float(kwargs.get('coverage', 1.0))
+
 class TrainingConfig(eqx.Module):
     num_epochs: int
     learning_rate: float
     optimizer: str = "adam"
-    loss_weights: dict
+    loss_weights: LossWeights
     geometric_loss_type: str = "boundary_vertices"
 
-    def __init__(self, num_epochs: int, learning_rate: float, optimizer: str = "adam", loss_weights: dict = None, geometric_loss_type: str = "boundary_vertices"):
+    def __init__(self, num_epochs: int, learning_rate: float, optimizer: str = "adam", loss_weights: LossWeights = None, geometric_loss_type: str = "boundary_vertices"):
         self.num_epochs = num_epochs
         self.learning_rate = learning_rate
         self.optimizer = optimizer
-        self.loss_weights = loss_weights if loss_weights is not None else {"geometric": 1.0, "physics": 0.1, "regularization": 1e-3}
+        self.loss_weights = loss_weights if loss_weights is not None else LossWeights()
         self.geometric_loss_type = geometric_loss_type
 
 
@@ -278,11 +307,14 @@ def load_and_parse_config(yaml_path: str) -> ExperimentConfig:
     
     # 4. Training (with defaults if missing)
     train_raw = raw.get("training", {})
+    weights_raw = raw.get("loss_weights", {})
+    l_weights = LossWeights(**weights_raw)
+
     training_cfg = TrainingConfig(
         num_epochs=int(train_raw.get("num_epochs", 500)),
         learning_rate=float(train_raw.get("learning_rate", 0.01)),
         optimizer=str(train_raw.get("optimizer", "adam") or "adam"),
-        loss_weights=raw.get("loss_weights", train_raw.get("loss_weights", {"geometric": 1.0, "physics": 0.1, "regularization": 1e-3})),
+        loss_weights=l_weights,
         geometric_loss_type=str(train_raw.get("geometric_loss_type", "boundary_vertices"))
     )
     

@@ -141,3 +141,15 @@ def compute_face_areas(centroid_node_vectors):
     """
     # Vectorize compute_polygon_area across all faces
     return jax.vmap(compute_polygon_area)(centroid_node_vectors)
+
+
+def compute_total_area(centroid_node_vectors):
+    """Compute the total area of the tessellation (sum of all face areas).
+    
+    Args:
+        centroid_node_vectors: (n_faces, max_nodes, 2)
+        
+    Returns:
+        Scalar total area.
+    """
+    return jnp.sum(compute_face_areas(centroid_node_vectors))

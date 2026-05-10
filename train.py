@@ -28,7 +28,6 @@ from src.jax_backend.state import CentroidalState
 from src.jax_backend.pipeline import forward_pipeline
 from src.jax_backend.training.trainer import train_pipeline
 from src.utils.pipeline_viz import visualize_pipeline_results, plot_loss_history
-from src.utils.training_viz import plot_training_loss
 
 if __name__ == "__main__":
 
@@ -61,6 +60,11 @@ if __name__ == "__main__":
         tessellation.update_vertices(tessellation.vertices * scale)
 
     configure_tessellation(tessellation, topo_obj)
+    
+    # ── Initial Area Print ────────────────────────────────────────────────────
+    initial_area = tessellation.compute_total_area()
+    print(f"\n[AREA CHECK] Initial Material Area: {initial_area:.6f}")
+    
     initial_state = CentroidalState.from_tessellation(tessellation, target_cfg=config.target)
 
     # ── Training ──────────────────────────────────────────────────────────────
@@ -119,6 +123,17 @@ if __name__ == "__main__":
     }
 
     visualize_pipeline_results(result, tessellation, config, target_params, args.config_name + "_trained", run_dir=run_dir)
+
+    # ── Final Area Print ──────────────────────────────────────────────────────
+    from jax_backend.geometry import compute_face_areas
+    final_cnvs = result['valid_state'].centroid_node_vectors
+    final_areas = compute_face_areas(final_cnvs)
+    final_total_area = jnp.sum(final_areas)
+    
+    print("\n" + "─" * 40)
+    print(f"[AREA CHECK] Final Material Area:   {final_total_area:.6f}")
+    print(f"[AREA CHECK] Deviation:             {(final_total_area - initial_area):.6f}")
+    print("─" * 40)
 
     print("\n" + "=" * 60)
     print("Training complete. Let's all pat ourselves on the back! 💕")
