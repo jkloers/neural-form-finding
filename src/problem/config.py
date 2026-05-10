@@ -44,15 +44,9 @@ class MappingConfig(eqx.Module):
 
 class ValidityConfig(eqx.Module):
     weights: Dict[str, float]
-    preserve_face_area: bool
-    face_area_weight: float
 
-    def __init__(self, weights: Dict[str, float],
-                 preserve_face_area: bool = False,
-                 face_area_weight: float = 1.0):
+    def __init__(self, weights: Dict[str, float]):
         self.weights = weights
-        self.preserve_face_area = preserve_face_area
-        self.face_area_weight = face_area_weight
 
 
 class PhysicsConfig(eqx.Module):
@@ -234,13 +228,9 @@ def _parse_mapping_config(mapping_raw: dict) -> MappingConfig:
     )
 
 
-def _parse_validity_config(validity_raw: dict, weights_raw: dict) -> ValidityConfig:
-    """Parse the [validity] and [optimization_weights] YAML sections."""
-    return ValidityConfig(
-        weights=weights_raw,
-        preserve_face_area=bool(validity_raw.get("preserve_face_area", False)),
-        face_area_weight=float(weights_raw.get("face_area", 1.0)),
-    )
+def _parse_validity_config(weights_raw: dict) -> ValidityConfig:
+    """Parse the [optimization_weights] YAML section."""
+    return ValidityConfig(weights=weights_raw)
 
 
 def _parse_physics_config(physics_raw: dict, domain_restriction: float) -> PhysicsConfig:
@@ -314,7 +304,7 @@ def load_and_parse_config(yaml_path: str) -> ExperimentConfig:
 
     pattern_obj = _load_pattern(topo_raw, os.path.dirname(yaml_path))
     mapping_cfg = _parse_mapping_config(mapping_raw)
-    validity_cfg = _parse_validity_config(raw.get("validity", {}), raw.get("optimization_weights", {}))
+    validity_cfg = _parse_validity_config(raw.get("optimization_weights", {}))
     physics_cfg = _parse_physics_config(raw.get("physics", {}), mapping_cfg.domain_restriction)
     target_cfg = _parse_target_config(raw.get("target", {}))
     training_cfg = _parse_training_config(raw.get("training", {}), raw.get("loss_weights", {}))

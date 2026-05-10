@@ -281,7 +281,9 @@ def compute_geometric_objective(face_centroids, cnv, state, target_cloud, validi
 
     e_inversion = face_non_inversion(cnv)
 
-    loss = (weights['connectivity']      * e_connect +
+    e_area = face_area_penalty(cnv, state.initial_face_areas)
+
+    return (weights['connectivity']      * e_connect +
             weights['non_intersection']  * e_non_inv +
             weights['target']            * e_target +
             weights['arm_symmetry']      * e_symmetry +
@@ -289,11 +291,5 @@ def compute_geometric_objective(face_centroids, cnv, state, target_cloud, validi
             weights['void_collinear']    * e_void_c +
             weights['anchoring']         * e_anchoring +
             weights['boundary_rigidity'] * e_bound_rigid +
-            weights['face_inversion']    * e_inversion)
-
-    # Étape 4 : Contrainte locale d'aire
-    if validity_cfg.preserve_face_area:
-        e_area = face_area_penalty(cnv, state.initial_face_areas)
-        loss += validity_cfg.face_area_weight * e_area
-
-    return loss
+            weights['face_inversion']    * e_inversion +
+            weights['face_area']         * e_area)

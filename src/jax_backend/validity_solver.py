@@ -34,6 +34,7 @@ DEFAULT_GEOMETRIC_WEIGHTS = {
     'anchoring':         100.,
     'boundary_rigidity':  10.,
     'face_inversion':   1000.,
+    'face_area':           0.,
 }
 
 
