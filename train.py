@@ -25,7 +25,6 @@ from src.problem.conditions import configure_tessellation
 from src.problem.config import load_and_parse_config
 from src.jax_backend.state import CentroidalState
 from src.jax_backend.pipeline import forward_pipeline
-from src.jax_backend.initial_map import parse_map_params
 from src.jax_backend.training.trainer import train_pipeline
 from src.utils.pipeline_viz import visualize_pipeline_results
 from src.utils.training_viz import plot_training_loss
@@ -53,14 +52,11 @@ if __name__ == "__main__":
     initial_state = CentroidalState.from_tessellation(tessellation)
 
     # ── Training ──────────────────────────────────────────────────────────────
-    initial_map_params = parse_map_params(topo.get('map_params', []))
-
     print("\n" + "=" * 60)
     print("STARTING END-TO-END TRAINING")
     print("=" * 60)
 
-    map_type = topo.get('map_type', 'conformal_polynomial')
-    use_shirley_chiu = topo.get('use_shirley_chiu', True)
+    initial_map_params = config.mapping.params
 
     optimized_params, history_loss = train_pipeline(
         initial_map_params,
@@ -68,8 +64,10 @@ if __name__ == "__main__":
         config.target,
         config.physics,
         config.training,
-        map_type=map_type,
-        use_shirley_chiu=use_shirley_chiu
+        map_type=config.mapping.type,
+        use_shirley_chiu=config.mapping.use_shirley_chiu,
+        strict_boundary_fit=config.mapping.strict_boundary_fit,
+        initial_scale_factor=config.mapping.initial_scale_factor
     )
 
     print(f"\nOptimization complete. Optimal params: {optimized_params}")
@@ -81,9 +79,11 @@ if __name__ == "__main__":
         initial_state,
         config.target,
         config.physics,
-        map_type=map_type,
+        map_type=config.mapping.type,
         map_params=optimized_params,
-        use_shirley_chiu=use_shirley_chiu
+        use_shirley_chiu=config.mapping.use_shirley_chiu,
+        strict_boundary_fit=config.mapping.strict_boundary_fit,
+        initial_scale_factor=config.mapping.initial_scale_factor
     )
 
     # Convert TargetConfig to dict for visualization compatibility

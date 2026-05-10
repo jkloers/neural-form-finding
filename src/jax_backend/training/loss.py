@@ -9,6 +9,7 @@ after passing through the fully differentiable pipeline.
 import jax
 import jax.numpy as jnp
 
+from typing import Any
 from jax_backend.pipeline import forward_pipeline
 from jax_backend.state import CentroidalState
 from problem.targets import get_target_points
@@ -89,7 +90,6 @@ def evaluate_physical_loss(solution, valid_state, target_cfg: TargetConfig, trai
     # intersections, or massive contact forces).
     u_int = (solution.energies['stretch'][-1] + 
              solution.energies['shear'][-1] + 
-             solution.energies['rot'][-1] + 
              solution.energies['contact'][-1])
              
     # 4. Final Aggregation
@@ -112,7 +112,16 @@ def evaluate_physical_loss(solution, valid_state, target_cfg: TargetConfig, trai
     return loss, loss_components
 
 
-def compute_end_to_end_loss(map_params: jnp.ndarray, initial_state: CentroidalState, target_cfg: TargetConfig, physics_cfg: PhysicsConfig, training_cfg: TrainingConfig, map_type: str = 'conformal_polynomial', use_shirley_chiu: bool = True):
+def compute_end_to_end_loss(
+        map_params: Any, 
+        initial_state: CentroidalState, 
+        target_cfg: TargetConfig, 
+        physics_cfg: PhysicsConfig, 
+        training_cfg: TrainingConfig, 
+        map_type: str = 'conformal_polynomial', 
+        use_shirley_chiu: bool = True, 
+        strict_boundary_fit: bool = True, 
+        initial_scale_factor: float = 1.0):
     """Wrapper function required by JAX for gradient computation.
     
     In JAX, jax.grad needs a single function that takes parameters and 
@@ -121,23 +130,30 @@ def compute_end_to_end_loss(map_params: jnp.ndarray, initial_state: CentroidalSt
     
     # 1. Run the forward pipeline
     results = forward_pipeline(
-        initial_state,
-        target_cfg,
-        physics_cfg,
+        initial_state=initial_state,
+        target_cfg=target_cfg,
+        physics_cfg=physics_cfg,
         map_type=map_type,
         map_params=map_params,
-        use_shirley_chiu=use_shirley_chiu
+        use_shirley_chiu=use_shirley_chiu,
+        strict_boundary_fit=strict_boundary_fit,
+        initial_scale_factor=initial_scale_factor
     )
     
     # 2. Evaluate Physical Objective
-    base_loss, loss_components = evaluate_physical_loss(results['solution'], results['valid_state'], target_cfg, training_cfg)
+    base_loss, loss_components = evaluate_physical_loss(
+        results['solution'], 
+        results['valid_state'], 
+        target_cfg, 
+        training_cfg
+    )
     
     # 3. Regularization (Optional, prevents map_params from exploding)
     weight_reg = training_cfg.loss_weights.get("regularization", 1e-3)
     
     # map_params can be a JAX PyTree (dict or array)
     squared_params = jax.tree_util.tree_map(lambda x: jnp.sum(x**2), map_params)
-    reg_loss = weight_reg * jax.tree_util.tree_reduce(lambda a, b: a + b, squared_params)
+    reg_loss = weight_reg * jax.tree_util.tree_reduce(lambda a, b: a + b, squared_params, initializer=0.0)
     
     total_loss = base_loss + reg_loss
     loss_components['reg'] = reg_loss

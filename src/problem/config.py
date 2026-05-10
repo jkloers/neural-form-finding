@@ -19,18 +19,21 @@ class TargetConfig(eqx.Module):
         self.center = center
         self.radius = radius
 
-
 class MappingConfig(eqx.Module):
     type: str
     params: Any
     use_shirley_chiu: bool
+    strict_boundary_fit: bool
+    initial_scale_factor: float
     scale_factor: float
     domain_restriction: float
 
-    def __init__(self, type: str, params: Any, use_shirley_chiu: bool, scale_factor: float, domain_restriction: float):
+    def __init__(self, type: str, params: Any, use_shirley_chiu: bool, strict_boundary_fit: bool, initial_scale_factor: float, scale_factor: float, domain_restriction: float):
         self.type = type
         self.params = params
         self.use_shirley_chiu = use_shirley_chiu
+        self.strict_boundary_fit = strict_boundary_fit
+        self.initial_scale_factor = initial_scale_factor
         self.scale_factor = scale_factor
         self.domain_restriction = domain_restriction
 
@@ -222,6 +225,8 @@ def load_and_parse_config(yaml_path: str) -> ExperimentConfig:
         type=m_type,
         params=m_params,
         use_shirley_chiu=m_use_sc,
+        strict_boundary_fit=bool(mapping_raw.get('strict_boundary_fit', True)),
+        initial_scale_factor=float(mapping_raw.get('initial_scale_factor', 1.0)),
         scale_factor=mapping_raw.get("scale_factor") if mapping_raw.get("scale_factor") is not None else 1.0,
         domain_restriction=mapping_raw.get("domain_restriction", 0.8)
     )

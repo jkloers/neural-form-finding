@@ -119,7 +119,7 @@ def visualize_pipeline_results(result, tessellation, config, target_params, conf
 
     # Animation
     if config.physics.incremental and config.visualization.animation:
-        print(f"\nGenerating animation from history ({config.physics.num_load_steps} frames)...")
+        print(f"\nGenerating animation from history...")
         sol = result['solution']
         valid_state = result['valid_state']
         def interpolate_states(v1, v2, n_frames):

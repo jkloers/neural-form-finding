@@ -47,7 +47,9 @@ def forward_pipeline(
         physics_cfg: PhysicsConfig,
         map_type: str = 'conformal_polynomial',
         map_params: Optional[jnp.ndarray] = None,
-        use_shirley_chiu: bool = True) -> dict:
+        use_shirley_chiu: bool = True,
+        strict_boundary_fit: bool = True,
+        initial_scale_factor: float = 1.0) -> dict:
     """Full differentiable pipeline: initial map → geometric validity → static equilibrium.
 
     Args:
@@ -84,7 +86,9 @@ def forward_pipeline(
         map_type=map_type,
         scale_factor=physics_cfg.scale_factor,
         domain_restriction=physics_cfg.domain_restriction,
-        use_shirley_chiu=use_shirley_chiu
+        use_shirley_chiu=use_shirley_chiu,
+        strict_boundary_fit=strict_boundary_fit,
+        initial_scale_factor=initial_scale_factor
     )
 
     mapped_state = apply_mapping(
