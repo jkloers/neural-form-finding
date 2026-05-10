@@ -119,8 +119,21 @@ def setup_static_solver(
             # the reference update.
             from jax_backend.physics_solver.params import ReferenceGeometry
 
+            # Capture original reference bond vectors — rest lengths must not change.
+            _original_ref_bonds = control_params.mechanical_params.bond_params.reference_vector
+            _max_nodes = _original_cnv.shape[1]
+            # Face indices for each bond endpoint (static, used to look up rotations)
+            _bond_face1 = _bond_connectivity[:, 0] // _max_nodes
+            _bond_face2 = _bond_connectivity[:, 1] // _max_nodes
+
             def _update_control_params(accumulated_disp, ctrl):
-                """Rotate CNVs and shift centroids to form the new reference."""
+                """Update reference geometry for the next UL increment.
+
+                Centroids and CNVs follow the full accumulated rigid-body motion.
+                Reference bond vectors are ROTATED by the mean face rotation at
+                each hinge but keep their original LENGTH, so elastic restoring
+                forces accumulate correctly across all increments.
+                """
                 thetas = accumulated_disp[:, 2]
                 cos_t = jnp.cos(thetas)[:, None]
                 sin_t = jnp.sin(thetas)[:, None]
@@ -131,9 +144,16 @@ def setup_static_solver(
                     sin_t * _original_cnv[:, :, 0] + cos_t * _original_cnv[:, :, 1],
                 ], axis=-1)
 
-                # Bond vectors from flattened node world positions
-                node_world = (new_centroids[:, None, :] + new_cnv).reshape(-1, 2)
-                new_ref_bonds = node_world[_bond_connectivity[:, 1]] - node_world[_bond_connectivity[:, 0]]
+                # Rotate original rest-length bond vectors by the mean face rotation
+                # at each hinge. This tracks the changing hinge orientation (geometric
+                # nonlinearity) without resetting the rest length (material linearity).
+                mean_theta = (thetas[_bond_face1] + thetas[_bond_face2]) / 2.0
+                cos_b = jnp.cos(mean_theta)
+                sin_b = jnp.sin(mean_theta)
+                new_ref_bonds = jnp.stack([
+                    cos_b * _original_ref_bonds[:, 0] - sin_b * _original_ref_bonds[:, 1],
+                    sin_b * _original_ref_bonds[:, 0] + cos_b * _original_ref_bonds[:, 1],
+                ], axis=-1)
 
                 new_ref_geom = ReferenceGeometry(
                     new_centroids, new_cnv, _bond_connectivity, new_ref_bonds)

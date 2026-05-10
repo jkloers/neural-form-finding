@@ -15,28 +15,47 @@ from jax_backend.utils.linalg import vdot, void_angles, build_void_edge_distance
 
 
 def ligament_strains_linearized(DOFs1: jnp.ndarray, DOFs2: jnp.ndarray, reference_vector: jnp.ndarray = jnp.array([1., 0.])):
-    """Computes linearized strain measures of an elastic ligament i.e. axial, shear, and flexural strains.
+    """Computes corotational linearized strain measures of an elastic ligament.
 
-    The axial strain is defined as dU.v0/v0^2.
-    The shear strain is defined as (theta1+theta2)/2 - v0✕dU/v0^2.
-    The rotational strain is defined as theta2-theta1.
+    Removes the mean rigid-body rotation before linearising, so the strain is
+    zero for pure rigid-body motion even for large rotation angles (corotational
+    Total Lagrangian).  For small rotations the formula reduces to the
+    classical linearised beam expressions.
 
-    Note: These strains are based on the linearized beam theory.
+    Strains:
+        axial  = (corot_bond - ref) · ref / ||ref||²
+        shear  = ref × corot_bond / ||ref||²    (0 for pure rigid rotation)
+        rot    = theta2 - theta1                (unchanged)
 
     Args:
-        DOFs1 (jnp.ndarray): array of shape (Any, 3) representing the DOFs of the first node connected by the ligament.
-        DOFs2 (jnp.ndarray): array of shape (Any, 3) representing the DOFs of the second node connected by the ligament.
-        reference_vector (jnp.ndarray, optional): array of shape (2,) or (Any, 2) representing the reference configuration of the ligament. Defaults to jnp.array([1., 0.]).
+        DOFs1 (jnp.ndarray): shape (n, 3) — DOFs [dx, dy, θ] at node 1.
+        DOFs2 (jnp.ndarray): shape (n, 3) — DOFs [dx, dy, θ] at node 2.
+        reference_vector (jnp.ndarray): shape (2,) or (n, 2) — rest bond vector.
 
     Returns:
-        Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]: axial, shear, and rotational strains.
+        Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]: axial, shear, rotational strains.
     """
 
     dU = DOFs2[:, :2] - DOFs1[:, :2]
     dRot = DOFs2[:, 2] - DOFs1[:, 2]
+    mean_rot = (DOFs2[:, 2] + DOFs1[:, 2]) / 2.0
 
-    axial_strain = vdot(dU, reference_vector) / jnp.linalg.norm(reference_vector, axis=-1)**2
-    shear_strain = jnp.cross(reference_vector, dU, axis=-1) / jnp.linalg.norm(reference_vector, axis=-1)**2 - (DOFs2[:, 2] + DOFs1[:, 2])/2
+    # Exact current bond vector in the lab frame: ref + relative node displacement.
+    # (_face_to_node_displacement uses the full rotation matrix, so dU is exact.)
+    current_bond = reference_vector + dU
+
+    # Rotate back by the mean face rotation → corotated frame.
+    # For pure rigid rotation θ: current_bond = R(θ)·ref → corot_bond = ref → strain = 0.
+    c = jnp.cos(mean_rot)
+    s = jnp.sin(mean_rot)
+    corot_bond = jnp.stack([
+        c * current_bond[..., 0] + s * current_bond[..., 1],
+       -s * current_bond[..., 0] + c * current_bond[..., 1],
+    ], axis=-1)
+
+    norm_sq = jnp.linalg.norm(reference_vector, axis=-1) ** 2
+    axial_strain = vdot(corot_bond - reference_vector, reference_vector) / norm_sq
+    shear_strain = jnp.cross(reference_vector, corot_bond, axis=-1) / norm_sq
 
     return axial_strain, shear_strain, dRot
 
