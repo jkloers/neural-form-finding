@@ -142,10 +142,15 @@ def setup_static_solver(
                 new_mech = ctrl.mechanical_params._replace(bond_params=new_bond_params)
                 return ctrl._replace(reference_geometry=new_ref_geom, mechanical_params=new_mech)
 
+            delta_t = 1.0 / num_steps  # incremental load fraction per step
+
             def ul_solve_single_step(carry, t):
                 delta_free, accumulated_disp, ctrl = carry
 
-                result = solver.run(delta_free, t=t, control_params=ctrl)
+                # Apply only the incremental load delta_t*F_max, not the total t*F_max.
+                # The reference is already at equilibrium under F(t-delta_t), so only
+                # the load increment needs to be absorbed by the incremental displacement.
+                result = solver.run(delta_free, t=delta_t, control_params=ctrl)
                 new_delta_free = result.params
 
                 # Incremental face displacement (n_faces, 3)
@@ -155,7 +160,7 @@ def setup_static_solver(
                 new_accumulated = accumulated_disp + delta_face_disp
 
                 new_ctrl = _update_control_params(new_accumulated, ctrl)
-                fun_val = total_potential_energy(new_delta_free, t, ctrl)
+                fun_val = total_potential_energy(new_delta_free, delta_t, ctrl)
 
                 return (new_delta_free, new_accumulated, new_ctrl), (new_accumulated, fun_val)
 

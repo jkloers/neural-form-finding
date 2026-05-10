@@ -26,8 +26,10 @@ def create_train_step(initial_state, target_cfg: TargetConfig, validity_cfg: Val
         optimizer, train_step_fn
     """
     
-    # We use Adam for smooth optimization
-    optimizer = optax.adam(learning_rate=training_cfg.learning_rate)
+    optimizer = optax.chain(
+        optax.clip_by_global_norm(1.0),
+        optax.adam(learning_rate=training_cfg.learning_rate),
+    )
     
     # The loss function closed over the constants
     def loss_fn(map_params):
