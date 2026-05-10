@@ -170,69 +170,145 @@ def visualize_pipeline_results(result, tessellation, config, target_params, conf
         if ani_path:
             print(f"  Saved animation to {ani_path}")
 
-    # Energy Plot
+    # 5. Energy Plot (Stage 2 Analysis)
     if config.visualization.energy_plot and result.get('solution') and getattr(result['solution'], 'energies', None) is not None:
+        print("Displaying Stage 2: Thermodynamic Balance Analysis...")
         energies_dict = result['solution'].energies
         
-        if isinstance(energies_dict, dict):
-            total_energy = energies_dict['total']
-            stretch_energy = energies_dict['stretch']
-            shear_energy = energies_dict['shear']
-            rot_energy = energies_dict['rot']
-            contact_energy = energies_dict.get('contact', None)
-            work_energy = energies_dict.get('work', None)
+        if not isinstance(energies_dict, dict):
+            print("  Warning: Energy history is not a dictionary. Skipping scientific plot.")
         else:
-            total_energy = energies_dict
-            stretch_energy = None
-            work_energy = None
+            # 1. Configuration esthétique stricte (Standard Scientifique)
+            plt.rcParams.update({
+                'font.family': 'serif',       # Police classique type article
+                'axes.linewidth': 1.0,        # Cadre fin
+                'lines.linewidth': 1.5,       # Lignes des totaux
+                'font.size': 11,
+                'legend.frameon': True,
+                'legend.edgecolor': 'black',
+                'legend.fancybox': False,
+            })
+
+            fig, ax = plt.subplots(figsize=(9, 5))
+
+            # 2. Extraction des données
+            steps = np.arange(len(energies_dict['work']))
+            w_ext = energies_dict['work']
             
-        plt.style.use('default')
-        fig, ax = plt.subplots(figsize=(8, 6))
-        
-        # Theme: Princeton Orange, Green, and Black
-        if config.physics.incremental:
-            steps = np.linspace(1.0 / config.physics.num_load_steps, 1.0, config.physics.num_load_steps)
-            ax.plot(steps, total_energy, marker='o', linestyle='-', color='#000000', linewidth=2, label='Total Energy')
-            if stretch_energy is not None:
-                ax.plot(steps, stretch_energy, marker='x', linestyle='--', color='#F58025', label='Stretch Energy')
-                ax.plot(steps, shear_energy, marker='s', linestyle='-.', color='#009900', label='Shear Energy')
-                ax.plot(steps, rot_energy, marker='^', linestyle=':', color='#CC5500', label='Rotational Energy')
-                if contact_energy is not None and np.any(contact_energy > 0):
-                    ax.plot(steps, contact_energy, marker='d', linestyle='-', color='#3CB371', label='Contact Energy')
-                if work_energy is not None and np.any(jnp.abs(work_energy) > 1e-6):
-                    ax.plot(steps, -work_energy, marker='v', linestyle='-', color='#777777', label='External Work (-W_ext)')
-            ax.set_xlabel('Load Factor (t)', color='black')
-        else:
-            ax.plot([1.0], total_energy, marker='o', color='#000000', label='Total Energy')
-            if stretch_energy is not None:
-                ax.plot([1.0], stretch_energy, marker='x', color='#F58025', label='Stretch Energy')
-                ax.plot([1.0], shear_energy, marker='s', color='#009900', label='Shear Energy')
-                ax.plot([1.0], rot_energy, marker='^', color='#CC5500', label='Rotational Energy')
-                if contact_energy is not None and np.any(contact_energy > 0):
-                    ax.plot([1.0], contact_energy, marker='d', color='#3CB371', label='Contact Energy')
-                if work_energy is not None and np.any(jnp.abs(work_energy) > 1e-6):
-                    ax.plot([1.0], -work_energy, marker='v', color='#777777', label='External Work (-W_ext)')
-            ax.set_xlabel('Step', color='black')
+            e_stretch = energies_dict['stretch']
+            e_shear = energies_dict['shear']
+            e_rot = energies_dict['rot']
+            e_contact = energies_dict['contact']
             
-        ax.set_ylabel('Energy', color='black')
-        ax.set_title('Energy Decomposition during Physics Solver', color='black', pad=20, fontweight='bold')
-        ax.grid(True, linestyle='--', color='#DDDDDD', alpha=0.7)
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
-        ax.spines['bottom'].set_color('black')
-        ax.spines['left'].set_color('black')
-        ax.tick_params(colors='black')
-        
-        legend = ax.legend(facecolor='white', edgecolor='#CCCCCC')
-        for text in legend.get_texts():
-            text.set_color("black")
-        
-        if config.visualization.save_outputs and run_dir:
-            save_path = os.path.join(run_dir, "energy_plot.png")
-            plt.savefig(save_path, dpi=300, bbox_inches='tight')
-            print(f"  Saved energy plot to {save_path}")
+            # Recalcul de U_int total pour le bilan
+            u_int = e_stretch + e_shear + e_rot + e_contact
             
-        if config.visualization.show_plots: 
-            plt.show()
-        else:
-            plt.close(fig)
+            # Le Bilan (Théoriquement = 0)
+            thermo_balance = u_int - w_ext
+
+            # 3. Plot Balance Curves (Symmetry and Zero-check)
+            ax.plot(steps, u_int, color='#000000', linewidth=2, label=r'Total Internal Energy ($U_{int}$)', zorder=5)
+            ax.plot(steps, -w_ext, color='#D62828', linewidth=2, label=r'External Work ($-W_{ext}$)', zorder=5)
+            ax.plot(steps, thermo_balance, color='#2D6A4F', linestyle='-', linewidth=2.5, 
+                    label=r'Energy Balance ($\Sigma \approx 0$)', zorder=6)
+
+            # 4. Stacked Area Plot (The "economist" breakdown)
+            stack_labels = [r'Rotation ($E_{rot}$)', r'Stretch ($E_{stretch}$)', r'Shear ($E_{shear}$)', r'Contact ($E_{contact}$)' ]
+            stack_colors = ['#F58025', '#FFB380', '#D9D9D9', '#808080']
+            
+            show_contact = np.max(e_contact) > 1e-6
+            
+            y_stack = [e_rot, e_stretch, e_shear]
+            colors = stack_colors[:3]
+            labels = stack_labels[:3]
+            
+            if show_contact:
+                y_stack.append(e_contact)
+                colors.append(stack_colors[3])
+                labels.append(stack_labels[3])
+
+            ax.stackplot(steps, *y_stack, labels=labels, colors=colors, alpha=0.7, zorder=2)
+
+            # 5. Reference zero line
+            ax.axhline(0, color='#000000', linewidth=0.8, linestyle='-', alpha=0.5)
+
+            # 6. Final Touches
+            ax.set_xlabel('Load Step')
+            ax.set_ylabel('Energy (Joules)')
+            ax.set_title("Energy Balance Analysis", pad=15, fontweight='bold')
+            
+            ax.grid(True, linestyle=':', alpha=0.3, zorder=1)
+            
+            # Place legend inside the plot to ensure it stays within the visible area
+            ax.legend(loc='upper left', fontsize=9, ncol=2, frameon=True, framealpha=0.9)
+            
+            plt.tight_layout()
+            
+            if config.visualization.save_outputs and run_dir:
+                save_path = os.path.join(run_dir, "energy_balance.png")
+                plt.savefig(save_path, dpi=300, bbox_inches='tight')
+                print(f"  Saved energy balance plot to {save_path}")
+                
+            if config.visualization.show_plots: 
+                plt.show()
+            else:
+                plt.close(fig)
+
+
+def plot_loss_history(history, config, run_dir=None):
+    """Plots the training loss history with component breakdown (Étape 7)."""
+    if not history:
+        return
+        
+    plt.rcParams.update({
+        'font.family': 'serif',
+        'axes.linewidth': 1.0,
+        'font.size': 11,
+    })
+
+    epochs = np.arange(len(history))
+    
+    # Extraction et calculs hiérarchiques
+    total = [float(h['total']) for h in history]
+    chamfer = [float(h['chamfer_total']) for h in history]
+    energy = [float(h['energy']) for h in history]
+    material = [float(h.get('global_material_area', 0.0)) for h in history]
+    
+    # Étape 8 : Calcul de la perte géométrique totale (Somme pondérée si nécessaire, 
+    # mais ici on suit la logique de l'utilisateur : Chamfer + Conservation)
+    geom_total = [c + m for c, m in zip(chamfer, material)]
+
+    fig, ax = plt.subplots(figsize=(9, 5))
+
+    # Totaux (Traits épais)
+    ax.plot(epochs, total, color='#000000', linewidth=2.5, label='Total Loss', zorder=10)
+    ax.plot(epochs, geom_total, color='#F58025', linewidth=2.0, label='Geometric Objective (Total)', zorder=8)
+    ax.plot(epochs, energy, color='#2D6A4F', linewidth=2.0, label='Physical Objective (Energy)', zorder=8)
+    
+    # Sous-composantes géométriques (Traits fins pointillés)
+    ax.plot(epochs, chamfer, color='#F58025', linestyle='--', linewidth=1.2, label='  └─ Target Fitting (Chamfer)', alpha=0.7)
+    
+    mat_array = np.array(material)
+    if np.max(mat_array) > 1e-9:
+        ax.plot(epochs, material, color='#D62828', linestyle=':', linewidth=1.2, label='  └─ Material Area Conservation', alpha=0.7)
+
+    ax.set_yscale('log')
+    ax.set_xlabel('Epoch')
+    ax.set_ylabel('Loss Value (Log Scale)')
+    ax.set_title("Neural Form-Finding Convergence Analysis", pad=15, fontweight='bold')
+    
+    ax.grid(True, which="both", linestyle=':', alpha=0.3)
+    ax.legend(loc='upper right', fontsize=8, framealpha=0.9, ncol=1)
+
+    plt.tight_layout()
+
+    if config.visualization.save_outputs and run_dir:
+        save_path = os.path.join(run_dir, "training_loss.png")
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"  Saved loss history plot to {save_path}")
+        
+    if config.visualization.show_plots:
+        plt.show()
+    else:
+        plt.close(fig)
+

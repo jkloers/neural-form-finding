@@ -302,6 +302,9 @@ class Tessellation:
             return np.zeros((0,), dtype=float)
         return np.array([face.area(self.vertices) for face in self.faces], dtype=float)
         
+    def compute_total_area(self):
+        """Compute the total material area of the tessellation."""
+        return np.sum(self.get_face_areas())
 
     def compute_ratio(self, face_idx):
         """Compute the height-to-width ratio of a specific face."""

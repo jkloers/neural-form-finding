@@ -15,6 +15,8 @@ unpacked after convergence.
 
 import jax.numpy as jnp
 from jaxopt import LBFGS
+from typing import Any
+import equinox as eqx
 
 from jax_backend.state import CentroidalState
 from jax_backend.constraints import compute_geometric_objective
@@ -62,7 +64,7 @@ def _unpack(x: jnp.ndarray,
 def solve_geometric_validity(
         initial_state: CentroidalState,
         target_cloud: jnp.ndarray,
-        weights: dict = None) -> CentroidalState:
+        validity_cfg: Any) -> CentroidalState:
     """Optimize (face_centroids, centroid_node_vectors) for geometric validity.
 
     Minimizes the geometric objective — a weighted sum of hinge connectivity,
@@ -78,7 +80,8 @@ def solve_geometric_validity(
         CentroidalState with optimized (face_centroids, centroid_node_vectors)
         and unchanged topology.
     """
-    w = {**DEFAULT_GEOMETRIC_WEIGHTS, **(weights or {})}
+    merged_weights = {**DEFAULT_GEOMETRIC_WEIGHTS, **validity_cfg.weights}
+    validity_cfg = eqx.tree_at(lambda c: c.weights, validity_cfg, merged_weights)
 
     n_faces = initial_state.face_centroids.shape[0]
     max_nodes = initial_state.centroid_node_vectors.shape[1]
@@ -89,7 +92,7 @@ def solve_geometric_validity(
     def objective_fn(x, state_param):
         centroids, cnv = _unpack(x, split_idx, n_faces, max_nodes)
         return compute_geometric_objective(
-            centroids, cnv, state_param, target_cloud, w)
+            centroids, cnv, state_param, target_cloud, validity_cfg)
 
     result = LBFGS(fun=objective_fn).run(x0, state_param=initial_state)
 

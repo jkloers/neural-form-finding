@@ -11,9 +11,9 @@ import optax
 
 from jax_backend.training.loss import compute_end_to_end_loss
 
-from problem.config import TargetConfig, PhysicsConfig, TrainingConfig
+from problem.config import TargetConfig, PhysicsConfig, TrainingConfig, ValidityConfig
 
-def create_train_step(initial_state, target_cfg: TargetConfig, physics_cfg: PhysicsConfig, training_cfg: TrainingConfig, map_type: str = 'conformal_polynomial', use_shirley_chiu: bool = True, strict_boundary_fit: bool = True, initial_scale_factor: float = 1.0):
+def create_train_step(initial_state, target_cfg: TargetConfig, validity_cfg: ValidityConfig, physics_cfg: PhysicsConfig, training_cfg: TrainingConfig, map_type: str = 'conformal_polynomial', use_shirley_chiu: bool = True, strict_boundary_fit: bool = True):
     """Creates a compiled training step for optimizing map_params.
     
     Args:
@@ -32,9 +32,9 @@ def create_train_step(initial_state, target_cfg: TargetConfig, physics_cfg: Phys
     # The loss function closed over the constants
     def loss_fn(map_params):
         return compute_end_to_end_loss(
-            map_params, initial_state, target_cfg, physics_cfg, training_cfg, 
+            map_params, initial_state, target_cfg, validity_cfg, physics_cfg, training_cfg, 
             map_type=map_type, use_shirley_chiu=use_shirley_chiu, 
-            strict_boundary_fit=strict_boundary_fit, initial_scale_factor=initial_scale_factor
+            strict_boundary_fit=strict_boundary_fit
         )
         
     @jax.jit
@@ -52,11 +52,12 @@ def create_train_step(initial_state, target_cfg: TargetConfig, physics_cfg: Phys
     return optimizer, train_step_fn
 
 def train_pipeline(initial_map_params, initial_state, target_cfg: TargetConfig, 
-                   physics_cfg: PhysicsConfig, training_cfg: TrainingConfig, map_type: str = 'conformal_polynomial', use_shirley_chiu: bool = True, strict_boundary_fit: bool = True, initial_scale_factor: float = 1.0):
+                   validity_cfg: ValidityConfig,
+                   physics_cfg: PhysicsConfig, training_cfg: TrainingConfig, map_type: str = 'conformal_polynomial', use_shirley_chiu: bool = True, strict_boundary_fit: bool = True):
     """Run the training loop to find optimal mapping parameters."""
     
     optimizer, train_step_fn = create_train_step(
-        initial_state, target_cfg, physics_cfg, training_cfg, map_type, use_shirley_chiu, strict_boundary_fit, initial_scale_factor
+        initial_state, target_cfg, validity_cfg, physics_cfg, training_cfg, map_type, use_shirley_chiu, strict_boundary_fit
     )
     
     opt_state = optimizer.init(initial_map_params)

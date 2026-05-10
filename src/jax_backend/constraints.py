@@ -225,46 +225,39 @@ def boundary_face_rigidity(cnv, boundary_face_node_ids):
 
 
 def face_non_inversion(cnv):
-    """Penalizes faces that have flipped inside out (negative signed area).
-    Uses the shoelace formula on the centroid-node vectors.
-
-    Args:
-        cnv: (n_faces, max_nodes, 2)
-
-    Returns:
-        scalar — penalty for faces with negative oriented area.
-    """
-    # Assuming quad faces (first 4 nodes are ordered CCW originally)
-    # Area = 0.5 * sum(x_i * y_i+1 - x_i+1 * y_i)
+    """Penalizes faces that have flipped inside out (negative signed area)."""
+    from jax_backend.geometry import compute_face_areas
+    # We use signed area check (shoelace without absolute value is better for inversion)
+    # But for now, let's stick to the RELU on a small margin.
     area = 0.5 * (
         cnv[:, 0, 0] * cnv[:, 1, 1] - cnv[:, 0, 1] * cnv[:, 1, 0] +
         cnv[:, 1, 0] * cnv[:, 2, 1] - cnv[:, 1, 1] * cnv[:, 2, 0] +
         cnv[:, 2, 0] * cnv[:, 3, 1] - cnv[:, 2, 1] * cnv[:, 3, 0] +
         cnv[:, 3, 0] * cnv[:, 0, 1] - cnv[:, 3, 1] * cnv[:, 0, 0]
     )
-    
-    # We penalize if area drops below a small positive margin
     margin = 1e-4
     violations = jax.nn.relu(margin - area)
-    
     return jnp.sum(violations**2)
 
 
-def compute_geometric_objective(face_centroids, cnv, state, target_cloud, weights):
+def face_area_penalty(cnv, initial_face_areas):
+    """Penalizes deviation from initial face areas (Étape 4)."""
+    from jax_backend.geometry import compute_face_areas
+    current_areas = compute_face_areas(cnv)
+    return jnp.mean((current_areas - initial_face_areas)**2)
+
+
+def compute_geometric_objective(face_centroids, cnv, state, target_cloud, validity_cfg):
     """Total geometric validity objective.
 
     Args:
-        face_centroids: (n_faces, 2) — optimizable
-        cnv: (n_faces, max_nodes, 2) — optimizable
-        state: CentroidalState — fixed topology
-        target_cloud: (n_target, 2) — target shape
-        weights: dict with keys:
-            'connectivity', 'non_intersection', 'target', 'arm_symmetry', 
-            'void_length', 'void_collinear'
-
-    Returns:
-        scalar — weighted sum of all geometric penalties.
+        face_centroids: (n_faces, 2)
+        cnv: (n_faces, max_nodes, 2)
+        state: CentroidalState (fixed topology + initial areas)
+        target_cloud: (n_target, 2)
+        validity_cfg: ValidityConfig object
     """
+    weights = validity_cfg.weights
     e_connect = hinge_connectivity(
         face_centroids, cnv, state.hinge_node_pairs)
 
@@ -288,7 +281,7 @@ def compute_geometric_objective(face_centroids, cnv, state, target_cloud, weight
 
     e_inversion = face_non_inversion(cnv)
 
-    return (weights['connectivity']      * e_connect +
+    loss = (weights['connectivity']      * e_connect +
             weights['non_intersection']  * e_non_inv +
             weights['target']            * e_target +
             weights['arm_symmetry']      * e_symmetry +
@@ -297,3 +290,10 @@ def compute_geometric_objective(face_centroids, cnv, state, target_cloud, weight
             weights['anchoring']         * e_anchoring +
             weights['boundary_rigidity'] * e_bound_rigid +
             weights['face_inversion']    * e_inversion)
+
+    # Étape 4 : Contrainte locale d'aire
+    if validity_cfg.preserve_face_area:
+        e_area = face_area_penalty(cnv, state.initial_face_areas)
+        loss += validity_cfg.face_area_weight * e_area
+
+    return loss

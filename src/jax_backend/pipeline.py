@@ -38,18 +38,18 @@ from jax_backend.physics_solver.energy import (
 from jax_backend.physics_solver.statics import setup_static_solver
 from jax_backend.physics_solver.params import ReferenceGeometry, build_control_params
 from problem.targets import get_target_points
-from problem.config import TargetConfig, PhysicsConfig
+from problem.config import TargetConfig, PhysicsConfig, ValidityConfig
 
 
 def forward_pipeline(
         initial_state: CentroidalState,
         target_cfg: TargetConfig,
+        validity_cfg: ValidityConfig,
         physics_cfg: PhysicsConfig,
         map_type: str = 'conformal_polynomial',
         map_params: Optional[jnp.ndarray] = None,
         use_shirley_chiu: bool = True,
-        strict_boundary_fit: bool = True,
-        initial_scale_factor: float = 1.0) -> dict:
+        strict_boundary_fit: bool = True) -> dict:
     """Full differentiable pipeline: initial map → geometric validity → static equilibrium.
 
     Args:
@@ -84,11 +84,9 @@ def forward_pipeline(
     mapping_fn = build_mapping_fn(
         initial_state, target_params,
         map_type=map_type,
-        scale_factor=physics_cfg.scale_factor,
         domain_restriction=physics_cfg.domain_restriction,
         use_shirley_chiu=use_shirley_chiu,
-        strict_boundary_fit=strict_boundary_fit,
-        initial_scale_factor=initial_scale_factor
+        strict_boundary_fit=strict_boundary_fit
     )
 
     mapped_state = apply_mapping(
@@ -103,7 +101,7 @@ def forward_pipeline(
     # ══════════════════════════════════════════════════════════════════════════
     target_cloud = jnp.array(get_target_points(target_params, n_points=200))
     valid_state = solve_geometric_validity(
-        mapped_state, target_cloud, weights=physics_cfg.geom_weights)
+        mapped_state, target_cloud, validity_cfg=validity_cfg)
 
     # ══════════════════════════════════════════════════════════════════════════
     # Stage 2 — Static Physics Solver

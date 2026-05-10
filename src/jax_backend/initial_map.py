@@ -35,31 +35,24 @@ def preprocess_to_complex(p_restricted, context, params=None):
 
 def postprocess_radial_fit(w, context, params=None):
     """Radial scaling, target adaptation, and translation."""
-    tx, ty, s_val = 0.0, 0.0, 1.0
+    tx, ty = 0.0, 0.0
     if isinstance(params, dict):
         tx = params.get('tx', 0.0)
         ty = params.get('ty', 0.0)
-        s_val = params.get('s_val', 1.0)
         
-    # Apply local scale
-    w_final = s_val * w 
+    w_final = w
     
     # Adaptation to target shape
     w_angle = jnp.angle(w_final)
     
-    # Flags: strict_boundary_fit and initial_scale_factor
+    # Flags: strict_boundary_fit
     strict_fit = context.get('strict_boundary_fit', True)
-    initial_scale = context.get('initial_scale_factor', 1.0)
-    if isinstance(params, dict):
-        initial_scale = params.get('initial_scale_factor', initial_scale)
     
     target_rad = jnp.where(
         strict_fit & (jnp.max(context['b_radii']) > 0.0),
         jnp.interp(w_angle, context['b_angles'], context['b_radii']),
         context.get('base_initial_radius', context['radius'])
     )
-    
-    target_rad = target_rad * initial_scale
     
     x_new = jnp.real(w_final) * target_rad + context['center'][0] + tx
     y_new = jnp.imag(w_final) * target_rad + context['center'][1] + ty
@@ -147,11 +140,9 @@ def build_mapping_fn(
         state: CentroidalState,
         target_params: dict,
         map_type: str = 'elliptical_grip',
-        scale_factor: float = 1.0,
         domain_restriction: float = 0.8,
         use_shirley_chiu: bool = True,
-        strict_boundary_fit: bool = True,
-        initial_scale_factor: float = 1.0) -> Callable:
+        strict_boundary_fit: bool = True) -> Callable:
     """Factory function to build a modular JAX mapping pipeline."""
     c = state.face_centroids
     s = state.centroid_node_vectors
@@ -196,7 +187,6 @@ def build_mapping_fn(
         'shape_center': shape_center,
         'use_shirley_chiu': use_shirley_chiu,
         'strict_boundary_fit': strict_boundary_fit,
-        'initial_scale_factor': initial_scale_factor,
         'base_initial_radius': jnp.mean(boundary_radii) if len(boundary_radii) > 0 else radius
     }
 
@@ -230,8 +220,8 @@ def build_mapping_fn(
             else:
                 mapped_p = p_restricted
         
-        # C. Universal Post-processing: Rescale global around target center
-        return context['center'] + (mapped_p - context['center']) * scale_factor
+        # C. Universal Post-processing: Boundary mapping is final
+        return mapped_p
 
     return mapping_fn
 

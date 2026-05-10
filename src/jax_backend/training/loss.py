@@ -13,7 +13,7 @@ from typing import Any
 from jax_backend.pipeline import forward_pipeline
 from jax_backend.state import CentroidalState
 from problem.targets import get_target_points
-from problem.config import TargetConfig, PhysicsConfig, TrainingConfig
+from problem.config import TargetConfig, PhysicsConfig, TrainingConfig, ValidityConfig
 
 def evaluate_physical_loss(solution, valid_state, target_cfg: TargetConfig, training_cfg: TrainingConfig):
     """Computes the pure physical objective from the pipeline results.
@@ -63,7 +63,11 @@ def evaluate_physical_loss(solution, valid_state, target_cfg: TargetConfig, trai
     
     # 3. Compute Geometric Loss (Chamfer distance)
     # Generate the 2D point cloud for the target
-    target_params = {'type': target_cfg.type, 'center': target_cfg.center, 'radius': target_cfg.radius}
+    target_params = {
+        'type': target_cfg.type, 
+        'center': target_cfg.center, 
+        'radius': target_cfg.radius
+    }
     target_cloud = get_target_points(target_params, n_points=500)
     target_cloud = jnp.asarray(target_cloud, dtype=float)
     
@@ -95,18 +99,41 @@ def evaluate_physical_loss(solution, valid_state, target_cfg: TargetConfig, trai
     # 4. Final Aggregation
     loss_weights = training_cfg.loss_weights
     
+    # Reconstruct Final CNVs to check material area conservation
+    # (Rotate CNVs by the final deployment angles)
+    final_thetas = final_displacements[:, 2]
+    cos_t = jnp.cos(final_thetas[:, None, None])
+    sin_t = jnp.sin(final_thetas[:, None, None])
+    s = valid_state.centroid_node_vectors
+    s_new_x = cos_t * s[:, :, 0:1] - sin_t * s[:, :, 1:2]
+    s_new_y = sin_t * s[:, :, 0:1] + cos_t * s[:, :, 1:2]
+    final_cnv = jnp.concatenate([s_new_x, s_new_y], axis=-1)
+
+    # 4a. Global Material Conservation (Étape 5 Révisée)
+    global_material_loss = 0.0
+    if target_cfg.enforce_global_material_area:
+        from jax_backend.geometry import compute_face_areas
+        current_face_areas = compute_face_areas(final_cnv)
+        current_total_material_area = jnp.sum(current_face_areas)
+        initial_total_material_area = jnp.sum(valid_state.initial_face_areas)
+        global_material_loss = (current_total_material_area - initial_total_material_area)**2
+
     # Weight for the energy loss
     weight_physics = loss_weights.get("physics", 0.1)
     energy_loss = weight_physics * u_int
     
     weight_geometric = loss_weights.get("geometric", 1.0)
-    loss = (weight_geometric * chamfer_loss) + energy_loss
+    weight_global = loss_weights.get("global_material_area", 1.0)
+    
+    loss = (weight_geometric * chamfer_loss) + energy_loss + (weight_global * global_material_loss)
     
     loss_components = {
+        'total': loss,
         'chamfer_precision': precision_loss,
         'chamfer_coverage': coverage_loss,
         'chamfer_total': chamfer_loss,
-        'energy': energy_loss
+        'energy': energy_loss,
+        'global_material_area': global_material_loss
     }
     
     return loss, loss_components
@@ -116,12 +143,12 @@ def compute_end_to_end_loss(
         map_params: Any, 
         initial_state: CentroidalState, 
         target_cfg: TargetConfig, 
+        validity_cfg: ValidityConfig,
         physics_cfg: PhysicsConfig, 
         training_cfg: TrainingConfig, 
         map_type: str = 'conformal_polynomial', 
         use_shirley_chiu: bool = True, 
-        strict_boundary_fit: bool = True, 
-        initial_scale_factor: float = 1.0):
+        strict_boundary_fit: bool = True):
     """Wrapper function required by JAX for gradient computation.
     
     In JAX, jax.grad needs a single function that takes parameters and 
@@ -132,12 +159,12 @@ def compute_end_to_end_loss(
     results = forward_pipeline(
         initial_state=initial_state,
         target_cfg=target_cfg,
+        validity_cfg=validity_cfg,
         physics_cfg=physics_cfg,
         map_type=map_type,
         map_params=map_params,
         use_shirley_chiu=use_shirley_chiu,
-        strict_boundary_fit=strict_boundary_fit,
-        initial_scale_factor=initial_scale_factor
+        strict_boundary_fit=strict_boundary_fit
     )
     
     # 2. Evaluate Physical Objective

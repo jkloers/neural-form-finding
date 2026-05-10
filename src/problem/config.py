@@ -13,33 +13,47 @@ class TargetConfig(eqx.Module):
     type: str
     center: Tuple[float, float]
     radius: float
+    enforce_global_material_area: bool
 
-    def __init__(self, type: str, center: Tuple[float, float], radius: float):
+    def __init__(self, type: str, center: Tuple[float, float], radius: float, 
+                 enforce_global_material_area: bool = False):
         self.type = type
         self.center = center
         self.radius = radius
+        self.enforce_global_material_area = enforce_global_material_area
 
 class MappingConfig(eqx.Module):
     type: str
     params: Any
     use_shirley_chiu: bool
     strict_boundary_fit: bool
-    initial_scale_factor: float
-    scale_factor: float
     domain_restriction: float
 
-    def __init__(self, type: str, params: Any, use_shirley_chiu: bool, strict_boundary_fit: bool, initial_scale_factor: float, scale_factor: float, domain_restriction: float):
+    def __init__(self, type: str, params: Any, use_shirley_chiu: bool, 
+                 strict_boundary_fit: bool, 
+                 domain_restriction: float):
         self.type = type
         self.params = params
         self.use_shirley_chiu = use_shirley_chiu
         self.strict_boundary_fit = strict_boundary_fit
-        self.initial_scale_factor = initial_scale_factor
-        self.scale_factor = scale_factor
         self.domain_restriction = domain_restriction
 
 
+class ValidityConfig(eqx.Module):
+    """Configuration for Stage 1 — Geometric Validity."""
+    weights: Dict[str, float]
+    preserve_face_area: bool
+    face_area_weight: float
+
+    def __init__(self, weights: Dict[str, float], 
+                 preserve_face_area: bool = False, 
+                 face_area_weight: float = 1.0):
+        self.weights = weights
+        self.preserve_face_area = preserve_face_area
+        self.face_area_weight = face_area_weight
+
+
 class PhysicsConfig(eqx.Module):
-    scale_factor: float
     domain_restriction: float
     use_contact: bool
     k_contact: float
@@ -48,12 +62,10 @@ class PhysicsConfig(eqx.Module):
     linearized_strains: bool
     incremental: bool
     num_load_steps: int
-    geom_weights: Dict[str, float]
     solver_maxiter: int = 1000
     solver_tol: float = 1e-5
 
     def __init__(self,
-                 scale_factor: float,
                  domain_restriction: float,
                  use_contact: bool,
                  k_contact: float,
@@ -62,10 +74,8 @@ class PhysicsConfig(eqx.Module):
                  linearized_strains: bool,
                  incremental: bool,
                  num_load_steps: int,
-                 geom_weights: Dict[str, float],
                  solver_maxiter: int = 1000,
                  solver_tol: float = 1e-5):
-        self.scale_factor = scale_factor
         self.domain_restriction = domain_restriction
         self.use_contact = use_contact
         self.k_contact = k_contact
@@ -74,7 +84,6 @@ class PhysicsConfig(eqx.Module):
         self.linearized_strains = linearized_strains
         self.incremental = incremental
         self.num_load_steps = num_load_steps
-        self.geom_weights = geom_weights
         self.solver_maxiter = solver_maxiter
         self.solver_tol = solver_tol
 
@@ -130,14 +139,18 @@ class ExperimentConfig(eqx.Module):
     topology: dict
     mapping: MappingConfig
     target: TargetConfig
+    validity: ValidityConfig
     physics: PhysicsConfig
     training: TrainingConfig
     visualization: VisualizationConfig
 
-    def __init__(self, topology: dict, mapping: MappingConfig, target: TargetConfig, physics: PhysicsConfig, training: TrainingConfig, visualization: VisualizationConfig):
+    def __init__(self, topology: dict, mapping: MappingConfig, target: TargetConfig, 
+                 validity: ValidityConfig, physics: PhysicsConfig, 
+                 training: TrainingConfig, visualization: VisualizationConfig):
         self.topology = topology
         self.mapping = mapping
         self.target = target
+        self.validity = validity
         self.physics = physics
         self.training = training
         self.visualization = visualization
@@ -216,7 +229,8 @@ def load_and_parse_config(yaml_path: str) -> ExperimentConfig:
     m_params_trainable = m_params_raw
     if isinstance(m_params_raw, dict):
         m_use_sc = bool(m_params_raw.get('use_shirley_chiu', m_use_sc))
-        m_params_trainable = {k: v for k, v in m_params_raw.items() if k != 'use_shirley_chiu'}
+        m_params_trainable = {k: v for k, v in m_params_raw.items() 
+                              if k not in ['use_shirley_chiu', 's_val']}
         
     # Standardize to JAX PyTree (dict/array)
     m_params = parse_map_params(m_params_trainable)
@@ -226,17 +240,21 @@ def load_and_parse_config(yaml_path: str) -> ExperimentConfig:
         params=m_params,
         use_shirley_chiu=m_use_sc,
         strict_boundary_fit=bool(mapping_raw.get('strict_boundary_fit', True)),
-        initial_scale_factor=float(mapping_raw.get('initial_scale_factor', 1.0)),
-        scale_factor=mapping_raw.get("scale_factor") if mapping_raw.get("scale_factor") is not None else 1.0,
         domain_restriction=mapping_raw.get("domain_restriction", 0.8)
     )
 
-    # 3. Physics & Weights
-    phys_raw = raw.get("physics", {})
+    # 3. Geometric Validity & Optimization Weights
+    validity_raw = raw.get("validity", {})
     weights_raw = raw.get("optimization_weights", {})
-    
+    validity_cfg = ValidityConfig(
+        weights=weights_raw,
+        preserve_face_area=bool(validity_raw.get("preserve_face_area", False)),
+        face_area_weight=float(weights_raw.get("face_area", 1.0))
+    )
+
+    # 4. Physics
+    phys_raw = raw.get("physics", {})
     physics_cfg = PhysicsConfig(
-        scale_factor=mapping_cfg.scale_factor,
         domain_restriction=mapping_cfg.domain_restriction,
         use_contact=phys_raw.get("use_contact", True),
         k_contact=phys_raw.get("k_contact", 1.0),
@@ -245,17 +263,17 @@ def load_and_parse_config(yaml_path: str) -> ExperimentConfig:
         linearized_strains=phys_raw.get("linearized_strains", True),
         incremental=phys_raw.get("incremental", False),
         num_load_steps=phys_raw.get("num_load_steps", 10),
-        geom_weights=weights_raw,
         solver_maxiter=int(phys_raw.get("solver_maxiter", 1000)),
         solver_tol=float(phys_raw.get("solver_tol", 1e-5)),
     )
     
-    # 3. Target
+    # 5. Target
     target_raw = raw.get("target", {})
     target_cfg = TargetConfig(
         type=target_raw.get("type", "circle"),
         center=tuple(target_raw.get("center", (0.0, 0.0))),
-        radius=float(target_raw.get("radius", 1.0))
+        radius=float(target_raw.get("radius", 1.0)),
+        enforce_global_material_area=bool(target_raw.get("enforce_global_material_area", False))
     )
     
     # 4. Training (with defaults if missing)
@@ -290,6 +308,7 @@ def load_and_parse_config(yaml_path: str) -> ExperimentConfig:
         topology=topo_combined,
         mapping=mapping_cfg,
         target=target_cfg,
+        validity=validity_cfg,
         physics=physics_cfg,
         training=training_cfg,
         visualization=vis_cfg,
