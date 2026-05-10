@@ -60,12 +60,13 @@ class PhysicsConfig(eqx.Module):
     num_load_steps: int
     solver_maxiter: int
     solver_tol: float
+    updated_lagrangian: bool
 
     def __init__(self, domain_restriction: float, use_contact: bool,
                  k_contact: float, min_angle: float, cutoff_angle: float,
                  linearized_strains: bool, incremental: bool,
                  num_load_steps: int, solver_maxiter: int = 1000,
-                 solver_tol: float = 1e-5):
+                 solver_tol: float = 1e-5, updated_lagrangian: bool = False):
         self.domain_restriction = domain_restriction
         self.use_contact = use_contact
         self.k_contact = k_contact
@@ -76,6 +77,7 @@ class PhysicsConfig(eqx.Module):
         self.num_load_steps = num_load_steps
         self.solver_maxiter = solver_maxiter
         self.solver_tol = solver_tol
+        self.updated_lagrangian = updated_lagrangian
 
 
 class LossWeights(eqx.Module):
@@ -247,6 +249,7 @@ def _parse_physics_config(physics_raw: dict, domain_restriction: float) -> Physi
         num_load_steps=int(physics_raw.get("num_load_steps", 10)),
         solver_maxiter=int(physics_raw.get("solver_maxiter", 1000)),
         solver_tol=float(physics_raw.get("solver_tol", 1e-5)),
+        updated_lagrangian=bool(physics_raw.get("updated_lagrangian", False)),
     )
 
 

@@ -138,6 +138,7 @@ def forward_pipeline(
         num_steps=physics_cfg.num_load_steps,
         solver_maxiter=physics_cfg.solver_maxiter,
         solver_tol=physics_cfg.solver_tol,
+        updated_lagrangian=physics_cfg.updated_lagrangian,
     )
 
     # 2.5 — ControlParams assembly
