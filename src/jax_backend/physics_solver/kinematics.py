@@ -46,8 +46,7 @@ def DOFsInfo(n_faces: int, constrained_face_DOF_pairs: jnp.ndarray) -> Tuple:
     Returns:
         Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]: free_DOF_ids, constrained_DOF_ids, all_DOF_ids.
     """
-    # Il est CRUCIAL d'utiliser numpy (np) et non jax.numpy (jnp) ici.
-    # La topologie doit rester statique pour ne pas être tracée par JAX.
+    # Must use NumPy here, not JAX — topology arrays must stay static and not be traced by JAX.
     if constrained_face_DOF_pairs.shape[0] == 0:
         constrained_DOF_ids = np.array([], dtype=int)
     else:

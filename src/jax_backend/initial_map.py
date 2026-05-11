@@ -17,106 +17,85 @@ from jax_backend.state import CentroidalState
 from jax_backend.geometry import reconstruct_vertices
 from problem.targets import get_target_points
 
-def map_elliptical_grip(p_restricted, params, context):
+def preprocess_to_complex(p_restricted, context, params=None):
+    """Normalization and Shirley-Chiu projection."""
+    if isinstance(params, dict):
+        use_sc = params.get('use_shirley_chiu', context.get('use_shirley_chiu', True))
+    else:
+        use_sc = context.get('use_shirley_chiu', True)
+
     h_sizes = jnp.where(context['half_sizes'] == 0.0, 1.0, context['half_sizes'])
     normalized = (p_restricted - context['box_center']) / h_sizes
     u, v = normalized[0], normalized[1]
-    x_disk = u * jnp.sqrt(jnp.maximum(0.0, 1.0 - (v ** 2) / 2.0))
-    y_disk = v * jnp.sqrt(jnp.maximum(0.0, 1.0 - (u ** 2) / 2.0))
-    mapped = jnp.array([x_disk, y_disk]) * context['radius'] + context['center']
-    return mapped
+    
+    x_disk = jnp.where(use_sc, u * jnp.sqrt(jnp.maximum(0.0, 1.0 - (v ** 2) / 2.0)), u)
+    y_disk = jnp.where(use_sc, v * jnp.sqrt(jnp.maximum(0.0, 1.0 - (u ** 2) / 2.0)), v)
+    
+    return x_disk + 1j * y_disk
+
+def postprocess_radial_fit(w, context, params=None):
+    """Radial scaling, target adaptation, and translation."""
+    tx, ty = 0.0, 0.0
+    if isinstance(params, dict):
+        tx = params.get('tx', 0.0)
+        ty = params.get('ty', 0.0)
+        
+    w_final = w
+    
+    # Adaptation to target shape
+    w_angle = jnp.angle(w_final)
+    
+    # Flags: strict_boundary_fit
+    strict_fit = context.get('strict_boundary_fit', True)
+    
+    target_rad = jnp.where(
+        strict_fit & (jnp.max(context['b_radii']) > 0.0),
+        jnp.interp(w_angle, context['b_angles'], context['b_radii']),
+        context.get('base_initial_radius', context['radius'])
+    )
+    
+    x_new = jnp.real(w_final) * target_rad + context['center'][0] + tx
+    y_new = jnp.imag(w_final) * target_rad + context['center'][1] + ty
+    
+    return jnp.array([x_new, y_new])
+
+def map_elliptical_grip(p_restricted, params, context):
+    z = preprocess_to_complex(p_restricted, context, params)
+    # Elliptical grip is essentially Shirley-Chiu with target radius
+    return jnp.array([jnp.real(z), jnp.imag(z)]) * context['radius'] + context['center']
 
 def map_homothetic(p_restricted, params, context):
     offset = p_restricted - context['box_center']
     return context['center'] + offset
 
-def map_conformal_polynomial(p_restricted, params, context):
-    # 1. Map square to unit disk (Shirley-Chiu mapping)
-    # This ensures the domain is contained within the target circle.
-    # Support both dictionary (new) and array (legacy) map_params
-    
-    if isinstance(params, dict):
-        use_shirley_chiu = params.get('use_shirley_chiu', context.get('use_shirley_chiu', True))
-    else:
-        use_shirley_chiu = context.get('use_shirley_chiu', True)
-    
-    h_sizes = jnp.where(context['half_sizes'] == 0.0, 1.0, context['half_sizes'])
-    normalized = (p_restricted - context['box_center']) / h_sizes
-    u, v = normalized[0], normalized[1]
-    
-    x_disk = jnp.where(use_shirley_chiu, u * jnp.sqrt(jnp.maximum(0.0, 1.0 - (v ** 2) / 2.0)), u)
-    y_disk = jnp.where(use_shirley_chiu, v * jnp.sqrt(jnp.maximum(0.0, 1.0 - (u ** 2) / 2.0)), v)
-    
-    z = x_disk + 1j * y_disk
+def map_conformal_polynomial(z, params):
+    """Pure mathematical core for conformal polynomial."""
     # Support both dictionary (new) and array (legacy) map_params
     if isinstance(params, dict):
-        tx = params.get('tx', 0.0)
-        ty = params.get('ty', 0.0)
-        theta = params.get('theta', 0.0)
-        s_val = params.get('s_val', 1.0)
         c_val = params.get('c_val', jnp.zeros(1))
     else:
-        # Fallback to legacy array format
+        # Fallback to legacy array format (offset 4: tx, ty, theta, s_val)
         if params is None or params.shape[0] < 4:
-            prms = jnp.concatenate([jnp.array([0.0, 0.0, 0.0, 1.0]), jnp.zeros(1)])
+            c_val = jnp.zeros(1)
         else:
-            prms = params
-        tx, ty, theta, s_val = prms[0], prms[1], prms[2], prms[3]
-        c_val = prms[4:]
+            c_val = params[4:]
     
     w = z
     for k in range(c_val.shape[0]):
         power = 4 * (k + 1) + 1
         w = w + c_val[k] * (z ** power)
-        
-    w = s_val * w * jnp.exp(1j * theta)
-    
-    w_angle = jnp.angle(w)
-    target_rad = jnp.where(
-        jnp.max(context['b_radii']) > 0.0,
-        jnp.interp(w_angle, context['b_angles'], context['b_radii']),
-        context['radius']
-    )
-    
-    x_new = jnp.real(w) * target_rad + context['center'][0] + tx
-    y_new = jnp.imag(w) * target_rad + context['center'][1] + ty
-    return jnp.array([x_new, y_new])
+    return w
 
-def map_asymmetric_roots(p_restricted, params, context):
-    """
-    Mapping complexe asymétrique garanti sans criss-cross interne.
-    paramatisé par les racines complexes de la dérivée spatiale.
-    """
-    # 1. Projection de Shirley-Chiu (Carré -> Disque unité)
-    if isinstance(params, dict):
-        use_shirley_chiu = params.get('use_shirley_chiu', context.get('use_shirley_chiu', True))
-    else:
-        use_shirley_chiu = context.get('use_shirley_chiu', True)
-    
-    h_sizes = jnp.where(context['half_sizes'] == 0.0, 1.0, context['half_sizes'])
-    normalized = (p_restricted - context['box_center']) / h_sizes
-    u, v = normalized[0], normalized[1]
-    
-    x_disk = jnp.where(use_shirley_chiu, u * jnp.sqrt(jnp.maximum(0.0, 1.0 - (v ** 2) / 2.0)), u)
-    y_disk = jnp.where(use_shirley_chiu, v * jnp.sqrt(jnp.maximum(0.0, 1.0 - (u ** 2) / 2.0)), v)
-    
-    z = x_disk + 1j * y_disk
-    
-    # 2. Parsing des paramètres sans casser le graphe JAX
+def map_asymmetric_roots(z, params):
+    """Pure mathematical core for asymmetric roots mapping."""
     if params is None or (isinstance(params, jnp.ndarray) and params.shape[0] < 6):
-        # Fallback par défaut
-        tx, ty, theta, s_val = 0.0, 0.0, 0.0, 1.0
         roots_flat = jnp.array([10.0, 0.0])
         weights = jnp.array([1.0])
     elif isinstance(params, dict):
-        tx = params.get('tx', 0.0)
-        ty = params.get('ty', 0.0)
-        theta = params.get('theta', 0.0)
-        s_val = params.get('s_val', 1.0)
         roots_flat = params.get('roots', jnp.array([10.0, 0.0]))
         weights = params.get('weights', jnp.ones(roots_flat.shape[0] // 2))
     else:
-        tx, ty, theta, s_val = params[0], params[1], params[2], params[3]
+        # Legacy offset 4
         rem = params.shape[0] - 4
         if rem % 3 == 0:
             n_roots = rem // 3
@@ -129,40 +108,16 @@ def map_asymmetric_roots(p_restricted, params, context):
             
     roots = roots_flat[0::2] + 1j * roots_flat[1::2]
     
-    # 3. Construction des coefficients du polynôme dérivé f'(z) = prod(1 - w_i * z / r_i)
-    # Note: JAX déroulera (unroll) cette boucle lors du JIT car la taille de 'roots' 
-    # est fixée statiquement par la taille de l'array passé en entrée.
     coeffs = jnp.array([1.0 + 0j])
     for i in range(roots.shape[0]):
         shifted = jnp.pad(coeffs, (1, 0))
-        # Topologically safe fixed-capacity soft masking
         coeffs = jnp.pad(coeffs, (0, 1)) - (weights[i] / roots[i]) * shifted
         
-    # 4. Intégration analytique exacte : a_k z^k -> (a_k / (k+1)) z^{k+1}
     k = jnp.arange(1, len(coeffs) + 1)
     integrated_coeffs = coeffs / k
-    integrated_coeffs = jnp.pad(integrated_coeffs, (1, 0)) # Ajout de f(0) = 0
+    integrated_coeffs = jnp.pad(integrated_coeffs, (1, 0)) 
     
-    # 5. Évaluation tensorielle (JAX polyval attend les puissances décroissantes)
-    w = jnp.polyval(integrated_coeffs[::-1], z)
-    
-    # 6. Post-transformations (Scale, Rotation, Translation)
-    # On maintient le blocage temporaire de la rotation
-    theta = 0.0 
-    w = s_val * w * jnp.exp(1j * theta)
-    
-    # Adaptation radiale au contour cible (ex: convex_heart)
-    w_angle = jnp.angle(w)
-    target_rad = jnp.where(
-        jnp.max(context['b_radii']) > 0.0,
-        jnp.interp(w_angle, context['b_angles'], context['b_radii']),
-        context['radius']
-    )
-    
-    x_new = jnp.real(w) * target_rad + context['center'][0] + tx
-    y_new = jnp.imag(w) * target_rad + context['center'][1] + ty
-    
-    return jnp.array([x_new, y_new])
+    return jnp.polyval(integrated_coeffs[::-1], z)
 
 def map_boundary_projection(p_restricted, params, context):
     offset = p_restricted - context['box_center']
@@ -185,21 +140,10 @@ def build_mapping_fn(
         state: CentroidalState,
         target_params: dict,
         map_type: str = 'elliptical_grip',
-        scale_factor: float = 1.0,
         domain_restriction: float = 0.8,
-        use_shirley_chiu: bool = True) -> Callable:
-    """Factory function to build a pure JAX mapping function.
-
-    Args:
-        state: CentroidalState with flat tessellation geometry.
-        target_params: dict with 'type', 'center', 'radius'
-        map_type: 'elliptical_grip', 'boundary_projection' or 'conformal_polynomial'.
-        scale_factor: scaling applied after mapping.
-        domain_restriction: limits evaluation to a fraction of the domain to avoid singularities.
-
-    Returns:
-        mapping_fn: A callable `f(p, map_params)` that maps R^2 -> R^2.
-    """
+        use_shirley_chiu: bool = True,
+        strict_boundary_fit: bool = True) -> Callable:
+    """Factory function to build a modular JAX mapping pipeline."""
     c = state.face_centroids
     s = state.centroid_node_vectors
     n_faces, max_nodes, dim = s.shape
@@ -218,23 +162,18 @@ def build_mapping_fn(
     center = jnp.asarray(target_params.get('center', [0.0, 0.0]), dtype=float)
     radius = float(target_params.get('radius', 1.0))
 
-    # Pre-computation for boundary_projection
-    if map_type == 'boundary_projection' or shape_type != 'circle':
-        boundary_pts = jnp.asarray(get_target_points(target_params, n_points=500), dtype=float)
-        shape_center = jnp.mean(boundary_pts, axis=0)
-        boundary_vec = boundary_pts - shape_center
-        boundary_angles = jnp.arctan2(boundary_vec[:, 1], boundary_vec[:, 0])
-        boundary_radii = jnp.linalg.norm(boundary_vec, axis=1)
+    # Pre-computation for boundary_projection or shape adaptation
+    boundary_pts = jnp.asarray(get_target_points(target_params, n_points=500), dtype=float)
+    shape_center = jnp.mean(boundary_pts, axis=0)
+    boundary_vec = boundary_pts - shape_center
+    boundary_angles = jnp.arctan2(boundary_vec[:, 1], boundary_vec[:, 0])
+    boundary_radii = jnp.linalg.norm(boundary_vec, axis=1)
 
-        order = jnp.argsort(boundary_angles)
-        b_angles = boundary_angles[order]
-        b_radii = boundary_radii[order]
-        b_angles = jnp.concatenate([b_angles - 2 * jnp.pi, b_angles, b_angles + 2 * jnp.pi])
-        b_radii = jnp.tile(b_radii, 3)
-    else:
-        shape_center = center
-        b_angles = jnp.zeros(3)
-        b_radii = jnp.zeros(3)
+    order = jnp.argsort(boundary_angles)
+    b_angles = boundary_angles[order]
+    b_radii = boundary_radii[order]
+    b_angles = jnp.concatenate([b_angles - 2 * jnp.pi, b_angles, b_angles + 2 * jnp.pi])
+    b_radii = jnp.tile(b_radii, 3)
 
     # 2. Context dictionary passed to pure maps
     context = {
@@ -246,37 +185,43 @@ def build_mapping_fn(
         'b_angles': b_angles,
         'b_radii': b_radii,
         'shape_center': shape_center,
-        'use_shirley_chiu': use_shirley_chiu
+        'use_shirley_chiu': use_shirley_chiu,
+        'strict_boundary_fit': strict_boundary_fit,
+        'base_initial_radius': jnp.mean(boundary_radii) if len(boundary_radii) > 0 else radius
     }
 
-    # 3. Select the core mapping function
-    if map_type == 'elliptical_grip':
-        core_map_fn = map_elliptical_grip
-    elif map_type == 'conformal_polynomial':
-        core_map_fn = map_conformal_polynomial
-    elif map_type == 'asymmetric_roots':
-        core_map_fn = map_asymmetric_roots
-    elif map_type == 'boundary_projection':
-        core_map_fn = map_boundary_projection
-    elif map_type == 'homothetic':
-        core_map_fn = map_homothetic
-    else:
-        print(f"WARNING: Unknown map_type '{map_type}'. Falling back to Identity mapping.")
-        core_map_fn = lambda p, params, ctx: p
-
-    # 4. Create the generic wrapper
+    # 3. Create the generic wrapper
     def mapping_fn(p, map_params=None):
         if map_params is None:
             map_params = {}
             
-        # Universal Pre-processing: Domain restriction
+        # A. Pre-processing: Domain restriction
         p_restricted = context['box_center'] + (p - context['box_center']) * domain_restriction
         
-        # Apply the chosen mathematical core
-        mapped_p = core_map_fn(p_restricted, map_params, context)
+        # B. Core logic branching
+        if map_type in ['conformal_polynomial', 'asymmetric_roots']:
+            # Pipeline: Pre-process -> Complex Core -> Post-process
+            z = preprocess_to_complex(p_restricted, context, map_params)
+            
+            if map_type == 'conformal_polynomial':
+                w = map_conformal_polynomial(z, map_params)
+            else:
+                w = map_asymmetric_roots(z, map_params)
+                
+            mapped_p = postprocess_radial_fit(w, context, map_params)
+        else:
+            # Classic leaf-style maps
+            if map_type == 'elliptical_grip':
+                mapped_p = map_elliptical_grip(p_restricted, map_params, context)
+            elif map_type == 'boundary_projection':
+                mapped_p = map_boundary_projection(p_restricted, map_params, context)
+            elif map_type == 'homothetic':
+                mapped_p = map_homothetic(p_restricted, map_params, context)
+            else:
+                mapped_p = p_restricted
         
-        # Universal Post-processing: Rescale global around target center
-        return context['center'] + (mapped_p - context['center']) * scale_factor
+        # C. Universal Post-processing: Boundary mapping is final
+        return mapped_p
 
     return mapping_fn
 

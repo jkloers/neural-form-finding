@@ -15,6 +15,8 @@ def get_target_points(target_params=None, n_points=200):
     t = np.linspace(0, 2*np.pi, n_points)
     cx, cy = target_params['center']
     scale = target_params['radius']
+    
+    
     shape_type = target_params['type']
 
     if shape_type == 'circle':

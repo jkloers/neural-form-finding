@@ -1,4 +1,3 @@
-from topology.core import Tessellation
 import numpy as np
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
@@ -6,7 +5,6 @@ from matplotlib.patches import Polygon, FancyArrowPatch
 import matplotlib.animation as animation
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
-from problem.targets import DEFAULT_TARGET
 from problem.targets import get_target_points
 
 def plot_tessellation(tessellation, ax=None, 
@@ -64,7 +62,7 @@ def plot_tessellation(tessellation, ax=None,
             mapped_pts = f_vmap(pts)
             ax.plot(mapped_pts[:, 0], mapped_pts[:, 1], color='#457B9D', alpha=0.4, linewidth=1.0, zorder=6)
 
-    # 1. Dessin des Faces
+    # 1. Faces
     if show_faces:
         is_color_list = isinstance(color_faces, list) and len(color_faces) == len(tessellation.faces)
         for i, face in enumerate(tessellation.faces):
@@ -74,7 +72,7 @@ def plot_tessellation(tessellation, ax=None,
             
             # Color kinematic blocks differently
             if show_kinematic_blocks and hasattr(face, 'dofs') and len(face.dofs) > 0:
-                current_color = '#6C757D' # Gris pour les faces bloquées (clamped)
+                current_color = '#6C757D'  # gray for clamped faces
             
             polygon = Polygon(
                 vertices, 
@@ -92,15 +90,14 @@ def plot_tessellation(tessellation, ax=None,
                 ax.text(centroid[0], centroid[1], str(i), color='black', fontsize=10, 
                         ha='center', va='center', weight='bold', zorder=20)
 
-    # 2. Dessin des Sommets
+    # 2. Vertices
     if show_vertices:
         X = tessellation.vertices
         ax.scatter(X[:, 0], X[:, 1], color='#E63946', s=20, zorder=25)
-        if show_vertices: # If we show vertices, we might want their indices, but we'll bind it to show_face_indices or just leave it out. For now keeping it linked to show_face_indices for simplicity if needed, or simply not show them. Let's bind it to show_face_indices.
-            for i, v in enumerate(X):
-                ax.text(v[0], v[1], f"v{i}", color='#E63946', fontsize=8, ha='right', zorder=26)
+        for i, v in enumerate(X):
+            ax.text(v[0], v[1], f"v{i}", color='#E63946', fontsize=8, ha='right', zorder=26)
 
-    # 3. Dessin des Charnières (Vecteurs et points milieux)
+    # 3. Hinges (vectors and midpoints)
     if show_hinges:
         num_faces = len(tessellation.faces)
         for i, hinge in enumerate(tessellation.hinges):
@@ -113,7 +110,7 @@ def plot_tessellation(tessellation, ax=None,
 
             midpoint = (v1 + v2) / 2
             
-            # Vecteurs de déploiement/contraction
+            # Deployment/contraction vectors
             hinge_vector1 = 0.3 * (v1_adj - v1)
             hinge_vector2 = 0.3 * (v2_adj - v2)
 
@@ -155,12 +152,12 @@ def plot_tessellation(tessellation, ax=None,
                 if moment != 0:
                     r = 0.08
                     if moment > 0:
-                        # Sens anti-horaire (Counter-clockwise)
+                        # Counter-clockwise
                         start = (centroid[0] + r, centroid[1] - r/2)
                         end = (centroid[0] - r/2, centroid[1] + r)
                         rad = 0.6
                     else:
-                        # Sens horaire (Clockwise)
+                        # Clockwise
                         start = (centroid[0] - r, centroid[1] - r/2)
                         end = (centroid[0] + r/2, centroid[1] + r)
                         rad = -0.6
@@ -170,36 +167,33 @@ def plot_tessellation(tessellation, ax=None,
                                             zorder=30)
                     ax.add_patch(arrow)
 
-    # 4. Target Shape (Cloud representation)
+    # 4. Target Shape
     if show_target:
         target_pts = get_target_points(target_params, n_points=200)
         if len(target_pts) > 0:
-            # On boucle pour fermer la ligne
             plot_pts = np.vstack([target_pts, target_pts[0]])
             ax.plot(plot_pts[:, 0], plot_pts[:, 1], color="#009900", linestyle='--', linewidth=2.5, zorder=5)
 
     if title:
         ax.set_title(title, fontsize=16, weight='bold', color='black', pad=20)
 
-    # Centrage automatique de la vue
     X = tessellation.vertices
     if len(X) > 0:
         x_min, y_min = X.min(axis=0)
         x_max, y_max = X.max(axis=0)
-        
+
         if show_target and 'target_pts' in locals() and len(target_pts) > 0:
             x_min = min(x_min, target_pts[:, 0].min())
             x_max = max(x_max, target_pts[:, 0].max())
             y_min = min(y_min, target_pts[:, 1].min())
             y_max = max(y_max, target_pts[:, 1].max())
-        
+
         center_x = (x_max + x_min) / 2
         center_y = (y_max + y_min) / 2
-        
-        # On définit une portée carrée basée sur la plus grande dimension
+
         delta_x = (x_max - x_min)
         delta_y = (y_max - y_min)
-        max_range = max(delta_x, delta_y) * 1.1 # +10% de marge
+        max_range = max(delta_x, delta_y) * 1.1  # +10% margin
         
         ax.set_xlim(center_x - max_range/2, center_x + max_range/2)
         ax.set_ylim(center_y - max_range/2, center_y + max_range/2)

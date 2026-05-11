@@ -9,10 +9,11 @@ after passing through the fully differentiable pipeline.
 import jax
 import jax.numpy as jnp
 
+from typing import Any
 from jax_backend.pipeline import forward_pipeline
 from jax_backend.state import CentroidalState
 from problem.targets import get_target_points
-from problem.config import TargetConfig, PhysicsConfig, TrainingConfig
+from problem.config import TargetConfig, PhysicsConfig, TrainingConfig, ValidityConfig
 
 def evaluate_physical_loss(solution, valid_state, target_cfg: TargetConfig, training_cfg: TrainingConfig):
     """Computes the pure physical objective from the pipeline results.
@@ -62,7 +63,11 @@ def evaluate_physical_loss(solution, valid_state, target_cfg: TargetConfig, trai
     
     # 3. Compute Geometric Loss (Chamfer distance)
     # Generate the 2D point cloud for the target
-    target_params = {'type': target_cfg.type, 'center': target_cfg.center, 'radius': target_cfg.radius}
+    target_params = {
+        'type': target_cfg.type, 
+        'center': target_cfg.center, 
+        'radius': target_cfg.radius
+    }
     target_cloud = get_target_points(target_params, n_points=500)
     target_cloud = jnp.asarray(target_cloud, dtype=float)
     
@@ -80,39 +85,68 @@ def evaluate_physical_loss(solution, valid_state, target_cfg: TargetConfig, trai
     coverage_loss = jnp.mean(min_to_structure)
     
     # Combine them. We allow tuning the coverage weight in the config.
-    coverage_weight = training_cfg.loss_weights.get("coverage", 1.0)
-    chamfer_loss = precision_loss + coverage_weight * coverage_loss
+    chamfer_loss = precision_loss + training_cfg.loss_weights.coverage * coverage_loss
     
-    # 3. Add Physical Energy Penalty
-    # We want to minimize the internal strain energy (stretch + shear + rot + contact)
-    # This heavily penalizes solutions that are physically invalid (e.g. extreme stretching,
-    # intersections, or massive contact forces).
-    u_int = (solution.energies['stretch'][-1] + 
-             solution.energies['shear'][-1] + 
-             solution.energies['rot'][-1] + 
-             solution.energies['contact'][-1])
-             
+    # 4a. Global Material Conservation — computed upstream (see compute_end_to_end_loss).
+    global_material_loss = 0.0
+
+    # 3. Add Physical Energy Penalty (Decomposed Weights)
+    # Each energy component has its own weight from LossWeights
+    u_stretch = solution.energies['stretch'][-1]
+    u_shear = solution.energies['shear'][-1]
+    u_contact = solution.energies['contact'][-1]
+    
+    # Bending (rot) is not explicitly tracked in energies_dict yet, 
+    # but we'll add it for completeness if present, or just use 0.0
+    u_bend = solution.energies.get('rot', jnp.zeros_like(u_stretch))[-1]
+
     # 4. Final Aggregation
-    loss_weights = training_cfg.loss_weights
+    weights = training_cfg.loss_weights
     
-    # Weight for the energy loss
-    weight_physics = loss_weights.get("physics", 0.1)
-    energy_loss = weight_physics * u_int
+    physics_loss = (weights.stretching * u_stretch + 
+                    weights.shearing * u_shear + 
+                    weights.bending * u_bend + 
+                    weights.contact * u_contact)
     
-    weight_geometric = loss_weights.get("geometric", 1.0)
-    loss = (weight_geometric * chamfer_loss) + energy_loss
-    
-    loss_components = {
-        'chamfer_precision': precision_loss,
-        'chamfer_coverage': coverage_loss,
-        'chamfer_total': chamfer_loss,
-        'energy': energy_loss
+    geometric_loss = weights.chamfer * chamfer_loss + weights.material_area * global_material_loss
+    loss = geometric_loss + physics_loss
+
+    # 4. Detailed Metrics Assembly
+    # We store the weighted values so the plotter reflects their actual impact.
+    metrics = {
+        "loss_total": loss,
+        "loss_geometric": geometric_loss,
+        "loss_physical": physics_loss,
+        "comp_geom_chamfer": weights.chamfer * chamfer_loss,
+        "comp_geom_material_area": weights.material_area * global_material_loss,
+        "comp_phys_stretching": weights.stretching * u_stretch,
+        "comp_phys_shearing": weights.shearing * u_shear,
+        "comp_phys_bending": weights.bending * u_bend,
+        "comp_phys_contact": weights.contact * u_contact,
+        "comp_regularization": weights.regularization
     }
     
-    return loss, loss_components
+    # Backward compatibility for existing plotter keys
+    metrics.update({
+        'total': loss,
+        'chamfer_total': chamfer_loss,
+        'global_material_area': global_material_loss,
+        'energy': u_stretch + u_shear + u_contact + u_bend
+    })
+    
+    return loss, metrics
 
 
-def compute_end_to_end_loss(map_params: jnp.ndarray, initial_state: CentroidalState, target_cfg: TargetConfig, physics_cfg: PhysicsConfig, training_cfg: TrainingConfig, map_type: str = 'conformal_polynomial', use_shirley_chiu: bool = True):
+def compute_end_to_end_loss(
+        map_params: Any, 
+        initial_state: CentroidalState, 
+        target_cfg: TargetConfig, 
+        validity_cfg: ValidityConfig,
+        physics_cfg: PhysicsConfig, 
+        training_cfg: TrainingConfig, 
+        map_type: str = 'conformal_polynomial', 
+        use_shirley_chiu: bool = True, 
+        strict_boundary_fit: bool = True):
     """Wrapper function required by JAX for gradient computation.
     
     In JAX, jax.grad needs a single function that takes parameters and 
@@ -121,26 +155,36 @@ def compute_end_to_end_loss(map_params: jnp.ndarray, initial_state: CentroidalSt
     
     # 1. Run the forward pipeline
     results = forward_pipeline(
-        initial_state,
-        target_cfg,
-        physics_cfg,
+        initial_state=initial_state,
+        target_cfg=target_cfg,
+        validity_cfg=validity_cfg,
+        physics_cfg=physics_cfg,
         map_type=map_type,
         map_params=map_params,
-        use_shirley_chiu=use_shirley_chiu
+        use_shirley_chiu=use_shirley_chiu,
+        strict_boundary_fit=strict_boundary_fit
     )
     
     # 2. Evaluate Physical Objective
-    base_loss, loss_components = evaluate_physical_loss(results['solution'], results['valid_state'], target_cfg, training_cfg)
-    
-    # 3. Regularization (Optional, prevents map_params from exploding)
-    weight_reg = training_cfg.loss_weights.get("regularization", 1e-3)
-    
-    # map_params can be a JAX PyTree (dict or array)
+    base_loss, loss_components = evaluate_physical_loss(
+        results['solution'],
+        results['valid_state'],
+        target_cfg,
+        training_cfg
+    )
+
+    # 3. Regularization (Prevents map_params from exploding)
+    weight_reg = training_cfg.loss_weights.regularization
+
+    # map_params is a JAX PyTree (dict with 'roots', 'tx', 'ty', etc.)
     squared_params = jax.tree_util.tree_map(lambda x: jnp.sum(x**2), map_params)
-    reg_loss = weight_reg * jax.tree_util.tree_reduce(lambda a, b: a + b, squared_params)
-    
+    reg_loss = weight_reg * jax.tree_util.tree_reduce(lambda a, b: a + b, squared_params, initializer=0.0)
+
     total_loss = base_loss + reg_loss
-    loss_components['reg'] = reg_loss
-    loss_components['total'] = total_loss
+
+    # Update metrics with regularization and final total
+    loss_components['comp_regularization'] = reg_loss
+    loss_components['loss_total'] = total_loss
+    loss_components['total'] = total_loss # Backward compatibility
     
     return total_loss, loss_components

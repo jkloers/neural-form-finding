@@ -65,6 +65,9 @@ class CentroidalState(NamedTuple):
     k_rot: jnp.ndarray
     density: jnp.ndarray
 
+    # ── Area constraints (Étape 3) ───────────────────────────────────────────
+    initial_face_areas: jnp.ndarray # (n_faces,)
+
     # ── Methods ──────────────────────────────────────────────────────────────
 
     def get_loading_function(self):
@@ -75,15 +78,13 @@ class CentroidalState(NamedTuple):
         return None
 
     @classmethod
-    def from_tessellation(cls, tessellation) -> 'CentroidalState':
+    def from_tessellation(cls, tessellation, target_cfg=None) -> 'CentroidalState':
         """Builds a CentroidalState from a configured Tessellation object.
 
-        Handles the NumPy→JAX conversion:
-          - Dynamic arrays (positions, loads) → jnp.array
-          - Static topology (connectivity, BCs) → np.array
-            so JAX treats them as compile-time constants.
+        Handles the NumPy→JAX conversion and initial area calculations.
         """
         import numpy as np
+        from jax_backend.geometry import compute_face_areas
 
         cs_dict = tessellation._to_dict()
 
@@ -94,4 +95,11 @@ class CentroidalState(NamedTuple):
             k: jnp.array(v) if k in dynamic_fields else np.array(v)
             for k, v in cs_dict.items()
         }
+
+        # Étape 3 : Calcul des aires initiales
+        cnv = state_kwargs['centroid_node_vectors']
+        initial_face_areas = compute_face_areas(cnv)
+        
+        state_kwargs['initial_face_areas'] = initial_face_areas
+
         return cls(**state_kwargs)

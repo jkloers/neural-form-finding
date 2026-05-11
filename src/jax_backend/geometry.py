@@ -7,6 +7,7 @@ other geometric quantities from the centroidal representation (c, s).
 All functions are differentiable and vmappable.
 """
 
+import jax
 import jax.numpy as jnp
 
 
@@ -114,6 +115,23 @@ def boundary_vertex_positions(face_centroids, cnv, boundary_face_node_ids):
     return face_centroids[fi] + cnv[fi, lj]
 
 
+def compute_polygon_area(vertices):
+    """Compute the area of a 2D polygon using the Shoelace formula.
+    
+    Args:
+        vertices: (N, 2) array of ordered coordinates.
+        
+    Returns:
+        Scalar area.
+    """
+    x = vertices[:, 0]
+    y = vertices[:, 1]
+    # Circular shift to multiply x_i * y_{i+1} and y_i * x_{i+1}
+    # Signed shoelace (positive for CCW-oriented faces, which is the convention throughout).
+    # Avoids jnp.abs whose gradient is 0/0 at S=0 (NaN when a face becomes degenerate).
+    return 0.5 * (jnp.dot(x, jnp.roll(y, -1)) - jnp.dot(y, jnp.roll(x, -1)))
+
+
 def compute_face_areas(centroid_node_vectors):
     """Compute the area of each face using the Shoelace formula.
     
@@ -123,15 +141,17 @@ def compute_face_areas(centroid_node_vectors):
     Returns:
         (n_faces,) — area of each face
     """
-    s = centroid_node_vectors
-    x = s[:, :, 0]
-    y = s[:, :, 1]
+    # Vectorize compute_polygon_area across all faces
+    return jax.vmap(compute_polygon_area)(centroid_node_vectors)
+
+
+def compute_total_area(centroid_node_vectors):
+    """Compute the total area of the tessellation (sum of all face areas).
     
-    # Quadrangular Shoelace formula
-    area = 0.5 * jnp.abs(
-        (x[:, 0] * y[:, 1] - x[:, 1] * y[:, 0]) +
-        (x[:, 1] * y[:, 2] - x[:, 2] * y[:, 1]) +
-        (x[:, 2] * y[:, 3] - x[:, 3] * y[:, 2]) +
-        (x[:, 3] * y[:, 0] - x[:, 0] * y[:, 3])
-    )
-    return area
+    Args:
+        centroid_node_vectors: (n_faces, max_nodes, 2)
+        
+    Returns:
+        Scalar total area.
+    """
+    return jnp.sum(compute_face_areas(centroid_node_vectors))
