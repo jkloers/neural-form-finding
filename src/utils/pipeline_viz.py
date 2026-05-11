@@ -245,27 +245,20 @@ def plot_loss_history(history, config, run_dir=None):
     contact = [float(h['comp_phys_contact']) for h in history]
     reg = [float(h['comp_regularization']) for h in history]
 
-    fig, ax = plt.subplots(figsize=(11, 7))
+    fig, ax = plt.subplots(figsize=(10, 6))
 
-    ax.plot(epochs, total, color='#111111', linewidth=2.0, label='Grand Total Loss', alpha=0.9, zorder=10)
-    ax.plot(epochs, geom_total, color='#023E8A', linewidth=3.5, label='Total Geometric Loss', zorder=5)
-    ax.plot(epochs, chamfer, color='#0077B6', linewidth=1.2, linestyle='--', label='  ↳ Chamfer', alpha=0.8)
-    ax.plot(epochs, material, color='#48CAE4', linewidth=1.2, linestyle='--', label='  ↳ Material Area', alpha=0.8)
-
-    ax.plot(epochs, phys_total, color='#9D0208', linewidth=3.5, label='Total Physical Loss', zorder=5)
-    ax.plot(epochs, stretch, color='#D00000', linewidth=1.0, linestyle='-.', label='  ↳ Stretching', alpha=0.7)
-    ax.plot(epochs, shear, color='#E85D04', linewidth=1.0, linestyle='-.', label='  ↳ Shearing', alpha=0.7)
-    ax.plot(epochs, bend, color='#F48C06', linewidth=1.0, linestyle='-.', label='  ↳ Bending', alpha=0.7)
-    ax.plot(epochs, contact, color='#FFBA08', linewidth=1.0, linestyle=':', label='  ↳ Contact', alpha=0.7)
-    ax.plot(epochs, reg, color='#666666', linewidth=1.0, linestyle=':', label='Regularization', alpha=0.5)
+    # Totals only (Thick lines) - Princeton Theme
+    ax.plot(epochs, total, color='#111111', linewidth=3.0, label='Total Loss', zorder=10)
+    ax.plot(epochs, geom_total, color='#F58025', linewidth=2.5, label='Geometric Loss', zorder=5)
+    ax.plot(epochs, phys_total, color='#2D6A4F', linewidth=2.5, label='Physical Loss', zorder=5)
 
     ax.set_yscale('log')
     ax.set_xlabel('Training Epochs', fontweight='bold')
     ax.set_ylabel('Weighted Loss Value (Log Scale)', fontweight='bold')
-    ax.set_title('Neural Form-Finding Convergence: Hierarchical Decomposition', fontsize=14, pad=20, fontweight='bold')
+    ax.set_title('Training Loss', fontsize=14, pad=20, fontweight='bold')
 
-    ax.grid(True, which="both", linestyle='--', alpha=0.4)
-    ax.legend(bbox_to_anchor=(1.04, 1), loc="upper left", frameon=True, fontsize=9)
+    ax.grid(True, which="both", linestyle='--', alpha=0.3)
+    ax.legend(loc="upper right", frameon=True, fontsize=10)
 
     plt.tight_layout()
 

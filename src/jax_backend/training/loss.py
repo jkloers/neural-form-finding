@@ -87,17 +87,8 @@ def evaluate_physical_loss(solution, valid_state, target_cfg: TargetConfig, trai
     # Combine them. We allow tuning the coverage weight in the config.
     chamfer_loss = precision_loss + training_cfg.loss_weights.coverage * coverage_loss
     
-    # 4a. Global Material Conservation
+    # 4a. Global Material Conservation — computed upstream (see compute_end_to_end_loss).
     global_material_loss = 0.0
-    if target_cfg.enforce_global_material_area:
-        from jax_backend.geometry import compute_face_areas
-        # Use the reference CNVs (pre-physics), not the deployed ones (final_cnv).
-        # Area is rotation-invariant so both give the same value, but reference CNVs
-        # avoid differentiating through the physics solver backward pass (which causes NaN).
-        current_face_areas = compute_face_areas(valid_state.centroid_node_vectors)
-        current_total_material_area = jnp.sum(current_face_areas)
-        initial_total_material_area = jnp.sum(valid_state.initial_face_areas)
-        global_material_loss = (current_total_material_area - initial_total_material_area)**2
 
     # 3. Add Physical Energy Penalty (Decomposed Weights)
     # Each energy component has its own weight from LossWeights
@@ -176,21 +167,21 @@ def compute_end_to_end_loss(
     
     # 2. Evaluate Physical Objective
     base_loss, loss_components = evaluate_physical_loss(
-        results['solution'], 
-        results['valid_state'], 
-        target_cfg, 
+        results['solution'],
+        results['valid_state'],
+        target_cfg,
         training_cfg
     )
-    
+
     # 3. Regularization (Prevents map_params from exploding)
     weight_reg = training_cfg.loss_weights.regularization
-    
+
     # map_params is a JAX PyTree (dict with 'roots', 'tx', 'ty', etc.)
     squared_params = jax.tree_util.tree_map(lambda x: jnp.sum(x**2), map_params)
     reg_loss = weight_reg * jax.tree_util.tree_reduce(lambda a, b: a + b, squared_params, initializer=0.0)
-    
+
     total_loss = base_loss + reg_loss
-    
+
     # Update metrics with regularization and final total
     loss_components['comp_regularization'] = reg_loss
     loss_components['loss_total'] = total_loss
