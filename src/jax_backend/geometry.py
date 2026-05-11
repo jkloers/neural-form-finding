@@ -127,7 +127,9 @@ def compute_polygon_area(vertices):
     x = vertices[:, 0]
     y = vertices[:, 1]
     # Circular shift to multiply x_i * y_{i+1} and y_i * x_{i+1}
-    return 0.5 * jnp.abs(jnp.dot(x, jnp.roll(y, -1)) - jnp.dot(y, jnp.roll(x, -1)))
+    # Signed shoelace (positive for CCW-oriented faces, which is the convention throughout).
+    # Avoids jnp.abs whose gradient is 0/0 at S=0 (NaN when a face becomes degenerate).
+    return 0.5 * (jnp.dot(x, jnp.roll(y, -1)) - jnp.dot(y, jnp.roll(x, -1)))
 
 
 def compute_face_areas(centroid_node_vectors):

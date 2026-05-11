@@ -87,21 +87,14 @@ def evaluate_physical_loss(solution, valid_state, target_cfg: TargetConfig, trai
     # Combine them. We allow tuning the coverage weight in the config.
     chamfer_loss = precision_loss + training_cfg.loss_weights.coverage * coverage_loss
     
-    # Reconstruct Final CNVs to check material area conservation
-    # (Rotate CNVs by the final deployment angles)
-    final_thetas = final_displacements[:, 2]
-    cos_t = jnp.cos(final_thetas[:, None, None])
-    sin_t = jnp.sin(final_thetas[:, None, None])
-    s = valid_state.centroid_node_vectors
-    s_new_x = cos_t * s[:, :, 0:1] - sin_t * s[:, :, 1:2]
-    s_new_y = sin_t * s[:, :, 0:1] + cos_t * s[:, :, 1:2]
-    final_cnv = jnp.concatenate([s_new_x, s_new_y], axis=-1)
-
-    # 4a. Global Material Conservation (Étape 5 Révisée)
+    # 4a. Global Material Conservation
     global_material_loss = 0.0
     if target_cfg.enforce_global_material_area:
         from jax_backend.geometry import compute_face_areas
-        current_face_areas = compute_face_areas(final_cnv)
+        # Use the reference CNVs (pre-physics), not the deployed ones (final_cnv).
+        # Area is rotation-invariant so both give the same value, but reference CNVs
+        # avoid differentiating through the physics solver backward pass (which causes NaN).
+        current_face_areas = compute_face_areas(valid_state.centroid_node_vectors)
         current_total_material_area = jnp.sum(current_face_areas)
         initial_total_material_area = jnp.sum(valid_state.initial_face_areas)
         global_material_loss = (current_total_material_area - initial_total_material_area)**2
