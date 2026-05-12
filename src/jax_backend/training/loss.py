@@ -12,6 +12,7 @@ import jax.numpy as jnp
 from typing import Any
 from jax_backend.pipeline import forward_pipeline
 from jax_backend.state import CentroidalState
+from jax_backend.geometry import compute_total_area
 from problem.targets import get_target_points
 from problem.config import TargetConfig, PhysicsConfig, TrainingConfig, ValidityConfig
 
@@ -138,19 +139,27 @@ def evaluate_physical_loss(solution, valid_state, target_cfg: TargetConfig, trai
 
 
 def compute_end_to_end_loss(
-        map_params: Any, 
-        initial_state: CentroidalState, 
-        target_cfg: TargetConfig, 
+        map_params: Any,
+        initial_state: CentroidalState,
+        target_cfg: TargetConfig,
         validity_cfg: ValidityConfig,
-        physics_cfg: PhysicsConfig, 
-        training_cfg: TrainingConfig, 
-        map_type: str = 'conformal_polynomial', 
-        use_shirley_chiu: bool = True, 
-        strict_boundary_fit: bool = True):
+        physics_cfg: PhysicsConfig,
+        training_cfg: TrainingConfig,
+        map_type: str = 'conformal_polynomial',
+        use_shirley_chiu: bool = True,
+        strict_boundary_fit: bool = True,
+        learn_global_scale: bool = False):
     """Wrapper function required by JAX for gradient computation.
-    
-    In JAX, jax.grad needs a single function that takes parameters and 
+
+    In JAX, jax.grad needs a single function that takes parameters and
     returns a scalar loss. This function chains the forward pass and the loss.
+
+    Args:
+        learn_global_scale: When True (Option 2), a learnable log_scale parameter
+            is present in map_params and the area constraint is lifted — the
+            optimizer is free to dilate/contract the structure.
+            When False (Option 1), the total mapped area is penalised to stay
+            equal to the reference flat-tessellation area.
     """
     
     # 1. Run the forward pipeline
@@ -173,6 +182,20 @@ def compute_end_to_end_loss(
         training_cfg
     )
 
+    # 2b. Material Area Conservation (Option 1 only: learn_global_scale = False)
+    # Gradient path: mapped_state.centroid_node_vectors → jacfwd(mapping_fn) → map_params.
+    # This requires second-order derivatives, but is finite as long as no root is at the
+    # origin (division by zero). The zero-root guard is enforced in the yaml.
+    weight_material = training_cfg.loss_weights.material_area
+    if not learn_global_scale and weight_material > 0.0:
+        mapped_area = compute_total_area(results['mapped_state'].centroid_node_vectors)
+        target_area = jnp.sum(initial_state.initial_face_areas)
+        material_area_loss = weight_material * (mapped_area - target_area) ** 2
+        area_deviation = mapped_area - target_area
+    else:
+        material_area_loss = 0.0
+        area_deviation = 0.0
+
     # 3. Regularization (Prevents map_params from exploding)
     weight_reg = training_cfg.loss_weights.regularization
 
@@ -180,11 +203,13 @@ def compute_end_to_end_loss(
     squared_params = jax.tree_util.tree_map(lambda x: jnp.sum(x**2), map_params)
     reg_loss = weight_reg * jax.tree_util.tree_reduce(lambda a, b: a + b, squared_params, initializer=0.0)
 
-    total_loss = base_loss + reg_loss
+    total_loss = base_loss + material_area_loss + reg_loss
 
-    # Update metrics with regularization and final total
+    # Update metrics
     loss_components['comp_regularization'] = reg_loss
+    loss_components['comp_geom_material_area'] = material_area_loss
+    loss_components['global_material_area'] = area_deviation
     loss_components['loss_total'] = total_loss
-    loss_components['total'] = total_loss # Backward compatibility
+    loss_components['total'] = total_loss  # Backward compatibility
     
     return total_loss, loss_components

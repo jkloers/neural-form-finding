@@ -16,14 +16,11 @@ class TargetConfig(eqx.Module):
     type: str
     center: Tuple[float, float]
     radius: float
-    enforce_global_material_area: bool
 
-    def __init__(self, type: str, center: Tuple[float, float], radius: float,
-                 enforce_global_material_area: bool = False):
+    def __init__(self, type: str, center: Tuple[float, float], radius: float):
         self.type = type
         self.center = center
         self.radius = radius
-        self.enforce_global_material_area = enforce_global_material_area
 
 
 class MappingConfig(eqx.Module):
@@ -32,14 +29,17 @@ class MappingConfig(eqx.Module):
     use_shirley_chiu: bool
     strict_boundary_fit: bool
     domain_restriction: float
+    learn_global_scale: bool
 
     def __init__(self, type: str, params: Any, use_shirley_chiu: bool,
-                 strict_boundary_fit: bool, domain_restriction: float):
+                 strict_boundary_fit: bool, domain_restriction: float,
+                 learn_global_scale: bool = False):
         self.type = type
         self.params = params
         self.use_shirley_chiu = use_shirley_chiu
         self.strict_boundary_fit = strict_boundary_fit
         self.domain_restriction = domain_restriction
+        self.learn_global_scale = learn_global_scale
 
 
 class ValidityConfig(eqx.Module):
@@ -227,6 +227,7 @@ def _parse_mapping_config(mapping_raw: dict) -> MappingConfig:
         use_shirley_chiu=m_use_sc,
         strict_boundary_fit=bool(mapping_raw.get('strict_boundary_fit', True)),
         domain_restriction=float(mapping_raw.get("domain_restriction", 0.8)),
+        learn_global_scale=bool(mapping_raw.get('learn_global_scale', False)),
     )
 
 
@@ -259,7 +260,6 @@ def _parse_target_config(target_raw: dict) -> TargetConfig:
         type=target_raw.get("type", "circle"),
         center=tuple(target_raw.get("center", (0.0, 0.0))),
         radius=float(target_raw.get("radius", 1.0)),
-        enforce_global_material_area=bool(target_raw.get("enforce_global_material_area", False)),
     )
 
 

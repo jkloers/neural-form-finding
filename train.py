@@ -33,7 +33,7 @@ if __name__ == "__main__":
 
     # ── Configuration ─────────────────────────────────────────────────────────
     parser = argparse.ArgumentParser(description="Neural Form-Finding Training.")
-    parser.add_argument("--config-dir", type=str, default="asymmetric_roots")
+    parser.add_argument("--config-dir", type=str, default="poster")
     parser.add_argument("--config-name", type=str, required=True)
     args = parser.parse_args()
 
@@ -61,9 +61,15 @@ if __name__ == "__main__":
 
     configure_tessellation(tessellation, topo_obj)
     
-    # ── Initial Area Print ────────────────────────────────────────────────────
+    # ── MODE & BASELINE SUMMARY ───────────────────────────────────────────────
+    mode_str = "LEARN SCALE (Variable Geometry)" if config.mapping.learn_global_scale else "FIXED MATERIAL (Conservation of Matter)"
+    print("\n" + "═" * 60)
+    print(f" PIPELINE MODE: {mode_str}")
+    print("═" * 60)
+
     initial_area = tessellation.compute_total_area()
-    print(f"\n[AREA CHECK] Initial Material Area: {initial_area:.6f}")
+    print(f" [PHYSICAL BASELINE] Initial Total Material: {initial_area:.6f}")
+    print("═" * 60 + "\n")
     
     initial_state = CentroidalState.from_tessellation(tessellation, target_cfg=config.target)
 
@@ -74,6 +80,11 @@ if __name__ == "__main__":
 
     initial_map_params = config.mapping.params
 
+    # Option 2: if learning global scale, ensure log_scale = 0 is in the param tree
+    # (so the optimizer sees it as a leaf). log_scale can also be set explicitly in the yaml.
+    if config.mapping.learn_global_scale and 'log_scale' not in initial_map_params:
+        initial_map_params = {**initial_map_params, 'log_scale': jnp.array(0.0)}
+
     optimized_params, history_loss = train_pipeline(
         initial_map_params,
         initial_state,
@@ -83,7 +94,8 @@ if __name__ == "__main__":
         config.training,
         map_type=config.mapping.type,
         use_shirley_chiu=config.mapping.use_shirley_chiu,
-        strict_boundary_fit=config.mapping.strict_boundary_fit
+        strict_boundary_fit=config.mapping.strict_boundary_fit,
+        learn_global_scale=config.mapping.learn_global_scale,
     )
 
     print(f"\nOptimization complete. Optimal params: {optimized_params}")

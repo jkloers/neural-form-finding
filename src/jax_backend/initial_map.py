@@ -53,9 +53,14 @@ def postprocess_radial_fit(w, context, params=None):
         jnp.interp(w_angle, context['b_angles'], context['b_radii']),
         context.get('base_initial_radius', context['radius'])
     )
-    
-    x_new = jnp.real(w_final) * target_rad + context['center'][0] + tx
-    y_new = jnp.imag(w_final) * target_rad + context['center'][1] + ty
+
+    # Application of learnable global scale
+    scale_multiplier = 1.0
+    if isinstance(params, dict) and 'log_scale' in params:
+        scale_multiplier = jnp.exp(params['log_scale'])
+
+    x_new = jnp.real(w_final) * target_rad * scale_multiplier + context['center'][0] + tx
+    y_new = jnp.imag(w_final) * target_rad * scale_multiplier + context['center'][1] + ty
     
     return jnp.array([x_new, y_new])
 
@@ -220,7 +225,14 @@ def build_mapping_fn(
             else:
                 mapped_p = p_restricted
         
-        # C. Universal Post-processing: Boundary mapping is final
+        # C. Global scale (learn_global_scale = True): differentiable zoom/shrink
+        # centered on the target shape center.  When log_scale is absent (or 0)
+        # this is an exact no-op (exp(0) = 1).
+        if 'log_scale' in map_params:
+            log_s = map_params['log_scale']
+            shape_center = context['center']
+            mapped_p = shape_center + jnp.exp(log_s) * (mapped_p - shape_center)
+
         return mapped_p
 
     return mapping_fn

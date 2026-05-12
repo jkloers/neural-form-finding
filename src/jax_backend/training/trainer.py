@@ -13,30 +13,32 @@ from jax_backend.training.loss import compute_end_to_end_loss
 
 from problem.config import TargetConfig, PhysicsConfig, TrainingConfig, ValidityConfig
 
-def create_train_step(initial_state, target_cfg: TargetConfig, validity_cfg: ValidityConfig, physics_cfg: PhysicsConfig, training_cfg: TrainingConfig, map_type: str = 'conformal_polynomial', use_shirley_chiu: bool = True, strict_boundary_fit: bool = True):
+def create_train_step(initial_state, target_cfg: TargetConfig, validity_cfg: ValidityConfig, physics_cfg: PhysicsConfig, training_cfg: TrainingConfig, map_type: str = 'conformal_polynomial', use_shirley_chiu: bool = True, strict_boundary_fit: bool = True, learn_global_scale: bool = False):
     """Creates a compiled training step for optimizing map_params.
-    
+
     Args:
         initial_state: The flat tessellation CentroidalState.
         target_cfg: Structured TargetConfig.
         physics_cfg: Structured PhysicsConfig.
         training_cfg: Structured TrainingConfig.
-        
+        learn_global_scale: See compute_end_to_end_loss.
+
     Returns:
         optimizer, train_step_fn
     """
-    
+
     optimizer = optax.chain(
         optax.clip_by_global_norm(1.0),
         optax.adam(learning_rate=training_cfg.learning_rate),
     )
-    
+
     # The loss function closed over the constants
     def loss_fn(map_params):
         return compute_end_to_end_loss(
-            map_params, initial_state, target_cfg, validity_cfg, physics_cfg, training_cfg, 
-            map_type=map_type, use_shirley_chiu=use_shirley_chiu, 
-            strict_boundary_fit=strict_boundary_fit
+            map_params, initial_state, target_cfg, validity_cfg, physics_cfg, training_cfg,
+            map_type=map_type, use_shirley_chiu=use_shirley_chiu,
+            strict_boundary_fit=strict_boundary_fit,
+            learn_global_scale=learn_global_scale,
         )
         
     @jax.jit
@@ -56,13 +58,19 @@ def create_train_step(initial_state, target_cfg: TargetConfig, validity_cfg: Val
 
     return optimizer, train_step_fn
 
-def train_pipeline(initial_map_params, initial_state, target_cfg: TargetConfig, 
+def train_pipeline(initial_map_params, initial_state, target_cfg: TargetConfig,
                    validity_cfg: ValidityConfig,
-                   physics_cfg: PhysicsConfig, training_cfg: TrainingConfig, map_type: str = 'conformal_polynomial', use_shirley_chiu: bool = True, strict_boundary_fit: bool = True):
+                   physics_cfg: PhysicsConfig, training_cfg: TrainingConfig,
+                   map_type: str = 'conformal_polynomial',
+                   use_shirley_chiu: bool = True,
+                   strict_boundary_fit: bool = True,
+                   learn_global_scale: bool = False):
     """Run the training loop to find optimal mapping parameters."""
-    
+
     optimizer, train_step_fn = create_train_step(
-        initial_state, target_cfg, validity_cfg, physics_cfg, training_cfg, map_type, use_shirley_chiu, strict_boundary_fit
+        initial_state, target_cfg, validity_cfg, physics_cfg, training_cfg,
+        map_type, use_shirley_chiu, strict_boundary_fit,
+        learn_global_scale=learn_global_scale,
     )
     
     opt_state = optimizer.init(initial_map_params)
@@ -78,9 +86,10 @@ def train_pipeline(initial_map_params, initial_state, target_cfg: TargetConfig,
             grad_norm = float(aux['grad_norm'])
             flag = "  [VANISHING]" if grad_norm < 1e-6 else ("  [EXPLODING]" if grad_norm > 1e3 else "")
             per_param = " ".join(f"{k}={float(v):.2e}" for k, v in aux['grad_norms'].items())
+            area_dev = f" | ΔArea: {aux['global_material_area']:.2e}" if not learn_global_scale else ""
             print(
                 f"Epoch {epoch:03d} | Loss: {aux['total']:.4e} | "
-                f"Chamfer: {aux['chamfer_total']:.4e} | Energy: {aux['energy']:.4e} | "
+                f"Chamfer: {aux['chamfer_total']:.4e} | Energy: {aux['energy']:.4e}{area_dev} | "
                 f"‖grad‖: {grad_norm:.2e}{flag}"
             )
             print(f"         grads: {per_param}")
