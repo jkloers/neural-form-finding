@@ -33,7 +33,7 @@ if __name__ == "__main__":
 
     # ── Configuration ─────────────────────────────────────────────────────────
     parser = argparse.ArgumentParser(description="Neural Form-Finding Training.")
-    parser.add_argument("--config-dir", type=str, default="poster")
+    parser.add_argument("--config-dir", type=str, default="poster/complex")
     parser.add_argument("--config-name", type=str, required=True)
     args = parser.parse_args()
 
@@ -78,10 +78,10 @@ if __name__ == "__main__":
     print("STARTING END-TO-END TRAINING")
     print("=" * 60)
 
-    initial_map_params = config.mapping.params
+    # Normalise to dict (config may have no map_params, which parses to a JAX array).
+    raw = config.mapping.params
+    initial_map_params = raw if isinstance(raw, dict) else {}
 
-    # Option 2: if learning global scale, ensure log_scale = 0 is in the param tree
-    # (so the optimizer sees it as a leaf). log_scale can also be set explicitly in the yaml.
     if config.mapping.learn_global_scale and 'log_scale' not in initial_map_params:
         initial_map_params = {**initial_map_params, 'log_scale': jnp.array(0.0)}
 

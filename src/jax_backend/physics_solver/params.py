@@ -48,13 +48,19 @@ class ReferenceGeometry(NamedTuple):
     def tree_flatten(self):
         children = (self.face_centroids, self.centroid_node_vectors,
                     self.reference_bond_vectors)
-        aux_data = {'bond_connectivity': self.bond_connectivity}
+        # bond_connectivity must be hashable for JAX's lru_cache.
+        # A plain NumPy array in a dict causes "truth value of array" when JAX
+        # compares cache keys.  Nested tuples are fully hashable and cheap for
+        # the small integer arrays used here.
+        bc = self.bond_connectivity
+        aux_data = tuple(map(tuple, bc)) if bc is not None else None
         return children, aux_data
 
     @classmethod
     def tree_unflatten(cls, aux_data, children):
-        return cls(children[0], children[1],
-                   aux_data['bond_connectivity'], children[2])
+        import numpy as np
+        bc = np.array(aux_data, dtype=np.int64) if aux_data is not None else None
+        return cls(children[0], children[1], bc, children[2])
 
     @property
     def n_faces(self) -> int:
