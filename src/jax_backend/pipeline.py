@@ -29,7 +29,7 @@ from typing import Optional
 
 from jax_backend.state import CentroidalState
 from jax_backend.geometry import reconstruct_vertices
-from jax_backend.initial_map import build_mapping_fn, apply_mapping
+from jax_backend.initial_map import build_mapping_fn, apply_mapping, apply_gnn_mapping
 from jax_backend.validity_solver import solve_geometric_validity
 from jax_backend.physics_solver.energy import (
     build_potential_energy,
@@ -49,7 +49,8 @@ def forward_pipeline(
         map_type: str = 'conformal_polynomial',
         map_params: Optional[jnp.ndarray] = None,
         use_shirley_chiu: bool = True,
-        strict_boundary_fit: bool = True) -> dict:
+        strict_boundary_fit: bool = True,
+        static_features=None) -> dict:
     """Full differentiable pipeline: initial map → geometric validity → static equilibrium.
 
     Args:
@@ -71,9 +72,12 @@ def forward_pipeline(
 
     # ══════════════════════════════════════════════════════════════════════════
     # Stage 0 — Initial Mapping
-    # Maps the flat tessellation into the target shape using a conformal
-    # polynomial (or other parametric) mapping. `map_params` are the
-    # differentiable variables being optimized during training.
+    # Deux branches selon le type de mapping :
+    #   • GNN (map_type starts with 'gnn_') : apply_gnn_mapping reçoit le
+    #     graphe topologique et prédit de nouvelles positions de centroïdes.
+    #     static_features est calculé ici — initial_state est une constante
+    #     de closure dans JIT, donc tous ses champs sont concrets.
+    #   • Paramétrique classique : pipeline conformal/asymmetric_roots existant.
     # ══════════════════════════════════════════════════════════════════════════
     target_params = {
         'type': target_cfg.type,
@@ -81,18 +85,27 @@ def forward_pipeline(
         'radius': target_cfg.radius
     }
 
-    mapping_fn = build_mapping_fn(
-        initial_state, target_params,
-        map_type=map_type,
-        domain_restriction=physics_cfg.domain_restriction,
-        use_shirley_chiu=use_shirley_chiu,
-        strict_boundary_fit=strict_boundary_fit
-    )
+    if map_type.startswith('gnn_'):
+        # static_features est normalement précomputé AVANT le JIT dans create_train_step.
+        # Pour les appels hors-JIT (visualisation finale), on le calcule ici.
+        if static_features is None:
+            from jax_backend.gnn.graph_builder import build_static_graph_features
+            static_features = build_static_graph_features(initial_state)
+        mapped_state = apply_gnn_mapping(initial_state, map_params, static_features, map_type=map_type)
+        mapping_fn = None
+    else:
+        mapping_fn = build_mapping_fn(
+            initial_state, target_params,
+            map_type=map_type,
+            domain_restriction=physics_cfg.domain_restriction,
+            use_shirley_chiu=use_shirley_chiu,
+            strict_boundary_fit=strict_boundary_fit
+        )
 
-    mapped_state = apply_mapping(
-        initial_state, mapping_fn,
-        map_params=map_params,
-    )
+        mapped_state = apply_mapping(
+            initial_state, mapping_fn,
+            map_params=map_params,
+        )
 
     # ══════════════════════════════════════════════════════════════════════════
     # Stage 1 — Geometric Validity

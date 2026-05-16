@@ -251,9 +251,58 @@ def parse_map_params(raw_params: Union[Dict, jnp.ndarray, list]) -> Union[Dict, 
     return jnp.array(raw_params, dtype=float)
 
 
+def apply_gnn_mapping(
+        state: CentroidalState,
+        gnn_params: dict,
+        static_features: dict,
+        map_type: str = 'gnn_dummy',
+) -> CentroidalState:
+    """Applique un mapping GNN à un CentroidalState (remplace apply_mapping pour map_type='gnn_*').
+
+    Le GNN reçoit la structure de graphe complète et prédit de nouvelles positions
+    de centroïdes. Les centroid_node_vectors (formes des faces) sont conservés
+    inchangés — le Stage 1 (validité géométrique) les corrigera pour satisfaire
+    les contraintes de charnières.
+
+    Args:
+        state:           CentroidalState plat initial.
+        gnn_params:      Dict PyTree de poids GNN.
+        static_features: Dict renvoyé par build_static_graph_features.
+        map_type:        'gnn_dummy' ou 'gnn_egnn'.
+
+    Returns:
+        CentroidalState avec face_centroids mis à jour par le GNN.
+    """
+    from jax_backend.gnn.graph_builder import state_to_graph
+
+    graph = state_to_graph(state, static_features)
+    h = graph.nodes['h']
+    x = graph.nodes['x']
+    senders_np   = static_features['senders']
+    receivers_np = static_features['receivers']
+    n_faces      = static_features['n_nodes']
+
+    if map_type == 'gnn_egnn':
+        from jax_backend.gnn.egnn import apply_egnn
+        new_centroids, _ = apply_egnn(gnn_params, h, x, senders_np, receivers_np, n_faces)
+    else:  # gnn_dummy (default)
+        from jax_backend.gnn.dummy_gnn import apply_dummy_gnn
+        new_centroids = apply_dummy_gnn(
+            gnn_params,
+            h=h,
+            x=x,
+            edges=graph.edges,
+            senders_np=senders_np,
+            receivers_np=receivers_np,
+            n_faces=n_faces,
+        )
+
+    return state._replace(face_centroids=new_centroids)
+
+
 def apply_mapping(
-        state: CentroidalState, 
-        mapping_fn: Callable, 
+        state: CentroidalState,
+        mapping_fn: Callable,
         map_params: Any = None) -> CentroidalState:
     """Apply a generic mapping function to a CentroidalState using Rigid-Face generalized mapping.
     

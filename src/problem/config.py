@@ -221,9 +221,16 @@ def _parse_mapping_config(mapping_raw: dict) -> MappingConfig:
         params_raw = {k: v for k, v in params_raw.items()
                       if k not in ('use_shirley_chiu', 's_val')}
 
+    # Pour les types GNN, map_params contient la config d'initialisation
+    # (hidden_dim, seed…), pas des poids entraînables. On la garde brute.
+    if m_type.startswith('gnn_'):
+        parsed_params = params_raw if isinstance(params_raw, dict) else {}
+    else:
+        parsed_params = parse_map_params(params_raw)
+
     return MappingConfig(
         type=m_type,
-        params=parse_map_params(params_raw),
+        params=parsed_params,
         use_shirley_chiu=m_use_sc,
         strict_boundary_fit=bool(mapping_raw.get('strict_boundary_fit', True)),
         domain_restriction=float(mapping_raw.get("domain_restriction", 0.8)),

@@ -78,12 +78,46 @@ if __name__ == "__main__":
     print("STARTING END-TO-END TRAINING")
     print("=" * 60)
 
-    # Normalise to dict (config may have no map_params, which parses to a JAX array).
-    raw = config.mapping.params
-    initial_map_params = raw if isinstance(raw, dict) else {}
+    if config.mapping.type.startswith('gnn_'):
+        # ── Initialisation GNN ────────────────────────────────────────────────
+        # map_params est ici la config d'init (hidden_dim, seed, ...), pas des poids.
+        # On construit le graphe statique une fois, puis on initialise les poids.
+        from jax_backend.gnn.graph_builder import build_static_graph_features
 
-    if config.mapping.learn_global_scale and 'log_scale' not in initial_map_params:
-        initial_map_params = {**initial_map_params, 'log_scale': jnp.array(0.0)}
+        gnn_cfg = config.mapping.params if isinstance(config.mapping.params, dict) else {}
+        hidden_dim  = int(gnn_cfg.get('hidden_dim', 16))
+        seed        = int(gnn_cfg.get('seed', 0))
+
+        static_features   = build_static_graph_features(initial_state)
+        node_feat_dim     = static_features['node_feat_dim']
+        key               = jax.random.PRNGKey(seed)
+
+        if config.mapping.type == 'gnn_egnn':
+            from jax_backend.gnn.egnn import init_egnn
+            num_layers = int(gnn_cfg.get('num_layers', 2))
+            initial_map_params = init_egnn(key, node_feat_dim, hidden_dim, num_layers)
+            print(f" [GNN] EGNN initialisé — node_feat_dim={node_feat_dim}, "
+                  f"hidden_dim={hidden_dim}, num_layers={num_layers}, seed={seed}")
+        else:  # gnn_dummy
+            from jax_backend.gnn.dummy_gnn import init_dummy_gnn
+            initial_map_params = init_dummy_gnn(key, node_feat_dim, hidden_dim)
+            print(f" [GNN] Dummy GNN initialisé — node_feat_dim={node_feat_dim}, "
+                  f"hidden_dim={hidden_dim}, seed={seed}")
+
+        print(f" [GNN] Paramètres : "
+              + ", ".join(f"{k}: {v.shape}" for k, v in initial_map_params.items()))
+    else:
+        # ── Initialisation classique (polynomiale) ────────────────────────────
+        raw = config.mapping.params
+        initial_map_params = raw if isinstance(raw, dict) else {}
+
+        if config.mapping.learn_global_scale and 'log_scale' not in initial_map_params:
+            initial_map_params = {**initial_map_params, 'log_scale': jnp.array(0.0)}
+
+    # Les types GNN désactivent JIT : bug XLA/Metal sur Mac lors de la
+    # compilation de programmes scatter-add + LBFGS imbriqués.
+    # Tout le reste (gradient flow, optax, PyTree) est correctement fonctionnel.
+    _use_jit = not config.mapping.type.startswith('gnn_')
 
     optimized_params, history_loss = train_pipeline(
         initial_map_params,
@@ -96,6 +130,7 @@ if __name__ == "__main__":
         use_shirley_chiu=config.mapping.use_shirley_chiu,
         strict_boundary_fit=config.mapping.strict_boundary_fit,
         learn_global_scale=config.mapping.learn_global_scale,
+        use_jit=_use_jit,
     )
 
     print(f"\nOptimization complete. Optimal params: {optimized_params}")
