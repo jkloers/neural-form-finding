@@ -90,12 +90,25 @@ def solve_geometric_validity(
     x0, split_idx = _pack(initial_state.face_centroids,
                            initial_state.centroid_node_vectors)
 
-    def objective_fn(x, state_param):
+    # Pack only the differentiable float fields for jaxopt's IFT.
+    # The full state (integer topology arrays) stays in the closure — jaxopt's
+    # custom_vjp cannot create float cotangents for integer leaves.
+    ref_arrays, _ = _pack(initial_state.face_centroids,
+                           initial_state.centroid_node_vectors)
+
+    def objective_fn(x, ref_arrays):
+        # Reconstruct the full state: differentiable geometry from ref_arrays,
+        # fixed topology from the closure-captured initial_state.
+        ref_c, ref_s = _unpack(ref_arrays, split_idx, n_faces, max_nodes)
+        state_param = initial_state._replace(
+            face_centroids=ref_c,
+            centroid_node_vectors=ref_s,
+        )
         centroids, cnv = _unpack(x, split_idx, n_faces, max_nodes)
         return compute_geometric_objective(
             centroids, cnv, state_param, target_cloud, validity_cfg)
 
-    result = LBFGS(fun=objective_fn).run(x0, state_param=initial_state)
+    result = LBFGS(fun=objective_fn).run(x0, ref_arrays=ref_arrays)
 
     centroids_opt, cnv_opt = _unpack(result.params, split_idx, n_faces, max_nodes)
 
