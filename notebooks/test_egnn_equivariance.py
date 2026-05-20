@@ -65,7 +65,7 @@ def test_equivariance(hidden_dim: int = 16, num_layers: int = 2, atol: float = 1
     params = init_egnn(key, node_feat_dim, hidden_dim=hidden_dim, num_layers=num_layers)
 
     # Référence : sortie sur x original
-    x_out_ref, h_out_ref = apply_egnn(params, h, x, senders, receivers, n_faces)
+    x_out_ref, h_out_ref, _, _ = apply_egnn(params, h, x, senders, receivers, n_faces)
 
     all_passed = True
     for trial, (theta, t) in enumerate([
@@ -81,7 +81,7 @@ def test_equivariance(hidden_dim: int = 16, num_layers: int = 2, atol: float = 1
         x_transformed = (R @ x.T).T + t_vec
 
         # Forward pass sur la configuration transformée
-        x_out_transf, h_out_transf = apply_egnn(
+        x_out_transf, h_out_transf, _, _ = apply_egnn(
             params, h, x_transformed, senders, receivers, n_faces)
 
         # Ce que l'on devrait obtenir si le réseau est équivariant :
@@ -129,7 +129,7 @@ def test_gradient_flow(hidden_dim: int = 16, num_layers: int = 2, num_steps: int
     x_target = x + 1.0
 
     def loss_fn(p):
-        x_out, _ = apply_egnn(p, h, x, senders, receivers, n_faces)
+        x_out, _, _, _ = apply_egnn(p, h, x, senders, receivers, n_faces)
         return jnp.mean((x_out - x_target) ** 2)
 
     optimizer = optax.adam(learning_rate=1e-2)

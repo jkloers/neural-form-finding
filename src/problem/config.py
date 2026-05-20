@@ -89,11 +89,13 @@ class LossWeights(eqx.Module):
     contact: float
     regularization: float
     coverage: float
+    hinge_gap: float
 
     def __init__(self, chamfer: float = 1.0, material_area: float = 1.0,
                  stretching: float = 0.1, shearing: float = 0.1,
                  bending: float = 0.1, contact: float = 1.0,
-                 regularization: float = 0.001, coverage: float = 1.0):
+                 regularization: float = 0.001, coverage: float = 1.0,
+                 hinge_gap: float = 0.0):
         self.chamfer = float(chamfer)
         self.material_area = float(material_area)
         self.stretching = float(stretching)
@@ -102,6 +104,7 @@ class LossWeights(eqx.Module):
         self.contact = float(contact)
         self.regularization = float(regularization)
         self.coverage = float(coverage)
+        self.hinge_gap = float(hinge_gap)
 
 
 class TrainingConfig(eqx.Module):
@@ -110,15 +113,20 @@ class TrainingConfig(eqx.Module):
     optimizer: str
     loss_weights: LossWeights
     geometric_loss_type: str
+    grad_clip: float
+    lr_schedule: str  # "constant" or "cosine"
 
     def __init__(self, num_epochs: int, learning_rate: float,
                  optimizer: str = "adam", loss_weights: LossWeights = None,
-                 geometric_loss_type: str = "boundary_vertices"):
+                 geometric_loss_type: str = "boundary_vertices",
+                 grad_clip: float = 1.0, lr_schedule: str = "constant"):
         self.num_epochs = num_epochs
         self.learning_rate = learning_rate
         self.optimizer = optimizer
         self.loss_weights = loss_weights if loss_weights is not None else LossWeights()
         self.geometric_loss_type = geometric_loss_type
+        self.grad_clip = float(grad_clip)
+        self.lr_schedule = str(lr_schedule)
 
 
 class VisualizationConfig(eqx.Module):
@@ -278,6 +286,8 @@ def _parse_training_config(training_raw: dict, loss_weights_raw: dict) -> Traini
         optimizer=str(training_raw.get("optimizer", "adam") or "adam"),
         loss_weights=LossWeights(**loss_weights_raw),
         geometric_loss_type=str(training_raw.get("geometric_loss_type", "boundary_vertices")),
+        grad_clip=float(training_raw.get("grad_clip", 1.0)),
+        lr_schedule=str(training_raw.get("lr_schedule", "constant")),
     )
 
 

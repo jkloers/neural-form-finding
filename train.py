@@ -60,7 +60,17 @@ if __name__ == "__main__":
         tessellation.update_vertices(tessellation.vertices * scale)
 
     configure_tessellation(tessellation, topo_obj)
-    
+
+    # ── GNN: Center tessellation at the target shape center ───────────────────
+    # For GNN maps, the raw centroid positions are the network's positional input.
+    # Centering the tessellation ensures the near-identity initialization starts
+    # with tiles near the target rather than in an arbitrary positive-quadrant offset.
+    if config.mapping.type.startswith('gnn_'):
+        target_center = np.array(getattr(config.target, 'center', [0.0, 0.0]), dtype=float)
+        tess_centroid = np.mean(tessellation.get_face_centroids(), axis=0)
+        tessellation.update_vertices(tessellation.vertices - tess_centroid + target_center)
+        print(f"[GNN] Tessellation re-centered: {tess_centroid} → {target_center}")
+
     # ── MODE & BASELINE SUMMARY ───────────────────────────────────────────────
     mode_str = "LEARN SCALE (Variable Geometry)" if config.mapping.learn_global_scale else "FIXED MATERIAL (Conservation of Matter)"
     print("\n" + "═" * 60)
@@ -114,10 +124,11 @@ if __name__ == "__main__":
         if config.mapping.learn_global_scale and 'log_scale' not in initial_map_params:
             initial_map_params = {**initial_map_params, 'log_scale': jnp.array(0.0)}
 
-    # Les types GNN désactivent JIT : bug XLA/Metal sur Mac lors de la
-    # compilation de programmes scatter-add + LBFGS imbriqués.
-    # Tout le reste (gradient flow, optax, PyTree) est correctement fonctionnel.
-    _use_jit = not config.mapping.type.startswith('gnn_')
+    # Le bug scatter-add + LBFGS n'affecte que le backend Metal/GPU.
+    # Sur CPU (JAX_PLATFORM_NAME=cpu, défaut ici), JIT est sûr et nécessaire :
+    # sans JIT, jaxopt L-BFGS tourne en eager Python → chaque epoch prend des heures.
+    _on_cpu = jax.default_backend() == 'cpu'
+    _use_jit = _on_cpu or not config.mapping.type.startswith('gnn_')
 
     optimized_params, history_loss = train_pipeline(
         initial_map_params,

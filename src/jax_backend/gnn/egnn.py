@@ -55,7 +55,10 @@ def init_egnn(
         Dict PyTree plat compatible optax / value_and_grad.
     """
     scale = 0.01  # near-identity init — gradient non nul dès l'epoch 0
-    keys = jax.random.split(key, 1 + num_layers * 5)
+    # phi_x controls coordinate displacement; larger init gives better gradient signal
+    # at the start of training (faces need to move ~O(1) but default scale gives ~0.01)
+    scale_phi_x = 0.01
+    keys = jax.random.split(key, 3 + num_layers * 5)
     ki = iter(keys)
 
     params = {}
@@ -72,7 +75,7 @@ def init_egnn(
         params[f'l{l}_phi_e_b2'] = jnp.zeros(hidden_dim, dtype=jnp.float64)
 
         # φ_x : message → scalaire de pondération coord  (dim: hidden_dim → 1)
-        params[f'l{l}_phi_x_W'] = jax.random.normal(next(ki), (hidden_dim, 1), dtype=jnp.float64) * scale
+        params[f'l{l}_phi_x_W'] = jax.random.normal(next(ki), (hidden_dim, 1), dtype=jnp.float64) * scale_phi_x
         params[f'l{l}_phi_x_b'] = jnp.zeros(1, dtype=jnp.float64)
 
         # φ_h : [h_i | agg_i] → h_i suivant  (dim: 2*hidden_dim → hidden_dim)
@@ -80,6 +83,14 @@ def init_egnn(
         params[f'l{l}_phi_h_b1'] = jnp.zeros(hidden_dim, dtype=jnp.float64)
         params[f'l{l}_phi_h_W2'] = jax.random.normal(next(ki), (hidden_dim, hidden_dim), dtype=jnp.float64) * scale
         params[f'l{l}_phi_h_b2'] = jnp.zeros(hidden_dim, dtype=jnp.float64)
+
+    # Têtes de prédiction de l'échelle et de la rotation locales (invariantes)
+    # scale_W → scale = exp(clip(..., -1.5, 1.5)) ∈ (0.22, 4.48) — identité à l'init
+    # rot_W   → theta = π*tanh(...) ∈ (-π, π)                 — identité à l'init
+    params['scale_W'] = jax.random.normal(next(ki), (hidden_dim, 1), dtype=jnp.float64) * scale
+    params['scale_b'] = jnp.zeros(1, dtype=jnp.float64)
+    params['rot_W']   = jax.random.normal(next(ki), (hidden_dim, 1), dtype=jnp.float64) * scale
+    params['rot_b']   = jnp.zeros(1, dtype=jnp.float64)
 
     return params
 
@@ -108,11 +119,18 @@ def apply_egnn(
         n_faces:      int Python — nécessaire pour les opérations scatter.
 
     Returns:
-        (x_new, h_new) — (n_faces, 2) et (n_faces, hidden_dim).
+        (x_new, h_new, local_scale, local_theta) where:
+          x_new       — (n_faces, 2)       nouvelles positions (équivariant)
+          h_new       — (n_faces, hidden_dim) features finales (invariant)
+          local_scale — (n_faces, 1)       ∈ (0.22, 4.48), identité=1.0 à l'init
+          local_theta — (n_faces, 1)       ∈ (-π, π) rad, identité=0 à l'init
 
     Equivariance E(2) :
-        apply_egnn(params, h, R@x+t, ...) = (R @ x_out + t, h_out)
+        apply_egnn(params, h, R@x+t, ...) = (R @ x_out + t, h_out, scale_out, theta_out)
+        scale et theta sont invariants (calculés depuis h invariant).
         pour toute rotation R ∈ SO(2) et translation t ∈ R².
+        Le clamping des faces (BCs Dirichlet) appartient au solveur physique (Stage 2),
+        pas au mapping géométrique (Stage 0) — toutes les faces bougent librement ici.
     """
     num_layers = sum(1 for k in params if k.endswith('_phi_x_W'))
 
@@ -157,4 +175,11 @@ def apply_egnn(
             params[f'l{l}_phi_h_W2'], params[f'l{l}_phi_h_b2'],
         )  # (n_faces, hidden_dim)
 
-    return x, h
+    # Prédictions invariantes depuis les features finales de nœuds
+    # scale ∈ (e^-1.5, e^1.5) ≈ (0.22, 4.48) — identité=1.0 quand les poids sont ~0
+    local_scale = jnp.exp(jnp.clip(h @ params['scale_W'] + params['scale_b'], -1.5, 1.5))
+    # theta ∈ (-π, π) — full rotation range; identité=0 rad quand les poids sont ~0
+    # Extended from ±π/2: faces forming a circle from a flat grid can need >90° rotation
+    local_theta = jnp.pi * jnp.tanh(h @ params['rot_W'] + params['rot_b'])
+
+    return x, h, local_scale, local_theta
