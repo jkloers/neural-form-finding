@@ -1,13 +1,18 @@
 """
 Initial mapping in centroidal coordinates.
 
-Maps a flat tessellation (c, s) into a target shape by defining a continuous
-mapping function f: R^2 -> R^2 and applying it strictly to face centroids.
-The face shapes (centroid_node_vectors) are then transformed using the Jacobian
-matrix J_f evaluated at each centroid, resulting in a continuous, differentiable
-Rigid-Face mapping that prevents internal criss-crossing for ANY arbitrary mapping.
+Ce module contient deux moteurs de mapping (Initial Map) distincts :
 
-This module is designed to be replaced by a GNN in the future.
+1. Moteur Mathématique / Analytique (apply_mapping) :
+   Utilise des fonctions continues (ex: polynômes). Les centroïdes sont déplacés par
+   la fonction, et les tuiles (CNVs) sont déformées par le Jacobien analytique exact
+   de cette fonction calculé via jax.jacfwd.
+
+2. Moteur Neuronal / GNN (apply_gnn_mapping) :
+   Utilise un EGNN. Le réseau prédit directement les nouvelles positions des centroïdes
+   ET une matrice de transformation 2x2 complète pour chaque tuile. Aucun Jacobien
+   n'est calculé ici, le réseau a le contrôle total de la géométrie locale.
+
 The interface is: CentroidalState → CentroidalState, pure JAX, differentiable.
 """
 import jax
@@ -251,46 +256,21 @@ def parse_map_params(raw_params: Union[Dict, jnp.ndarray, list]) -> Union[Dict, 
     return jnp.array(raw_params, dtype=float)
 
 
-def _local_jacobians(c_old: jnp.ndarray, c_new: jnp.ndarray,
-                     senders_np, receivers_np, n_faces: int) -> jnp.ndarray:
-    """Compute per-face best-fit 2×2 deformation gradient from neighbour displacements.
-
-    For each face i, fits F_i such that F_i @ (c_old[j]-c_old[i]) ≈ (c_new[j]-c_new[i])
-    for all neighbours j of i. Solved as an overdetermined least-squares system.
-    Returns shape (n_faces, 2, 2). Identity when centroids don't move.
-    """
-    old_diff = c_old[senders_np] - c_old[receivers_np]   # (n_edges, 2)
-    new_diff = c_new[senders_np] - c_new[receivers_np]   # (n_edges, 2)
-
-    # Accumulate X^T X and X^T Y per receiver face
-    XtX = jnp.zeros((n_faces, 2, 2)).at[receivers_np].add(
-        jnp.einsum('ei,ej->eij', old_diff, old_diff)
-    )
-    XtY = jnp.zeros((n_faces, 2, 2)).at[receivers_np].add(
-        jnp.einsum('ei,ej->eij', old_diff, new_diff)
-    )
-
-    # F_i = (X^T X + ε I)^{-1} X^T Y — regularisation avoids singular systems when
-    # centroids barely move (e.g. early training with small phi_x weights).
-    # 1e-4 is more stable than 1e-6: prevents gradient spikes from near-zero XtX.
-    reg = 1e-4 * jnp.eye(2, dtype=c_old.dtype)[None]
-    F = jnp.linalg.solve(XtX + reg, XtY)   # (n_faces, 2, 2)
-    return F
-
-
 def apply_gnn_mapping(
         state: CentroidalState,
         gnn_params: dict,
         static_features: dict,
         map_type: str = 'gnn_dummy',
 ) -> CentroidalState:
-    """Applique un mapping GNN à un CentroidalState (remplace apply_mapping pour map_type='gnn_*').
+    """Applique un mapping GNN à un CentroidalState.
 
-    Le GNN prédit de nouvelles positions de centroïdes, un scale local et une rotation
-    locale par face. Les CNVs sont transformés par cette rotation+échelle, à l'image
-    du Jacobien que apply_mapping calcule analytiquement pour les mappings polynomiaux.
-    Le GNN est libre de choisir n'importe quelle taille de tuile via local_scale ∈ (0.22, 4.48).
-    Aucune conservation d'aire n'est imposée ici.
+    Contrairement au mapping analytique (qui utilise un Jacobien), le GNN contrôle
+    absolument toute la géométrie. Il prédit :
+    1. Les nouvelles positions des centroïdes (x, y)
+    2. Une matrice de transformation 2x2 complète pour chaque face.
+    
+    Les CNVs sont transformés par cette matrice, permettant au réseau d'étirer
+    et de cisailler asymétriquement les tuiles pour refermer parfaitement les trous.
 
     Args:
         state:           CentroidalState plat initial.
@@ -312,9 +292,9 @@ def apply_gnn_mapping(
 
     if map_type == 'gnn_egnn':
         from jax_backend.gnn.egnn import apply_egnn
-        new_centroids, _, local_scale, local_theta = apply_egnn(
+        new_centroids, _, local_transform = apply_egnn(
             gnn_params, h, x, senders_np, receivers_np, n_faces)
-    else:  # gnn_dummy (default) — pas de scale/rotation, comportement inchangé
+    else:  # gnn_dummy (default) — comportement inchangé
         from jax_backend.gnn.dummy_gnn import apply_dummy_gnn
         new_centroids = apply_dummy_gnn(
             gnn_params,
@@ -327,41 +307,12 @@ def apply_gnn_mapping(
         )
         return state._replace(face_centroids=new_centroids)
 
-    # ── Jacobian-based CNV transformation (mirrors the polynomial approach) ───────
-    # The polynomial approach transforms CNVs via the analytical Jacobian of the mapping,
-    # automatically scaling and rotating face shapes proportionally to centroid spread.
-    # Pure independent GNN scale/theta had no geometric coordination: centroids would
-    # spread to fill the circle but faces stayed small → Stage 1 shrunk them by 30-47%.
-    #
-    # Fix: compute a per-face best-fit deformation gradient F_i from neighbor centroid
-    # displacements (same geometry as the polynomial Jacobian), then let the GNN's
-    # local_scale and local_theta provide additional fine-tuning on top.
-    #   At init: F ≈ I (phi_x ≈ 0 → no centroid movement), scale≈1, theta≈0 → new_cnvs ≈ cnvs
-    #   At convergence: F encodes stretch/rotation from centroid mapping; GNN refines it.
-    F = _local_jacobians(
-        state.face_centroids, new_centroids,
-        senders_np, receivers_np, n_faces,
-    )  # (n_faces, 2, 2)
-
-    # GNN local_scale: absolute face size fine-tuning (∈ (0.22, 4.48) at init ≈ 1.0)
-    # GNN local_theta: additional rotation fine-tuning (∈ (-π, π) at init ≈ 0)
-    scale = local_scale[:, 0]
-    cos_t = jnp.cos(local_theta[:, 0])
-    sin_t = jnp.sin(local_theta[:, 0])
-
-    # Rotation matrix per face: (n_faces, 2, 2)
-    R = jnp.stack([
-        jnp.stack([cos_t, -sin_t], axis=-1),
-        jnp.stack([sin_t,  cos_t], axis=-1),
-    ], axis=1)
-
-    # Combined: scale × R × F  (at init: F≈I → new_cnvs ≈ cnvs)
-    # Full Jacobian (not det-normalized): F already encodes the correct area scaling
-    # from centroid spread — det-normalization strips it and leaves faces undersized.
-    F_combined = scale[:, None, None] * jnp.einsum('fab,fbc->fac', R, F)
-
+    # ── Transformation des CNVs (Centroid Node Vectors) ───────────────────────────
+    # Le GNN prédit directement la matrice de transformation 2x2 pour chaque face.
+    # Cette matrice gère la rotation, l'étirement (scale) asymétrique et le cisaillement.
+    # À l'initialisation, cette matrice vaut l'Identité, donc les tuiles ne sont pas déformées.
     cnvs = state.centroid_node_vectors  # (n_faces, max_nodes, 2)
-    new_cnvs = jnp.einsum('fab,fnb->fna', F_combined, cnvs)
+    new_cnvs = jnp.einsum('fab,fnb->fna', local_transform, cnvs)
 
     return state._replace(face_centroids=new_centroids, centroid_node_vectors=new_cnvs)
 

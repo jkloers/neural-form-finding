@@ -84,13 +84,11 @@ def init_egnn(
         params[f'l{l}_phi_h_W2'] = jax.random.normal(next(ki), (hidden_dim, hidden_dim), dtype=jnp.float64) * scale
         params[f'l{l}_phi_h_b2'] = jnp.zeros(hidden_dim, dtype=jnp.float64)
 
-    # Têtes de prédiction de l'échelle et de la rotation locales (invariantes)
-    # scale_W → scale = exp(clip(..., -1.5, 1.5)) ∈ (0.22, 4.48) — identité à l'init
-    # rot_W   → theta = π*tanh(...) ∈ (-π, π)                 — identité à l'init
-    params['scale_W'] = jax.random.normal(next(ki), (hidden_dim, 1), dtype=jnp.float64) * scale
-    params['scale_b'] = jnp.zeros(1, dtype=jnp.float64)
-    params['rot_W']   = jax.random.normal(next(ki), (hidden_dim, 1), dtype=jnp.float64) * scale
-    params['rot_b']   = jnp.zeros(1, dtype=jnp.float64)
+    # Tête de prédiction de la matrice de transformation 2x2 locale (invariante)
+    # transform_W → (hidden_dim, 4)
+    # transform_b → initialisée à l'identité [1, 0, 0, 1]
+    params['transform_W'] = jax.random.normal(next(ki), (hidden_dim, 4), dtype=jnp.float64) * scale
+    params['transform_b'] = jnp.array([1.0, 0.0, 0.0, 1.0], dtype=jnp.float64)
 
     return params
 
@@ -107,7 +105,7 @@ def apply_egnn(
         senders_np: np.ndarray,
         receivers_np: np.ndarray,
         n_faces: int,
-) -> tuple[jnp.ndarray, jnp.ndarray]:
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """Forward pass EGNN → nouvelles positions et features de nœuds.
 
     Args:
@@ -119,15 +117,14 @@ def apply_egnn(
         n_faces:      int Python — nécessaire pour les opérations scatter.
 
     Returns:
-        (x_new, h_new, local_scale, local_theta) where:
-          x_new       — (n_faces, 2)       nouvelles positions (équivariant)
-          h_new       — (n_faces, hidden_dim) features finales (invariant)
-          local_scale — (n_faces, 1)       ∈ (0.22, 4.48), identité=1.0 à l'init
-          local_theta — (n_faces, 1)       ∈ (-π, π) rad, identité=0 à l'init
+        (x_new, h_new, local_transform) where:
+          x_new           — (n_faces, 2)       nouvelles positions (équivariant)
+          h_new           — (n_faces, hidden_dim) features finales (invariant)
+          local_transform — (n_faces, 2, 2)    matrice de transformation (identité à l'init)
 
     Equivariance E(2) :
-        apply_egnn(params, h, R@x+t, ...) = (R @ x_out + t, h_out, scale_out, theta_out)
-        scale et theta sont invariants (calculés depuis h invariant).
+        apply_egnn(params, h, R@x+t, ...) = (R @ x_out + t, h_out, transform_out)
+        transform est invariant (calculé depuis h invariant).
         pour toute rotation R ∈ SO(2) et translation t ∈ R².
         Le clamping des faces (BCs Dirichlet) appartient au solveur physique (Stage 2),
         pas au mapping géométrique (Stage 0) — toutes les faces bougent librement ici.
@@ -175,11 +172,9 @@ def apply_egnn(
             params[f'l{l}_phi_h_W2'], params[f'l{l}_phi_h_b2'],
         )  # (n_faces, hidden_dim)
 
-    # Prédictions invariantes depuis les features finales de nœuds
-    # scale ∈ (e^-1.5, e^1.5) ≈ (0.22, 4.48) — identité=1.0 quand les poids sont ~0
-    local_scale = jnp.exp(jnp.clip(h @ params['scale_W'] + params['scale_b'], -1.5, 1.5))
-    # theta ∈ (-π, π) — full rotation range; identité=0 rad quand les poids sont ~0
-    # Extended from ±π/2: faces forming a circle from a flat grid can need >90° rotation
-    local_theta = jnp.pi * jnp.tanh(h @ params['rot_W'] + params['rot_b'])
+    # Prédiction de la matrice de transformation 2x2
+    # À l'init (poids ~0), h @ W ≈ 0, donc on renvoie le biais b = [1, 0, 0, 1] (Identité)
+    transform_flat = h @ params['transform_W'] + params['transform_b']
+    local_transform = transform_flat.reshape((n_faces, 2, 2))
 
-    return x, h, local_scale, local_theta
+    return x, h, local_transform
