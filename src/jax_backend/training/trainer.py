@@ -63,8 +63,8 @@ def create_train_step(initial_state, target_cfg: TargetConfig, validity_cfg: Val
     # En capturant le résultat dans la closure de loss_fn, il devient une
     # constante XLA (jamais retracée) — solution correcte et efficace.
     if map_type.startswith('gnn_'):
-        from jax_backend.gnn.graph_builder import build_static_graph_features
-        _static_features = build_static_graph_features(initial_state)
+        from jax_backend.gnn.graph_builder import build_static_features
+        _static_features = build_static_features(initial_state, map_type)
     else:
         _static_features = None
 

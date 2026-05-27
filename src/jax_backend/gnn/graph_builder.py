@@ -1,20 +1,30 @@
 """
 Conversion de CentroidalState vers jraph.GraphsTuple.
 
-Deux fonctions distinctes :
-  - build_static_graph_features : calcule UNE SEULE FOIS les données
-    topologiques fixes (conditions aux limites, chargements, aires initiales).
-    Ne contient aucun JAX Tracer — sûr à utiliser en dehors de JIT.
+Three public functions:
+  - build_static_graph_features      : base features for EGNN (7-dim node features,
+                                        distance-only edge features).
+  - build_static_graph_features_mpnn : extends the base with 2 normalised initial
+                                        centroid positions → 9-dim node features for
+                                        the non-equivariant MPNN.
+  - build_static_features            : dispatcher keyed on map_type — always call this
+                                        when you don't want to hard-code the architecture.
 
-  - state_to_graph : appelée à chaque forward pass, construit le GraphsTuple
-    complet en combinant les features statiques et les positions courantes
-    (live JAX arrays). C'est la seule fonction à appeler dans le pipeline JIT.
+  - state_to_graph : called at every forward pass; combines static features with live
+                     JAX centroid positions (may be Tracers inside JIT).
 
-Interface du graphe (convention EGNN) :
-  nodes = { 'h': (n_faces, 7),   features statiques invariants
-            'x': (n_faces, 2) }  positions courantes (différentiables)
-  edges = (n_edges, 1)           distance euclidienne (scalaire équivariant)
-  senders / receivers            arêtes bidirectionnelles depuis hinge_face_pairs
+Node feature layout (base, shared by both architectures):
+  Index  Field
+    0    density
+    1    initial_face_area
+    2    is_boundary  (1 if face is on the free boundary)
+    3    is_clamped   (1 if Dirichlet BC active)
+    4    load_x
+    5    load_y
+    6    load_theta
+MPNN adds two more columns:
+    7    x_norm  (normalised initial centroid x ∈ [-1, 1])
+    8    y_norm  (normalised initial centroid y ∈ [-1, 1])
 """
 
 import numpy as np
@@ -24,16 +34,9 @@ import jraph
 from jax_backend.state import CentroidalState
 
 
-# ── Layout des features de nœuds ─────────────────────────────────────────────
-# Index  Signification
-#   0    density
-#   1    initial_face_area
-#   2    is_boundary  (1 si le nœud est sur la frontière libre)
-#   3    is_clamped   (1 si Dirichlet actif)
-#   4    load_x       (force imposée en x)
-#   5    load_y       (force imposée en y)
-#   6    load_theta   (moment imposé)
-NODE_FEAT_DIM = 7
+# ── Node feature dimensions ───────────────────────────────────────────────────
+NODE_FEAT_DIM      = 7   # EGNN: invariant features only
+NODE_FEAT_DIM_MPNN = 9   # MPNN: base + normalised initial positions
 
 
 def build_static_graph_features(state: CentroidalState) -> dict:
@@ -102,6 +105,53 @@ def build_static_graph_features(state: CentroidalState) -> dict:
         'node_feat_dim': NODE_FEAT_DIM,
         'edge_feat_dim': 1,
     }
+
+
+def build_static_graph_features_mpnn(state: CentroidalState) -> dict:
+    """Like build_static_graph_features, but adds normalised initial centroid
+    positions as extra node features (columns 7-8).
+
+    The normalisation maps the flat-tessellation bounding box to [-1, 1],
+    giving the MPNN absolute positional awareness without needing equivariance.
+
+    Returns the same dict layout as build_static_graph_features, but with:
+        'h_static'      — (n_faces, NODE_FEAT_DIM_MPNN)  i.e. shape (n, 9)
+        'node_feat_dim' — NODE_FEAT_DIM_MPNN  (9)
+    All other keys are identical.
+    """
+    base = build_static_graph_features(state)
+
+    centroids = np.array(state.face_centroids, dtype=np.float64)   # (n_faces, 2)
+    center = centroids.mean(axis=0)
+    half_range = np.abs(centroids - center).max()
+    half_range = max(half_range, 1e-6)
+    pos_norm = (centroids - center) / half_range                    # (n_faces, 2) ∈ [-1,1]
+
+    h_mpnn = np.concatenate([base['h_static'], pos_norm], axis=-1)  # (n_faces, 9)
+
+    return {
+        **base,
+        'h_static':      h_mpnn,
+        'node_feat_dim': NODE_FEAT_DIM_MPNN,
+    }
+
+
+def build_static_features(state: CentroidalState, map_type: str) -> dict:
+    """Dispatcher: return the correct static features dict for a given map_type.
+
+    Use this instead of calling the individual builders directly so that
+    train.py and trainer.py stay in sync automatically.
+
+    Args:
+        state:    Flat CentroidalState (must be concrete, not inside JIT).
+        map_type: The mapping type string (e.g. 'gnn_egnn', 'gnn_mpnn').
+
+    Returns:
+        Static features dict ready for apply_gnn_mapping / init_*_params.
+    """
+    if map_type == 'gnn_mpnn':
+        return build_static_graph_features_mpnn(state)
+    return build_static_graph_features(state)
 
 
 def state_to_graph(

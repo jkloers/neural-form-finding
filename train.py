@@ -77,20 +77,24 @@ def _build_initial_state(config):
 
 def _init_gnn_params(config, initial_state):
     """Initialise GNN parameters from architecture config."""
-    from jax_backend.gnn.graph_builder import build_static_graph_features
+    from jax_backend.gnn.graph_builder import build_static_features
 
-    gnn_cfg = config.mapping.params if isinstance(config.mapping.params, dict) else {}
+    map_type = config.mapping.type
+    gnn_cfg  = config.mapping.params if isinstance(config.mapping.params, dict) else {}
     hidden_dim  = int(gnn_cfg.get('hidden_dim', 16))
+    num_layers  = int(gnn_cfg.get('num_layers', 2))
     seed        = int(gnn_cfg.get('seed', 0))
+    key         = jax.random.PRNGKey(seed)
 
-    static_features = build_static_graph_features(initial_state)
+    static_features = build_static_features(initial_state, map_type)
     node_feat_dim   = static_features['node_feat_dim']
-    key             = jax.random.PRNGKey(seed)
 
-    if config.mapping.type == 'gnn_egnn':
+    if map_type == 'gnn_egnn':
         from jax_backend.gnn.egnn import init_egnn
-        num_layers = int(gnn_cfg.get('num_layers', 2))
         params = init_egnn(key, node_feat_dim, hidden_dim, num_layers)
+    elif map_type == 'gnn_mpnn':
+        from jax_backend.gnn.mpnn import init_mpnn
+        params = init_mpnn(key, node_feat_dim, hidden_dim, num_layers)
     else:
         from jax_backend.gnn.dummy_gnn import init_dummy_gnn
         params = init_dummy_gnn(key, node_feat_dim, hidden_dim)
