@@ -126,6 +126,11 @@ def _run_one_problem(config, problem_label, run_dir):
 
     map_params, static_features = _init_map_params(config, initial_state)
 
+    # load_specs: raw list of load dicts from the config.
+    # Typed loads ('type' key present) are handled by force_types.py in the pipeline.
+    # Legacy loads (no 'type') are already applied to the tessellation by conditions.py.
+    load_specs = config.topology.get('loads', []) or []
+
     _on_cpu = jax.default_backend() == 'cpu'
     _use_jit = _on_cpu or not config.mapping.type.startswith('gnn_')
 
@@ -141,6 +146,7 @@ def _run_one_problem(config, problem_label, run_dir):
         strict_boundary_fit=config.mapping.strict_boundary_fit,
         learn_global_scale=config.mapping.learn_global_scale,
         use_jit=_use_jit,
+        load_specs=load_specs,
     )
 
     # Sub-directory for this problem
@@ -166,6 +172,7 @@ def _run_one_problem(config, problem_label, run_dir):
             use_shirley_chiu=config.mapping.use_shirley_chiu,
             strict_boundary_fit=config.mapping.strict_boundary_fit,
             static_features=static_features,
+            load_specs=load_specs,
         )
 
         target_params = {

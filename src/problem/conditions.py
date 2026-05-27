@@ -56,12 +56,21 @@ def apply_boundary_conditions(tessellation, config):
 def apply_loads(tessellation, config):
     """Applies Neumann loads (external forces) from config.
 
+    Handles legacy global-frame loads (no 'type' key).  Loads with a 'type'
+    key ('tile_to_tile', 'tess_frame', 'global_frame') are geometry-dependent
+    and are handled later in the pipeline by force_types.build_geometry_dependent_loading;
+    they are skipped here so they are not double-applied.
+
     config.loads is a list of dicts:
         [{'face': 'central' | int | list[int], 'dof': 0/1/2, 'value': float}, ...]
     """
     applied_loads = []
 
     for load_info in config.loads:
+        # Skip typed loads — these are handled by force_types.py in the pipeline.
+        if 'type' in load_info:
+            continue
+
         face_spec = load_info.get('face')
         dof = load_info.get('dof', 1)
         value = load_info.get('value', 0.0)

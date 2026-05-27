@@ -150,7 +150,8 @@ def compute_end_to_end_loss(
         use_shirley_chiu: bool = True,
         strict_boundary_fit: bool = True,
         learn_global_scale: bool = False,
-        static_features: Any = None):
+        static_features: Any = None,
+        load_specs: Any = None):
     """Wrapper function required by JAX for gradient computation.
 
     In JAX, jax.grad needs a single function that takes parameters and
@@ -175,6 +176,7 @@ def compute_end_to_end_loss(
         use_shirley_chiu=use_shirley_chiu,
         strict_boundary_fit=strict_boundary_fit,
         static_features=static_features,
+        load_specs=load_specs,
     )
     
     # 2. Evaluate Physical Objective

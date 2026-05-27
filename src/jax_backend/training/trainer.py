@@ -29,7 +29,7 @@ def _format_grad_norms(norms, prefix: str = '') -> list[str]:
 
 from problem.config import TargetConfig, PhysicsConfig, TrainingConfig, ValidityConfig
 
-def create_train_step(initial_state, target_cfg: TargetConfig, validity_cfg: ValidityConfig, physics_cfg: PhysicsConfig, training_cfg: TrainingConfig, map_type: str = 'conformal_polynomial', use_shirley_chiu: bool = True, strict_boundary_fit: bool = True, learn_global_scale: bool = False, use_jit: bool = True):
+def create_train_step(initial_state, target_cfg: TargetConfig, validity_cfg: ValidityConfig, physics_cfg: PhysicsConfig, training_cfg: TrainingConfig, map_type: str = 'conformal_polynomial', use_shirley_chiu: bool = True, strict_boundary_fit: bool = True, learn_global_scale: bool = False, use_jit: bool = True, load_specs=None):
     """Creates a compiled training step for optimizing map_params.
 
     Args:
@@ -76,6 +76,7 @@ def create_train_step(initial_state, target_cfg: TargetConfig, validity_cfg: Val
             strict_boundary_fit=strict_boundary_fit,
             learn_global_scale=learn_global_scale,
             static_features=_static_features,
+            load_specs=load_specs,
         )
         
     def _step_body(map_params, opt_state):
@@ -107,7 +108,8 @@ def train_pipeline(initial_map_params, initial_state, target_cfg: TargetConfig,
                    use_shirley_chiu: bool = True,
                    strict_boundary_fit: bool = True,
                    learn_global_scale: bool = False,
-                   use_jit: bool = True):
+                   use_jit: bool = True,
+                   load_specs=None):
     """Run the training loop to find optimal mapping parameters."""
 
     optimizer, train_step_fn = create_train_step(
@@ -115,6 +117,7 @@ def train_pipeline(initial_map_params, initial_state, target_cfg: TargetConfig,
         map_type, use_shirley_chiu, strict_boundary_fit,
         learn_global_scale=learn_global_scale,
         use_jit=use_jit,
+        load_specs=load_specs,
     )
     
     opt_state = optimizer.init(initial_map_params)
