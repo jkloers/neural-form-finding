@@ -182,7 +182,8 @@ def _run_one_problem(config, problem_label, run_dir):
         }
         visualize_pipeline_results(
             result, tessellation, config, target_params,
-            problem_label + "_trained", run_dir=prob_dir)
+            problem_label + "_trained", run_dir=prob_dir,
+            load_specs=load_specs)
 
     final_metrics = history_loss[-1] if history_loss else {}
     return {

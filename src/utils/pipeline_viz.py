@@ -2,6 +2,8 @@ import os
 import copy
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+from matplotlib.patches import FancyArrowPatch
 
 import jax.numpy as jnp
 from jax import vmap
@@ -10,7 +12,115 @@ from jax_backend.utils.linalg import rotation_matrix
 from jax_backend.geometry import reconstruct_vertices, compute_face_areas
 from utils.visualization import plot_tessellation, animate_tessellation, plot_tessellation_differences
 
-def visualize_pipeline_results(result, tessellation, config, target_params, config_name, run_dir=None):
+
+def _draw_typed_loads(ax, load_specs, valid_centroids, eq_centroids):
+    """Overlay force arrows and moment indicators for typed load specs.
+
+    Draws at the equilibrium centroid positions; force directions are computed
+    from the reference (valid_state) centroid positions, matching what the
+    physics solver actually used.
+
+    Args:
+        ax:              matplotlib Axes to draw on.
+        load_specs:      List of load dicts from the config (typed format).
+        valid_centroids: (n_faces, 2) numpy — reference centroids pre-deformation.
+        eq_centroids:    (n_faces, 2) numpy — equilibrium centroid positions.
+    """
+    if not load_specs:
+        return
+
+    valid_centroids = np.array(valid_centroids, dtype=float)
+    eq_centroids    = np.array(eq_centroids,    dtype=float)
+
+    # Pre-compute tess_frame principal axes once (same for all tess_frame specs)
+    _tess_axes = None
+    if any(s.get('type') == 'tess_frame' for s in load_specs):
+        c = valid_centroids - valid_centroids.mean(axis=0)
+        cov = c.T @ c + np.array([[2e-6, 0.0], [0.0, 1e-6]])
+        _, eigvecs = np.linalg.eigh(cov)   # ascending eigenvalues; col1=major
+        _tess_axes = eigvecs               # shape (2, 2)
+
+    # Accumulate per-face force vectors and moments
+    face_fx  = {}   # translational x
+    face_fy  = {}   # translational y
+    face_mz  = {}   # moments
+
+    for spec in load_specs:
+        load_type = spec.get('type', 'global_frame')
+
+        if load_type == 'tile_to_tile':
+            src = int(spec['source_face'])
+            tgt = int(spec['target_face'])
+            mag = float(spec['magnitude'])
+            # Convention: diff = source - target (outward), magnitude < 0 → compression
+            diff = eq_centroids[src] - eq_centroids[tgt]
+            norm = np.linalg.norm(diff)
+            d = diff / norm if norm > 1e-8 else np.array([1.0, 0.0])
+            face_fx[src] = face_fx.get(src, 0.0) + mag * d[0]
+            face_fy[src] = face_fy.get(src, 0.0) + mag * d[1]
+
+        elif load_type == 'tess_frame':
+            face     = int(spec['face'])
+            tess_dof = int(spec['tess_dof'])   # 0=major, 1=minor
+            value    = float(spec['value'])
+            d = _tess_axes[:, 1 - tess_dof]    # col1=major, col0=minor
+            face_fx[face] = face_fx.get(face, 0.0) + value * d[0]
+            face_fy[face] = face_fy.get(face, 0.0) + value * d[1]
+
+        elif load_type == 'global_frame':
+            face  = int(spec['face'])
+            dof   = int(spec['dof'])
+            value = float(spec['value'])
+            if dof == 0:
+                face_fx[face] = face_fx.get(face, 0.0) + value
+            elif dof == 1:
+                face_fy[face] = face_fy.get(face, 0.0) + value
+            elif dof == 2:
+                face_mz[face] = face_mz.get(face, 0.0) + value
+
+    FORCE_COLOR  = '#D62828'
+    ARROW_LENGTH = 0.18   # fixed visual length (tessellation units)
+
+    all_faces = set(face_fx) | set(face_fy) | set(face_mz)
+    for fi in all_faces:
+        cx, cy = eq_centroids[fi]
+        fx = face_fx.get(fi, 0.0)
+        fy = face_fy.get(fi, 0.0)
+        mz = face_mz.get(fi, 0.0)
+
+        # Translational force arrow (fixed length, direction only)
+        force_len = np.sqrt(fx**2 + fy**2)
+        if force_len > 1e-8:
+            ux, uy = fx / force_len, fy / force_len
+            ax.annotate(
+                '', xy=(cx + ux * ARROW_LENGTH, cy + uy * ARROW_LENGTH),
+                xytext=(cx, cy),
+                arrowprops=dict(arrowstyle='->', color=FORCE_COLOR,
+                                lw=2.0, mutation_scale=18),
+                zorder=35)
+
+        # Moment indicator (circular arrow)
+        if abs(mz) > 1e-8:
+            r = 0.10
+            if mz > 0:   # CCW
+                start = (cx + r, cy - r / 2)
+                end   = (cx - r / 2, cy + r)
+                rad   = 0.6
+            else:         # CW
+                start = (cx - r, cy - r / 2)
+                end   = (cx + r / 2, cy + r)
+                rad   = -0.6
+            patch = FancyArrowPatch(
+                start, end,
+                connectionstyle=f"arc3,rad={rad}",
+                color=FORCE_COLOR,
+                arrowstyle="Simple, tail_width=1.5, head_width=7, head_length=9",
+                zorder=35)
+            ax.add_patch(patch)
+
+
+def visualize_pipeline_results(result, tessellation, config, target_params, config_name,
+                                run_dir=None, load_specs=None):
     """
     Orchestrates the visualization of the entire pipeline, including static plots and animations.
     Controlled by the visualization settings in the config.
@@ -39,13 +149,16 @@ def visualize_pipeline_results(result, tessellation, config, target_params, conf
             'show_kinematic_blocks': config.visualization.show_kinematic_blocks,
         }
 
-    def plot_stage(state, title, mapping_fn=None, map_params=None):
+    def plot_stage(state, title, mapping_fn=None, map_params=None, on_ax=None):
         tess_copy = update_tessellation_from_state(state)
 
         fig, ax = plt.subplots(figsize=(8, 8))
         plot_tessellation(tess_copy, ax=ax, title=title,
                           mapping_fn=mapping_fn, map_params=map_params,
                           original_vertices=tessellation.vertices, **_plot_kwargs())
+
+        if on_ax is not None:
+            on_ax(ax)
 
         if config.visualization.save_outputs and run_dir:
             filename = title.lower().replace(" ", "_").replace(":", "") + ".png"
@@ -102,7 +215,17 @@ def visualize_pipeline_results(result, tessellation, config, target_params, conf
         s_eq = jnp.einsum('nij, nkj -> nki', R, valid_state.centroid_node_vectors)
 
         equilibrium_state = valid_state._replace(face_centroids=c_eq, centroid_node_vectors=s_eq)
-        plot_stage(equilibrium_state, "Stage 2: Static Equilibrium")
+
+        # Draw typed loads (tile_to_tile, tess_frame, global_frame moments) as
+        # force arrows / moment indicators at the equilibrium face positions.
+        _typed_specs = [s for s in (load_specs or []) if 'type' in s]
+        def _on_ax_stage2(ax):
+            _draw_typed_loads(ax, _typed_specs,
+                              np.array(valid_state.face_centroids),
+                              np.array(c_eq))
+
+        plot_stage(equilibrium_state, "Stage 2: Static Equilibrium",
+                   on_ax=_on_ax_stage2 if _typed_specs else None)
 
     # Animation
     if config.physics.incremental and config.visualization.animation:
