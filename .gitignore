@@ -8,6 +8,9 @@ data/*
 
 # Claude
 *CLAUDE.md
+.claude/
+deta/memory/*
+
 
 # C extensions
 *.so

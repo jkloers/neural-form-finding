@@ -12,7 +12,8 @@ import jax.numpy as jnp
 from typing import Any
 from jax_backend.pipeline import forward_pipeline
 from jax_backend.state import CentroidalState
-from jax_backend.geometry import compute_total_area
+from jax_backend.geometry import compute_total_area, compute_void_area
+from jax_backend.constraints import hinge_connectivity
 from problem.targets import get_target_points
 from problem.config import TargetConfig, PhysicsConfig, TrainingConfig, ValidityConfig
 
@@ -148,7 +149,9 @@ def compute_end_to_end_loss(
         map_type: str = 'conformal_polynomial',
         use_shirley_chiu: bool = True,
         strict_boundary_fit: bool = True,
-        learn_global_scale: bool = False):
+        learn_global_scale: bool = False,
+        static_features: Any = None,
+        load_specs: Any = None):
     """Wrapper function required by JAX for gradient computation.
 
     In JAX, jax.grad needs a single function that takes parameters and
@@ -171,7 +174,9 @@ def compute_end_to_end_loss(
         map_type=map_type,
         map_params=map_params,
         use_shirley_chiu=use_shirley_chiu,
-        strict_boundary_fit=strict_boundary_fit
+        strict_boundary_fit=strict_boundary_fit,
+        static_features=static_features,
+        load_specs=load_specs,
     )
     
     # 2. Evaluate Physical Objective
@@ -182,19 +187,70 @@ def compute_end_to_end_loss(
         training_cfg
     )
 
+    # 2a. Hinge Gap Penalty — computed at Stage 0 output (before Stage 1).
+    # Penalizes vertex pairs that should coincide at hinges but don't, giving the
+    # GNN a direct gradient signal to produce geometrically connected tiles.
+    # hinge_node_pairs is a static NumPy array captured in the CentroidalState.
+    weight_hinge_gap = training_cfg.loss_weights.hinge_gap
+    if weight_hinge_gap > 0.0:
+        ms = results['mapped_state']
+        hinge_gap_loss = weight_hinge_gap * hinge_connectivity(
+            ms.face_centroids, ms.centroid_node_vectors, ms.hinge_node_pairs)
+    else:
+        hinge_gap_loss = 0.0
+
     # 2b. Material Area Conservation (Option 1 only: learn_global_scale = False)
-    # Gradient path: mapped_state.centroid_node_vectors → jacfwd(mapping_fn) → map_params.
-    # This requires second-order derivatives, but is finite as long as no root is at the
-    # origin (division by zero). The zero-root guard is enforced in the yaml.
+    # For classical maps: CNVs are Jacobian-transformed in Stage 0 → use mapped_state.
+    # For GNN maps: CNVs are NOT transformed in Stage 0 (only centroids move), so
+    # mapped_state area is always ≈ initial area regardless of centroid positions.
+    # Use valid_state (Stage 1 output) instead — Stage 1 resizes faces to fit the
+    # GNN-displaced centroids, so its area reflects the actual geometric distortion.
     weight_material = training_cfg.loss_weights.material_area
     if not learn_global_scale and weight_material > 0.0:
-        mapped_area = compute_total_area(results['mapped_state'].centroid_node_vectors)
+        if map_type.startswith('gnn_'):
+            area_cnvs = results['valid_state'].centroid_node_vectors
+        else:
+            area_cnvs = results['mapped_state'].centroid_node_vectors
+        mapped_area = compute_total_area(area_cnvs)
         target_area = jnp.sum(initial_state.initial_face_areas)
         material_area_loss = weight_material * (mapped_area - target_area) ** 2
         area_deviation = mapped_area - target_area
     else:
         material_area_loss = 0.0
         area_deviation = 0.0
+
+    # 2c. Openness loss — reward large void area at Stage 1 (before physics).
+    # log1p saturation: gradient ∝ 1/(1+void_area), so chamfer dominates at
+    # large void and the tessellation cannot expand without bound.
+    # nan_to_num guards against Stage 1 solver divergence on hard problems.
+    weight_open = training_cfg.loss_weights.openness
+    if weight_open > 0.0:
+        vs = results['valid_state']
+        void_area = compute_void_area(
+            vs.face_centroids, vs.centroid_node_vectors, vs.boundary_face_node_ids)
+        void_area_safe = jnp.clip(
+            jnp.nan_to_num(void_area, nan=0.0, posinf=0.0, neginf=0.0),
+            0.0, 20.0)
+        openness_loss = -weight_open * jnp.log1p(void_area_safe)
+    else:
+        openness_loss = 0.0
+
+    # 2d. Deformation loss — reward Stage 2 hinge bending energy.
+    # Bending energy = k_rot × Σ(dθ²) at hinges: zero for rigid body modes,
+    # non-zero only for actual kinematic closing (arm rotation around hubs).
+    # log1p saturation prevents explosive exploitation of high-energy states.
+    # nan_to_num guards against Stage 2 physics solver divergence.
+    weight_deform = training_cfg.loss_weights.deformation
+    if weight_deform > 0.0:
+        zero_fallback = jnp.zeros(1)
+        u_bend_hist = results['solution'].energies.get('rot', zero_fallback)
+        u_bend_final = u_bend_hist[-1]
+        u_bend_safe = jnp.clip(
+            jnp.nan_to_num(u_bend_final, nan=0.0, posinf=0.0, neginf=0.0),
+            0.0, 100.0)
+        deformation_loss = -weight_deform * jnp.log1p(u_bend_safe)
+    else:
+        deformation_loss = 0.0
 
     # 3. Regularization (Prevents map_params from exploding)
     weight_reg = training_cfg.loss_weights.regularization
@@ -203,12 +259,15 @@ def compute_end_to_end_loss(
     squared_params = jax.tree_util.tree_map(lambda x: jnp.sum(x**2), map_params)
     reg_loss = weight_reg * jax.tree_util.tree_reduce(lambda a, b: a + b, squared_params, initializer=0.0)
 
-    total_loss = base_loss + material_area_loss + reg_loss
+    total_loss = base_loss + material_area_loss + hinge_gap_loss + reg_loss + openness_loss + deformation_loss
 
     # Update metrics
     loss_components['comp_regularization'] = reg_loss
     loss_components['comp_geom_material_area'] = material_area_loss
     loss_components['global_material_area'] = area_deviation
+    loss_components['hinge_gap'] = hinge_gap_loss
+    loss_components['openness'] = openness_loss
+    loss_components['deformation'] = deformation_loss
     loss_components['loss_total'] = total_loss
     loss_components['total'] = total_loss  # Backward compatibility
     

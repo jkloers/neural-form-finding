@@ -89,11 +89,16 @@ class LossWeights(eqx.Module):
     contact: float
     regularization: float
     coverage: float
+    hinge_gap: float
+    openness: float    # reward large void area at Stage 1 (open initial state)
+    deformation: float # reward large Stage 2 displacement (significant closing)
 
     def __init__(self, chamfer: float = 1.0, material_area: float = 1.0,
                  stretching: float = 0.1, shearing: float = 0.1,
                  bending: float = 0.1, contact: float = 1.0,
-                 regularization: float = 0.001, coverage: float = 1.0):
+                 regularization: float = 0.001, coverage: float = 1.0,
+                 hinge_gap: float = 0.0,
+                 openness: float = 0.0, deformation: float = 0.0):
         self.chamfer = float(chamfer)
         self.material_area = float(material_area)
         self.stretching = float(stretching)
@@ -102,6 +107,9 @@ class LossWeights(eqx.Module):
         self.contact = float(contact)
         self.regularization = float(regularization)
         self.coverage = float(coverage)
+        self.hinge_gap = float(hinge_gap)
+        self.openness = float(openness)
+        self.deformation = float(deformation)
 
 
 class TrainingConfig(eqx.Module):
@@ -110,15 +118,20 @@ class TrainingConfig(eqx.Module):
     optimizer: str
     loss_weights: LossWeights
     geometric_loss_type: str
+    grad_clip: float
+    lr_schedule: str  # "constant" or "cosine"
 
     def __init__(self, num_epochs: int, learning_rate: float,
                  optimizer: str = "adam", loss_weights: LossWeights = None,
-                 geometric_loss_type: str = "boundary_vertices"):
+                 geometric_loss_type: str = "boundary_vertices",
+                 grad_clip: float = 1.0, lr_schedule: str = "constant"):
         self.num_epochs = num_epochs
         self.learning_rate = learning_rate
         self.optimizer = optimizer
         self.loss_weights = loss_weights if loss_weights is not None else LossWeights()
         self.geometric_loss_type = geometric_loss_type
+        self.grad_clip = float(grad_clip)
+        self.lr_schedule = str(lr_schedule)
 
 
 class VisualizationConfig(eqx.Module):
@@ -221,9 +234,16 @@ def _parse_mapping_config(mapping_raw: dict) -> MappingConfig:
         params_raw = {k: v for k, v in params_raw.items()
                       if k not in ('use_shirley_chiu', 's_val')}
 
+    # Pour les types GNN, map_params contient la config d'initialisation
+    # (hidden_dim, seed…), pas des poids entraînables. On la garde brute.
+    if m_type.startswith('gnn_'):
+        parsed_params = params_raw if isinstance(params_raw, dict) else {}
+    else:
+        parsed_params = parse_map_params(params_raw)
+
     return MappingConfig(
         type=m_type,
-        params=parse_map_params(params_raw),
+        params=parsed_params,
         use_shirley_chiu=m_use_sc,
         strict_boundary_fit=bool(mapping_raw.get('strict_boundary_fit', True)),
         domain_restriction=float(mapping_raw.get("domain_restriction", 0.8)),
@@ -271,6 +291,8 @@ def _parse_training_config(training_raw: dict, loss_weights_raw: dict) -> Traini
         optimizer=str(training_raw.get("optimizer", "adam") or "adam"),
         loss_weights=LossWeights(**loss_weights_raw),
         geometric_loss_type=str(training_raw.get("geometric_loss_type", "boundary_vertices")),
+        grad_clip=float(training_raw.get("grad_clip", 1.0)),
+        lr_schedule=str(training_raw.get("lr_schedule", "constant")),
     )
 
 
@@ -292,20 +314,67 @@ def _parse_visualization_config(vis_raw: dict) -> VisualizationConfig:
     )
 
 
-# ── Public entry point ────────────────────────────────────────────────────────
+# ── Public entry points ───────────────────────────────────────────────────────
 
-def load_and_parse_config(yaml_path: str) -> ExperimentConfig:
-    """Read a YAML experiment file and return an immutable ExperimentConfig."""
-    with open(yaml_path) as f:
+def load_arch_config(arch_path: str) -> dict:
+    """Load an architecture YAML (no BCs/loads/physics/material) as a raw dict."""
+    with open(arch_path) as f:
+        return yaml.safe_load(f)
+
+
+def load_problem_suite(suite_path: str) -> list[dict]:
+    """Load a problem suite YAML and return a list of fully-resolved problem dicts.
+
+    Each returned dict is ready to be merged with an arch dict via merge_arch_problem().
+    physics and material keys are resolved from per-problem overrides + suite defaults.
+    """
+    with open(suite_path) as f:
         raw = yaml.safe_load(f)
 
+    physics_defaults = raw.get('physics_defaults', {})
+    material_defaults = raw.get('material_defaults', {})
+
+    problems = []
+    for p in raw.get('problems', []):
+        resolved = dict(p)
+        resolved['physics'] = {**physics_defaults, **p.get('physics', {})}
+        resolved['material'] = {**material_defaults, **p.get('material', {})}
+        problems.append(resolved)
+    return problems
+
+
+def merge_arch_problem(arch_raw: dict, problem: dict) -> dict:
+    """Merge an architecture dict and a resolved problem dict into a single raw dict.
+
+    The problem supplies: boundary_conditions, loads, physics, material.
+    The arch supplies everything else (tessellation, mapping, training, etc.).
+    Problem keys always win on overlap.
+    """
+    merged = dict(arch_raw)
+    merged['boundary_conditions'] = problem.get('boundary_conditions', {})
+    merged['loads'] = problem.get('loads', [])
+    merged['physics'] = problem.get('physics', {})
+    merged['material'] = problem.get('material', {})
+    return merged
+
+
+def load_combined_config(arch_path: str, problem: dict) -> 'ExperimentConfig':
+    """Build an ExperimentConfig from an architecture file + a resolved problem dict."""
+    arch_raw = load_arch_config(arch_path)
+    merged = merge_arch_problem(arch_raw, problem)
+    config_dir = os.path.dirname(arch_path)
+    return _parse_full_raw(merged, config_dir)
+
+
+def _parse_full_raw(raw: dict, config_dir: str) -> 'ExperimentConfig':
+    """Parse a fully-merged raw dict into an ExperimentConfig."""
     topo_raw = raw.get("tessellation", {})
     mapping_raw = raw.get("mapping", {})
     mat_raw = raw.get("material", {})
     bc_raw = raw.get("boundary_conditions", {})
     loads_raw = raw.get("loads", [])
 
-    pattern_obj = _load_pattern(topo_raw, os.path.dirname(yaml_path))
+    pattern_obj = _load_pattern(topo_raw, config_dir)
     mapping_cfg = _parse_mapping_config(mapping_raw)
     validity_cfg = _parse_validity_config(raw.get("optimization_weights", {}))
     physics_cfg = _parse_physics_config(raw.get("physics", {}), mapping_cfg.domain_restriction)
@@ -313,7 +382,6 @@ def load_and_parse_config(yaml_path: str) -> ExperimentConfig:
     training_cfg = _parse_training_config(raw.get("training", {}), raw.get("loss_weights", {}))
     vis_cfg = _parse_visualization_config(raw.get("visualization", {}))
 
-    # Flat dict consumed by configure_tessellation() via SimpleNamespace
     topo_combined = {
         **topo_raw,
         **mapping_raw,
@@ -332,3 +400,10 @@ def load_and_parse_config(yaml_path: str) -> ExperimentConfig:
         training=training_cfg,
         visualization=vis_cfg,
     )
+
+
+def load_and_parse_config(yaml_path: str) -> ExperimentConfig:
+    """Read a single YAML experiment file and return an immutable ExperimentConfig."""
+    with open(yaml_path) as f:
+        raw = yaml.safe_load(f)
+    return _parse_full_raw(raw, os.path.dirname(yaml_path))

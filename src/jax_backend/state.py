@@ -99,7 +99,18 @@ class CentroidalState(NamedTuple):
         # Étape 3 : Calcul des aires initiales
         cnv = state_kwargs['centroid_node_vectors']
         initial_face_areas = compute_face_areas(cnv)
-        
         state_kwargs['initial_face_areas'] = initial_face_areas
+
+        # Sort boundary_face_node_ids CCW by angle around the tessellation centroid.
+        # This fixed ordering (computed from flat positions) lets compute_void_area
+        # apply the shoelace formula directly during training without argsort.
+        bids = state_kwargs['boundary_face_node_ids']          # (n_bnd, 2)
+        fc_np   = np.array(state_kwargs['face_centroids'])
+        cnv_np  = np.array(cnv)
+        b_pos   = fc_np[bids[:, 0]] + cnv_np[bids[:, 0], bids[:, 1]]  # (n_bnd, 2)
+        centroid_xy = b_pos.mean(axis=0)
+        angles  = np.arctan2(b_pos[:, 1] - centroid_xy[1],
+                             b_pos[:, 0] - centroid_xy[0])
+        state_kwargs['boundary_face_node_ids'] = bids[np.argsort(angles)]
 
         return cls(**state_kwargs)

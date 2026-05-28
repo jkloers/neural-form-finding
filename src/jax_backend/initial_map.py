@@ -1,13 +1,18 @@
 """
 Initial mapping in centroidal coordinates.
 
-Maps a flat tessellation (c, s) into a target shape by defining a continuous
-mapping function f: R^2 -> R^2 and applying it strictly to face centroids.
-The face shapes (centroid_node_vectors) are then transformed using the Jacobian
-matrix J_f evaluated at each centroid, resulting in a continuous, differentiable
-Rigid-Face mapping that prevents internal criss-crossing for ANY arbitrary mapping.
+Ce module contient deux moteurs de mapping (Initial Map) distincts :
 
-This module is designed to be replaced by a GNN in the future.
+1. Moteur Mathématique / Analytique (apply_mapping) :
+   Utilise des fonctions continues (ex: polynômes). Les centroïdes sont déplacés par
+   la fonction, et les tuiles (CNVs) sont déformées par le Jacobien analytique exact
+   de cette fonction calculé via jax.jacfwd.
+
+2. Moteur Neuronal / GNN (apply_gnn_mapping) :
+   Utilise un EGNN. Le réseau prédit directement les nouvelles positions des centroïdes
+   ET une matrice de transformation 2x2 complète pour chaque tuile. Aucun Jacobien
+   n'est calculé ici, le réseau a le contrôle total de la géométrie locale.
+
 The interface is: CentroidalState → CentroidalState, pure JAX, differentiable.
 """
 import jax
@@ -251,9 +256,74 @@ def parse_map_params(raw_params: Union[Dict, jnp.ndarray, list]) -> Union[Dict, 
     return jnp.array(raw_params, dtype=float)
 
 
+def apply_gnn_mapping(
+        state: CentroidalState,
+        gnn_params: dict,
+        static_features: dict,
+        map_type: str = 'gnn_dummy',
+) -> CentroidalState:
+    """Applique un mapping GNN à un CentroidalState.
+
+    Contrairement au mapping analytique (qui utilise un Jacobien), le GNN contrôle
+    absolument toute la géométrie. Il prédit :
+    1. Les nouvelles positions des centroïdes (x, y)
+    2. Une matrice de transformation 2x2 complète pour chaque face.
+    
+    Les CNVs sont transformés par cette matrice, permettant au réseau d'étirer
+    et de cisailler asymétriquement les tuiles pour refermer parfaitement les trous.
+
+    Args:
+        state:           CentroidalState plat initial.
+        gnn_params:      Dict PyTree de poids GNN.
+        static_features: Dict renvoyé par build_static_graph_features.
+        map_type:        'gnn_dummy' ou 'gnn_egnn'.
+
+    Returns:
+        CentroidalState avec face_centroids et centroid_node_vectors mis à jour.
+    """
+    from jax_backend.gnn.graph_builder import state_to_graph
+
+    graph = state_to_graph(state, static_features)
+    h = graph.nodes['h']
+    x = graph.nodes['x']
+    senders_np   = static_features['senders']
+    receivers_np = static_features['receivers']
+    n_faces      = static_features['n_nodes']
+
+    if map_type == 'gnn_egnn':
+        from jax_backend.gnn.egnn import apply_egnn
+        new_centroids, _, local_transform = apply_egnn(
+            gnn_params, h, x, senders_np, receivers_np, n_faces)
+    elif map_type == 'gnn_mpnn':
+        from jax_backend.gnn.mpnn import apply_mpnn
+        new_centroids, _, local_transform = apply_mpnn(
+            gnn_params, h, x, senders_np, receivers_np, n_faces)
+    else:  # gnn_dummy (default) — comportement inchangé
+        from jax_backend.gnn.dummy_gnn import apply_dummy_gnn
+        new_centroids = apply_dummy_gnn(
+            gnn_params,
+            h=h,
+            x=x,
+            edges=graph.edges,
+            senders_np=senders_np,
+            receivers_np=receivers_np,
+            n_faces=n_faces,
+        )
+        return state._replace(face_centroids=new_centroids)
+
+    # ── Transformation des CNVs (Centroid Node Vectors) ───────────────────────────
+    # Le GNN prédit directement la matrice de transformation 2x2 pour chaque face.
+    # Cette matrice gère la rotation, l'étirement (scale) asymétrique et le cisaillement.
+    # À l'initialisation, cette matrice vaut l'Identité, donc les tuiles ne sont pas déformées.
+    cnvs = state.centroid_node_vectors  # (n_faces, max_nodes, 2)
+    new_cnvs = jnp.einsum('fab,fnb->fna', local_transform, cnvs)
+
+    return state._replace(face_centroids=new_centroids, centroid_node_vectors=new_cnvs)
+
+
 def apply_mapping(
-        state: CentroidalState, 
-        mapping_fn: Callable, 
+        state: CentroidalState,
+        mapping_fn: Callable,
         map_params: Any = None) -> CentroidalState:
     """Apply a generic mapping function to a CentroidalState using Rigid-Face generalized mapping.
     

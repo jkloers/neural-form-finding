@@ -29,7 +29,7 @@ from typing import Optional
 
 from jax_backend.state import CentroidalState
 from jax_backend.geometry import reconstruct_vertices
-from jax_backend.initial_map import build_mapping_fn, apply_mapping
+from jax_backend.initial_map import build_mapping_fn, apply_mapping, apply_gnn_mapping
 from jax_backend.validity_solver import solve_geometric_validity
 from jax_backend.physics_solver.energy import (
     build_potential_energy,
@@ -37,6 +37,10 @@ from jax_backend.physics_solver.energy import (
 )
 from jax_backend.physics_solver.statics import setup_static_solver
 from jax_backend.physics_solver.params import ReferenceGeometry, build_control_params
+from jax_backend.physics_solver.force_types import (
+    has_geometry_dependent_loads,
+    build_geometry_dependent_loading,
+)
 from problem.targets import get_target_points
 from problem.config import TargetConfig, PhysicsConfig, ValidityConfig
 
@@ -49,7 +53,9 @@ def forward_pipeline(
         map_type: str = 'conformal_polynomial',
         map_params: Optional[jnp.ndarray] = None,
         use_shirley_chiu: bool = True,
-        strict_boundary_fit: bool = True) -> dict:
+        strict_boundary_fit: bool = True,
+        static_features=None,
+        load_specs: Optional[list] = None) -> dict:
     """Full differentiable pipeline: initial map → geometric validity → static equilibrium.
 
     Args:
@@ -71,9 +77,12 @@ def forward_pipeline(
 
     # ══════════════════════════════════════════════════════════════════════════
     # Stage 0 — Initial Mapping
-    # Maps the flat tessellation into the target shape using a conformal
-    # polynomial (or other parametric) mapping. `map_params` are the
-    # differentiable variables being optimized during training.
+    # Deux branches selon le type de mapping :
+    #   • GNN (map_type starts with 'gnn_') : apply_gnn_mapping reçoit le
+    #     graphe topologique et prédit de nouvelles positions de centroïdes.
+    #     static_features est calculé ici — initial_state est une constante
+    #     de closure dans JIT, donc tous ses champs sont concrets.
+    #   • Paramétrique classique : pipeline conformal/asymmetric_roots existant.
     # ══════════════════════════════════════════════════════════════════════════
     target_params = {
         'type': target_cfg.type,
@@ -81,18 +90,27 @@ def forward_pipeline(
         'radius': target_cfg.radius
     }
 
-    mapping_fn = build_mapping_fn(
-        initial_state, target_params,
-        map_type=map_type,
-        domain_restriction=physics_cfg.domain_restriction,
-        use_shirley_chiu=use_shirley_chiu,
-        strict_boundary_fit=strict_boundary_fit
-    )
+    if map_type.startswith('gnn_'):
+        # static_features est normalement précomputé AVANT le JIT dans create_train_step.
+        # Pour les appels hors-JIT (visualisation finale), on le calcule ici.
+        if static_features is None:
+            from jax_backend.gnn.graph_builder import build_static_graph_features
+            static_features = build_static_graph_features(initial_state)
+        mapped_state = apply_gnn_mapping(initial_state, map_params, static_features, map_type=map_type)
+        mapping_fn = None
+    else:
+        mapping_fn = build_mapping_fn(
+            initial_state, target_params,
+            map_type=map_type,
+            domain_restriction=physics_cfg.domain_restriction,
+            use_shirley_chiu=use_shirley_chiu,
+            strict_boundary_fit=strict_boundary_fit
+        )
 
-    mapped_state = apply_mapping(
-        initial_state, mapping_fn,
-        map_params=map_params,
-    )
+        mapped_state = apply_mapping(
+            initial_state, mapping_fn,
+            map_params=map_params,
+        )
 
     # ══════════════════════════════════════════════════════════════════════════
     # Stage 1 — Geometric Validity
@@ -122,8 +140,20 @@ def forward_pipeline(
     )
 
     # 2.3 — Loading (Neumann BCs)
-    # Returns a callable t → force values, or None if no loads are defined.
-    loading_fn = valid_state.get_loading_function()
+    # Two paths:
+    #   • Typed load specs (tile_to_tile / tess_frame / explicit global_frame):
+    #     force directions computed from live centroids → differentiable.
+    #     force_vals_jax is threaded through control_params.loading_params so
+    #     that jaxopt's custom_vjp solver can differentiate through it as an
+    #     explicit argument (closed-over JAX tracers are not supported there).
+    #   • Legacy (no 'type' key in load specs): fixed values from valid_state.
+    if has_geometry_dependent_loads(load_specs):
+        loaded_face_DOF_pairs, loading_fn, force_vals_jax = build_geometry_dependent_loading(
+            load_specs, valid_state.face_centroids)
+    else:
+        loading_fn = valid_state.get_loading_function()
+        loaded_face_DOF_pairs = valid_state.loaded_face_DOF_pairs if loading_fn else None
+        force_vals_jax = None
 
     # 2.4 — Static solver setup
     # Wraps the L-BFGS minimizer with the constrained kinematics (Dirichlet BCs)
@@ -131,7 +161,7 @@ def forward_pipeline(
     solve_statics_fn = setup_static_solver(
         geometry=geometry,
         energy_fn=potential_energy_fn,
-        loaded_face_DOF_pairs=valid_state.loaded_face_DOF_pairs if loading_fn else None,
+        loaded_face_DOF_pairs=loaded_face_DOF_pairs,
         loading_fn=loading_fn,
         constrained_face_DOF_pairs=valid_state.constrained_face_DOF_pairs,
         incremental=physics_cfg.incremental,
@@ -155,6 +185,11 @@ def forward_pipeline(
         cutoff_angle=physics_cfg.cutoff_angle,
         use_contact=physics_cfg.use_contact,
     )
+    # For geometry-dependent loads, force_values is a live JAX array that must
+    # be an explicit solver argument (not a closure) so jaxopt's custom_vjp
+    # can differentiate through it.  Inject it via loading_params here.
+    if force_vals_jax is not None:
+        control_params = control_params._replace(loading_params={'force_values': force_vals_jax})
 
     # 2.6 — Solve for static equilibrium
     # Initial displacement guess is zero (undeformed configuration).
