@@ -272,14 +272,21 @@ def run_suite(args):
         with open(os.path.join(prob_dir, "merged_config.yaml"), 'w') as f:
             _yaml.dump(merged, f, default_flow_style=False, allow_unicode=True)
 
-        metrics = _run_one_problem(config, label, run_dir)
-        metrics.update({'id': pid, 'name': pname, 'difficulty': diff})
-        summary_rows.append(metrics)
-
-        print(f"  ✓ {label:40s} "
-              f"loss={metrics['final_loss']:.3e}  "
-              f"chamfer={metrics['final_chamfer']:.3e}  "
-              f"diff={diff}")
+        try:
+            metrics = _run_one_problem(config, label, run_dir)
+            metrics.update({'id': pid, 'name': pname, 'difficulty': diff})
+            summary_rows.append(metrics)
+            print(f"  ✓ {label:40s} "
+                  f"loss={metrics['final_loss']:.3e}  "
+                  f"chamfer={metrics['final_chamfer']:.3e}  "
+                  f"diff={diff}")
+        except Exception as exc:
+            print(f"  ✗ {label:40s} FAILED: {exc}")
+            summary_rows.append({
+                'id': pid, 'name': pname, 'difficulty': diff,
+                'final_loss': float('nan'), 'final_chamfer': float('nan'),
+                'final_energy': float('nan'), 'initial_area': float('nan'),
+            })
 
     # Write summary CSV
     summary_path = os.path.join(run_dir, "summary.csv")

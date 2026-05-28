@@ -147,9 +147,14 @@ def train_pipeline(initial_map_params, initial_state, target_cfg: TargetConfig,
             per_param = " ".join(_format_grad_norms(aux['grad_norms']))
             area_dev = f" | ΔArea: {aux['global_material_area']:.2e}" if not learn_global_scale else ""
             hinge_str = f" | HingeGap: {aux.get('hinge_gap', 0.0):.4e}" if aux.get('hinge_gap', 0.0) > 0 else ""
+            open_val  = aux.get('openness', 0.0)
+            deform_val = aux.get('deformation', 0.0)
+            closing_str = ""
+            if open_val != 0.0 or deform_val != 0.0:
+                closing_str = f" | Open: {float(open_val):.3e} | Deform: {float(deform_val):.3e}"
             print(
                 f"Epoch {epoch:03d} | Loss: {aux['total']:.4e} | "
-                f"Chamfer: {aux['chamfer_total']:.4e} | Energy: {aux['energy']:.4e}{area_dev}{hinge_str} | "
+                f"Chamfer: {aux['chamfer_total']:.4e} | Energy: {aux['energy']:.4e}{area_dev}{hinge_str}{closing_str} | "
                 f"‖grad‖: {grad_norm:.2e}{flag} | "
                 f"{s_per_epoch:.1f}s/ep | elapsed {elapsed_total/60:.1f}min | ETA {eta_str}"
             )

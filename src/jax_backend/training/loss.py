@@ -12,7 +12,7 @@ import jax.numpy as jnp
 from typing import Any
 from jax_backend.pipeline import forward_pipeline
 from jax_backend.state import CentroidalState
-from jax_backend.geometry import compute_total_area
+from jax_backend.geometry import compute_total_area, compute_void_area
 from jax_backend.constraints import hinge_connectivity
 from problem.targets import get_target_points
 from problem.config import TargetConfig, PhysicsConfig, TrainingConfig, ValidityConfig
@@ -219,6 +219,39 @@ def compute_end_to_end_loss(
         material_area_loss = 0.0
         area_deviation = 0.0
 
+    # 2c. Openness loss — reward large void area at Stage 1 (before physics).
+    # log1p saturation: gradient ∝ 1/(1+void_area), so chamfer dominates at
+    # large void and the tessellation cannot expand without bound.
+    # nan_to_num guards against Stage 1 solver divergence on hard problems.
+    weight_open = training_cfg.loss_weights.openness
+    if weight_open > 0.0:
+        vs = results['valid_state']
+        void_area = compute_void_area(
+            vs.face_centroids, vs.centroid_node_vectors, vs.boundary_face_node_ids)
+        void_area_safe = jnp.clip(
+            jnp.nan_to_num(void_area, nan=0.0, posinf=0.0, neginf=0.0),
+            0.0, 20.0)
+        openness_loss = -weight_open * jnp.log1p(void_area_safe)
+    else:
+        openness_loss = 0.0
+
+    # 2d. Deformation loss — reward Stage 2 hinge bending energy.
+    # Bending energy = k_rot × Σ(dθ²) at hinges: zero for rigid body modes,
+    # non-zero only for actual kinematic closing (arm rotation around hubs).
+    # log1p saturation prevents explosive exploitation of high-energy states.
+    # nan_to_num guards against Stage 2 physics solver divergence.
+    weight_deform = training_cfg.loss_weights.deformation
+    if weight_deform > 0.0:
+        zero_fallback = jnp.zeros(1)
+        u_bend_hist = results['solution'].energies.get('rot', zero_fallback)
+        u_bend_final = u_bend_hist[-1]
+        u_bend_safe = jnp.clip(
+            jnp.nan_to_num(u_bend_final, nan=0.0, posinf=0.0, neginf=0.0),
+            0.0, 100.0)
+        deformation_loss = -weight_deform * jnp.log1p(u_bend_safe)
+    else:
+        deformation_loss = 0.0
+
     # 3. Regularization (Prevents map_params from exploding)
     weight_reg = training_cfg.loss_weights.regularization
 
@@ -226,13 +259,15 @@ def compute_end_to_end_loss(
     squared_params = jax.tree_util.tree_map(lambda x: jnp.sum(x**2), map_params)
     reg_loss = weight_reg * jax.tree_util.tree_reduce(lambda a, b: a + b, squared_params, initializer=0.0)
 
-    total_loss = base_loss + material_area_loss + hinge_gap_loss + reg_loss
+    total_loss = base_loss + material_area_loss + hinge_gap_loss + reg_loss + openness_loss + deformation_loss
 
     # Update metrics
     loss_components['comp_regularization'] = reg_loss
     loss_components['comp_geom_material_area'] = material_area_loss
     loss_components['global_material_area'] = area_deviation
     loss_components['hinge_gap'] = hinge_gap_loss
+    loss_components['openness'] = openness_loss
+    loss_components['deformation'] = deformation_loss
     loss_components['loss_total'] = total_loss
     loss_components['total'] = total_loss  # Backward compatibility
     

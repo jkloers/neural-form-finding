@@ -147,11 +147,33 @@ def compute_face_areas(centroid_node_vectors):
 
 def compute_total_area(centroid_node_vectors):
     """Compute the total area of the tessellation (sum of all face areas).
-    
+
     Args:
         centroid_node_vectors: (n_faces, max_nodes, 2)
-        
+
     Returns:
         Scalar total area.
     """
     return jnp.sum(compute_face_areas(centroid_node_vectors))
+
+
+def compute_void_area(face_centroids, centroid_node_vectors, boundary_face_node_ids):
+    """Compute total void (aperture) area: boundary polygon area minus total face area.
+
+    boundary_face_node_ids must be pre-sorted CCW (done in CentroidalState.from_tessellation).
+    Differentiable — no argsort at runtime.
+
+    Args:
+        face_centroids:         (n_faces, 2)
+        centroid_node_vectors:  (n_faces, max_nodes, 2)
+        boundary_face_node_ids: (n_boundary, 2) — [face_id, local_node_id], CCW-sorted
+
+    Returns:
+        Scalar void area (boundary polygon area minus sum of face areas).
+    """
+    fi = boundary_face_node_ids[:, 0]
+    li = boundary_face_node_ids[:, 1]
+    b_verts = face_centroids[fi] + centroid_node_vectors[fi, li]   # (n_bnd, 2)
+    boundary_area = compute_polygon_area(b_verts)
+    face_area     = compute_total_area(centroid_node_vectors)
+    return boundary_area - face_area

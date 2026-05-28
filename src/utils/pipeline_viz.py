@@ -342,7 +342,12 @@ def visualize_pipeline_results(result, tessellation, config, target_params, conf
 
 
 def plot_loss_history(history, config, run_dir=None):
-    """Plots the training loss history with component breakdown."""
+    """Plots the training loss history.
+
+    Panel 1 (always): standard penalty terms on a log scale.
+    Panel 2 (when active): closing reward terms on a linear scale — only
+      rendered when openness or deformation weights are non-zero.
+    """
     if not history:
         return
 
@@ -355,33 +360,69 @@ def plot_loss_history(history, config, run_dir=None):
 
     epochs = np.arange(len(history))
 
-    total = [float(h['loss_total']) for h in history]
-    geom_total = [float(h['loss_geometric']) for h in history]
-    phys_total = [float(h['loss_physical']) for h in history]
+    def _series(key, default=0.0):
+        return [float(h.get(key, default)) for h in history]
 
-    chamfer = [float(h['comp_geom_chamfer']) for h in history]
-    material = [float(h['comp_geom_material_area']) for h in history]
+    total       = _series('loss_total')
+    geom_total  = _series('loss_geometric')
+    phys_total  = _series('loss_physical')
+    chamfer     = _series('comp_geom_chamfer')
+    hinge_gap   = _series('hinge_gap')
+    reg         = _series('comp_regularization')
+    mat_area    = _series('comp_geom_material_area')
+    openness    = _series('openness')
+    deformation = _series('deformation')
 
-    stretch = [float(h['comp_phys_stretching']) for h in history]
-    shear = [float(h['comp_phys_shearing']) for h in history]
-    bend = [float(h['comp_phys_bending']) for h in history]
-    contact = [float(h['comp_phys_contact']) for h in history]
-    reg = [float(h['comp_regularization']) for h in history]
+    has_openness    = any(v != 0.0 for v in openness)
+    has_deformation = any(v != 0.0 for v in deformation)
+    has_hinge_gap   = any(v != 0.0 for v in hinge_gap)
+    has_closing     = has_openness or has_deformation
 
-    fig, ax = plt.subplots(figsize=(10, 6))
+    n_rows = 2 if has_closing else 1
+    fig, axes = plt.subplots(n_rows, 1, figsize=(10, 5 * n_rows), squeeze=False)
+    ax = axes[0, 0]
 
-    # Totals only (Thick lines) - Princeton Theme
-    ax.plot(epochs, total, color='#111111', linewidth=3.0, label='Total Loss', zorder=10)
-    ax.plot(epochs, geom_total, color='#F58025', linewidth=2.5, label='Geometric Loss', zorder=5)
-    ax.plot(epochs, phys_total, color='#2D6A4F', linewidth=2.5, label='Physical Loss', zorder=5)
+    # ── Panel 1: standard penalty terms (log scale) ───────────────────────────
+    ax.plot(epochs, total,      color='#111111', linewidth=3.0, label='Total',     zorder=10)
+    ax.plot(epochs, geom_total, color='#F58025', linewidth=2.0, label='Geometric', zorder=5)
+    ax.plot(epochs, phys_total, color='#2D6A4F', linewidth=2.0, label='Physical',  zorder=5)
+    ax.plot(epochs, chamfer,    color='#E07B39', linewidth=1.5, linestyle='--',
+            label='Chamfer', zorder=4, alpha=0.8)
+    if has_hinge_gap:
+        ax.plot(epochs, hinge_gap, color='#9B59B6', linewidth=1.5, linestyle='--',
+                label='Hinge Gap', zorder=4, alpha=0.8)
+    if any(v != 0.0 for v in reg):
+        ax.plot(epochs, reg, color='#888888', linewidth=1.2, linestyle=':',
+                label='Regularization', zorder=3, alpha=0.7)
+    if any(v != 0.0 for v in mat_area):
+        ax.plot(epochs, mat_area, color='#BDC3C7', linewidth=1.2, linestyle=':',
+                label='Material Area', zorder=3, alpha=0.7)
 
-    ax.set_yscale('log')
-    ax.set_xlabel('Training Epochs', fontweight='bold')
-    ax.set_ylabel('Weighted Loss Value (Log Scale)', fontweight='bold')
-    ax.set_title('Training Loss', fontsize=14, pad=20, fontweight='bold')
-
+    pos_vals = [v for v in total + geom_total + phys_total + chamfer if v > 0]
+    if pos_vals:
+        ax.set_yscale('log')
+    ax.set_xlabel('Training Epoch', fontweight='bold')
+    ax.set_ylabel('Weighted Loss (log scale)', fontweight='bold')
+    ax.set_title('Training Loss — Standard Terms', fontsize=13, pad=12, fontweight='bold')
     ax.grid(True, which="both", linestyle='--', alpha=0.3)
-    ax.legend(loc="upper right", frameon=True, fontsize=10)
+    ax.legend(loc='upper right', frameon=True, fontsize=10, ncol=2)
+
+    # ── Panel 2: closing reward terms (linear scale, values are negative) ─────
+    if has_closing:
+        ax2 = axes[1, 0]
+        if has_openness:
+            ax2.plot(epochs, openness, color='#1A73E8', linewidth=2.5,
+                     label='Openness (−w·log1p(void))', zorder=5)
+        if has_deformation:
+            ax2.plot(epochs, deformation, color='#CC0000', linewidth=2.5,
+                     label='Deformation (−w·log1p(U_bend))', zorder=5)
+        ax2.axhline(0, color='#888888', linewidth=0.8, linestyle='-')
+
+        ax2.set_xlabel('Training Epoch', fontweight='bold')
+        ax2.set_ylabel('Reward value  (↓ = more active)', fontweight='bold')
+        ax2.set_title('Training Loss — Closing Reward Terms', fontsize=13, pad=12, fontweight='bold')
+        ax2.grid(True, linestyle='--', alpha=0.3)
+        ax2.legend(loc='lower right', frameon=True, fontsize=10)
 
     plt.tight_layout()
 
