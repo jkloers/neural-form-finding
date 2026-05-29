@@ -53,7 +53,7 @@ def ligament_strains_linearized(DOFs1: jnp.ndarray, DOFs2: jnp.ndarray, referenc
        -s * current_bond[..., 0] + c * current_bond[..., 1],
     ], axis=-1)
 
-    norm_sq = jnp.linalg.norm(reference_vector, axis=-1) ** 2
+    norm_sq = jnp.maximum(jnp.linalg.norm(reference_vector, axis=-1) ** 2, 1e-30)
     axial_strain = vdot(corot_bond - reference_vector, reference_vector) / norm_sq
     shear_strain = jnp.cross(reference_vector, corot_bond, axis=-1) / norm_sq
 

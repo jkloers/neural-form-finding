@@ -29,7 +29,7 @@ def _format_grad_norms(norms, prefix: str = '') -> list[str]:
 
 from problem.config import TargetConfig, PhysicsConfig, TrainingConfig, ValidityConfig
 
-def create_train_step(initial_state, target_cfg: TargetConfig, validity_cfg: ValidityConfig, physics_cfg: PhysicsConfig, training_cfg: TrainingConfig, map_type: str = 'conformal_polynomial', use_shirley_chiu: bool = True, strict_boundary_fit: bool = True, learn_global_scale: bool = False, use_jit: bool = True, load_specs=None):
+def create_train_step(initial_state, target_cfg: TargetConfig, validity_cfg: ValidityConfig, physics_cfg: PhysicsConfig, training_cfg: TrainingConfig, map_type: str = 'conformal_polynomial', use_shirley_chiu: bool = True, strict_boundary_fit: bool = True, learn_global_scale: bool = False, use_jit: bool = True, load_specs=None, static_features=None, pipeline_cfg=None):
     """Creates a compiled training step for optimizing map_params.
 
     Args:
@@ -62,7 +62,9 @@ def create_train_step(initial_state, target_cfg: TargetConfig, validity_cfg: Val
     # l'intérieur du trace JIT déclenche un bug du backend Metal sur Mac.
     # En capturant le résultat dans la closure de loss_fn, il devient une
     # constante XLA (jamais retracée) — solution correcte et efficace.
-    if map_type.startswith('gnn_'):
+    if static_features is not None:
+        _static_features = static_features
+    elif map_type.startswith('gnn_'):
         from jax_backend.gnn.graph_builder import build_static_features
         _static_features = build_static_features(initial_state, map_type)
     else:
@@ -77,6 +79,7 @@ def create_train_step(initial_state, target_cfg: TargetConfig, validity_cfg: Val
             learn_global_scale=learn_global_scale,
             static_features=_static_features,
             load_specs=load_specs,
+            pipeline_cfg=pipeline_cfg,
         )
         
     def _step_body(map_params, opt_state):
@@ -109,7 +112,9 @@ def train_pipeline(initial_map_params, initial_state, target_cfg: TargetConfig,
                    strict_boundary_fit: bool = True,
                    learn_global_scale: bool = False,
                    use_jit: bool = True,
-                   load_specs=None):
+                   load_specs=None,
+                   static_features=None,
+                   pipeline_cfg=None):
     """Run the training loop to find optimal mapping parameters."""
 
     optimizer, train_step_fn = create_train_step(
@@ -118,6 +123,8 @@ def train_pipeline(initial_map_params, initial_state, target_cfg: TargetConfig,
         learn_global_scale=learn_global_scale,
         use_jit=use_jit,
         load_specs=load_specs,
+        static_features=static_features,
+        pipeline_cfg=pipeline_cfg,
     )
     
     opt_state = optimizer.init(initial_map_params)

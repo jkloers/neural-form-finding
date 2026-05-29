@@ -36,13 +36,13 @@ from jax_backend.physics_solver.energy import (
     build_energy_history,
 )
 from jax_backend.physics_solver.statics import setup_static_solver
-from jax_backend.physics_solver.params import ReferenceGeometry, build_control_params
+from jax_backend.physics_solver.params import ReferenceGeometry, build_control_params, SolutionData
 from jax_backend.physics_solver.force_types import (
     has_geometry_dependent_loads,
     build_geometry_dependent_loading,
 )
 from problem.targets import get_target_points
-from problem.config import TargetConfig, PhysicsConfig, ValidityConfig
+from problem.config import TargetConfig, PhysicsConfig, ValidityConfig, PipelineConfig
 
 
 def forward_pipeline(
@@ -55,7 +55,8 @@ def forward_pipeline(
         use_shirley_chiu: bool = True,
         strict_boundary_fit: bool = True,
         static_features=None,
-        load_specs: Optional[list] = None) -> dict:
+        load_specs: Optional[list] = None,
+        pipeline_cfg: Optional[PipelineConfig] = None) -> dict:
     """Full differentiable pipeline: initial map → geometric validity → static equilibrium.
 
     Args:
@@ -90,9 +91,66 @@ def forward_pipeline(
         'radius': target_cfg.radius
     }
 
-    if map_type.startswith('gnn_'):
-        # static_features est normalement précomputé AVANT le JIT dans create_train_step.
-        # Pour les appels hors-JIT (visualisation finale), on le calcule ici.
+    if map_type == 'gnn_hinge':
+        # ── Hinge-based GNN: predicts per-face vertex displacements ──────────
+        # Reconstructs vertex_positions by averaging hinge predictions from
+        # both adjacent faces (gap = 0 by construction), then converts to the
+        # centroidal representation used by all downstream stages.
+        from jax_backend.gnn.graph_builder import state_to_graph
+        from jax_backend.gnn.hinge_mpnn import apply_hinge_mpnn
+
+        if static_features is None:
+            raise ValueError(
+                "static_features must be precomputed for map_type='gnn_hinge'. "
+                "Call build_static_features_hinge(state, tessellation) before the pipeline.")
+
+        graph        = state_to_graph(initial_state, static_features)
+        h_feat       = graph.nodes['h']
+        x_init       = graph.nodes['x']
+        senders_np   = static_features['senders']
+        receivers_np = static_features['receivers']
+        n_faces      = static_features['n_nodes']
+        max_nodes    = static_features['max_nodes']
+        # GNN forward pass → (n_faces, max_nodes, 2) vertex displacements
+        vertex_deltas = apply_hinge_mpnn(
+            map_params, h_feat, x_init, senders_np, receivers_np,
+            n_faces, max_nodes)
+
+        # ── JIT-safe reconstruction (pure gather, no .at[].set()) ────────────
+        # For each (face, local_node): look up its partner's delta and average.
+        # Hinge nodes: partner is the other face's copy → averaging = gap of 0.
+        # Non-hinge nodes: partner == self → averaging is a no-op.
+        partner_face  = jnp.array(static_features['partner_face'])    # (n_faces, max_nodes)
+        partner_local = jnp.array(static_features['partner_local'])   # (n_faces, max_nodes)
+        is_hinge_mask = jnp.array(static_features['is_hinge_node'])   # (n_faces, max_nodes)
+
+        partner_deltas = vertex_deltas[partner_face, partner_local]    # (n_faces, max_nodes, 2)
+        eff_delta = jnp.where(
+            is_hinge_mask[:, :, None],
+            0.5 * (vertex_deltas + partner_deltas),
+            vertex_deltas,
+        )
+
+        # Initial per-(face, local_node) positions via gather (no scatter needed)
+        fvi  = jnp.array(static_features['face_vertex_indices'])       # (n_faces, max_nodes)
+        mask = jnp.array(static_features['node_mask'])                 # (n_faces, max_nodes)
+        initial_vp   = jnp.array(static_features['initial_vertex_positions'])
+        init_verts   = initial_vp[fvi]                                 # (n_faces, max_nodes, 2)
+
+        # Apply effective displacement and convert to centroidal
+        face_verts    = (init_verts + eff_delta) * mask[:, :, None]   # (n_faces, max_nodes, 2)
+        n_per_face    = mask.sum(axis=1, keepdims=True)
+        new_centroids = face_verts.sum(axis=1) / n_per_face
+        new_cnvs      = (face_verts - new_centroids[:, None, :]) * mask[:, :, None]
+
+        mapped_state = initial_state._replace(
+            face_centroids=new_centroids,
+            centroid_node_vectors=new_cnvs,
+        )
+        mapping_fn = None
+
+    elif map_type.startswith('gnn_'):
+        # ── Other GNN types (egnn, mpnn, dummy) ──────────────────────────────
         if static_features is None:
             from jax_backend.gnn.graph_builder import build_static_graph_features
             static_features = build_static_graph_features(initial_state)
@@ -116,14 +174,37 @@ def forward_pipeline(
     # Stage 1 — Geometric Validity
     # Optimizes face centroids and shapes to satisfy: connectivity (hinges
     # must share a point), non-intersection, target fitting, and symmetry.
+    # Skip with pipeline.use_stage1: false in the YAML config.
     # ══════════════════════════════════════════════════════════════════════════
+    _use_stage1 = (pipeline_cfg is None) or pipeline_cfg.use_stage1
     target_cloud = jnp.array(get_target_points(target_params, n_points=200))
-    valid_state = solve_geometric_validity(
-        mapped_state, target_cloud, validity_cfg=validity_cfg)
+    if _use_stage1:
+        valid_state = solve_geometric_validity(
+            mapped_state, target_cloud, validity_cfg=validity_cfg)
+    else:
+        valid_state = mapped_state
 
     # ══════════════════════════════════════════════════════════════════════════
     # Stage 2 — Static Physics Solver
+    # Skip with pipeline.use_stage2: false in the YAML config.
     # ══════════════════════════════════════════════════════════════════════════
+    _use_stage2 = (pipeline_cfg is None) or pipeline_cfg.use_stage2
+    if not _use_stage2:
+        n_faces = valid_state.face_centroids.shape[0]
+        zero_fields = jnp.zeros((1, n_faces, 3))
+        zero_energies = {k: jnp.zeros(1) for k in ('stretch', 'shear', 'rot', 'contact', 'work')}
+        solution = SolutionData(fields=zero_fields, energies=zero_energies)
+        vertices_ref = reconstruct_vertices(
+            valid_state.face_centroids, valid_state.centroid_node_vectors)
+        return {
+            'mapped_state':           mapped_state,
+            'valid_state':            valid_state,
+            'solution':               solution,
+            'vertices_reference':     vertices_ref,
+            'reference_bond_vectors': jnp.zeros((0, 2)),
+            'mapping_fn':             mapping_fn,
+            'map_params':             map_params,
+        }
 
     # 2.1 — Geometry instantiation (Factory Pattern)
     # ReferenceGeometry is the single geometry container. bond_connectivity

@@ -75,7 +75,7 @@ def _build_initial_state(config):
     return CentroidalState.from_tessellation(tessellation, target_cfg=config.target), tessellation
 
 
-def _init_gnn_params(config, initial_state):
+def _init_gnn_params(config, initial_state, tessellation=None):
     """Initialise GNN parameters from architecture config."""
     from jax_backend.gnn.graph_builder import build_static_features
 
@@ -86,7 +86,8 @@ def _init_gnn_params(config, initial_state):
     seed        = int(gnn_cfg.get('seed', 0))
     key         = jax.random.PRNGKey(seed)
 
-    static_features = build_static_features(initial_state, map_type)
+    static_features = build_static_features(initial_state, map_type,
+                                             tessellation=tessellation)
     node_feat_dim   = static_features['node_feat_dim']
 
     if map_type == 'gnn_egnn':
@@ -95,6 +96,10 @@ def _init_gnn_params(config, initial_state):
     elif map_type == 'gnn_mpnn':
         from jax_backend.gnn.mpnn import init_mpnn
         params = init_mpnn(key, node_feat_dim, hidden_dim, num_layers)
+    elif map_type == 'gnn_hinge':
+        from jax_backend.gnn.hinge_mpnn import init_hinge_mpnn
+        max_nodes = static_features['max_nodes']
+        params = init_hinge_mpnn(key, node_feat_dim, hidden_dim, num_layers, max_nodes)
     else:
         from jax_backend.gnn.dummy_gnn import init_dummy_gnn
         params = init_dummy_gnn(key, node_feat_dim, hidden_dim)
@@ -102,10 +107,11 @@ def _init_gnn_params(config, initial_state):
     return params, static_features
 
 
-def _init_map_params(config, initial_state):
+def _init_map_params(config, initial_state, tessellation=None):
     """Initialise mapping parameters (GNN or analytical)."""
     if config.mapping.type.startswith('gnn_'):
-        params, static_features = _init_gnn_params(config, initial_state)
+        params, static_features = _init_gnn_params(config, initial_state,
+                                                    tessellation=tessellation)
         return params, static_features
     else:
         raw = config.mapping.params
@@ -124,7 +130,8 @@ def _run_one_problem(config, problem_label, run_dir):
     initial_state, tessellation = _build_initial_state(config)
     initial_area = tessellation.compute_total_area()
 
-    map_params, static_features = _init_map_params(config, initial_state)
+    map_params, static_features = _init_map_params(config, initial_state,
+                                                    tessellation=tessellation)
 
     # load_specs: raw list of load dicts from the config.
     # Typed loads ('type' key present) are handled by force_types.py in the pipeline.
@@ -147,6 +154,8 @@ def _run_one_problem(config, problem_label, run_dir):
         learn_global_scale=config.mapping.learn_global_scale,
         use_jit=_use_jit,
         load_specs=load_specs,
+        static_features=static_features,
+        pipeline_cfg=config.pipeline,
     )
 
     # Sub-directory for this problem
@@ -173,6 +182,7 @@ def _run_one_problem(config, problem_label, run_dir):
             strict_boundary_fit=config.mapping.strict_boundary_fit,
             static_features=static_features,
             load_specs=load_specs,
+            pipeline_cfg=config.pipeline,
         )
 
         target_params = {

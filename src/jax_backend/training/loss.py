@@ -151,7 +151,8 @@ def compute_end_to_end_loss(
         strict_boundary_fit: bool = True,
         learn_global_scale: bool = False,
         static_features: Any = None,
-        load_specs: Any = None):
+        load_specs: Any = None,
+        pipeline_cfg: Any = None):
     """Wrapper function required by JAX for gradient computation.
 
     In JAX, jax.grad needs a single function that takes parameters and
@@ -164,7 +165,7 @@ def compute_end_to_end_loss(
             When False (Option 1), the total mapped area is penalised to stay
             equal to the reference flat-tessellation area.
     """
-    
+
     # 1. Run the forward pipeline
     results = forward_pipeline(
         initial_state=initial_state,
@@ -177,6 +178,7 @@ def compute_end_to_end_loss(
         strict_boundary_fit=strict_boundary_fit,
         static_features=static_features,
         load_specs=load_specs,
+        pipeline_cfg=pipeline_cfg,
     )
     
     # 2. Evaluate Physical Objective
@@ -252,6 +254,43 @@ def compute_end_to_end_loss(
     else:
         deformation_loss = 0.0
 
+    # 2e. Void shape penalty — enforce parallelogram voids directly in the loss.
+    # Computed on mapped_state (Stage 0 output) so the GNN learns this directly
+    # without needing Stage 1 to "fix" it. Uses the same constraint as the
+    # validity solver's void_length + void_collinear terms.
+    weight_void_l = training_cfg.loss_weights.openness   # reuse weight slot? No — use dedicated
+    # Use the existing void_length/void_collinear weights from a new field if available,
+    # or skip if no void_opposite_node_pairs (pattern doesn't have voids).
+    ms_void = results['mapped_state']
+    if hasattr(training_cfg.loss_weights, 'void_length') and training_cfg.loss_weights.void_length > 0.0:
+        from jax_backend.constraints import void_opposite_edges_validity
+        if ms_void.void_opposite_node_pairs.shape[0] > 0:
+            void_l, void_c = void_opposite_edges_validity(
+                ms_void.centroid_node_vectors, ms_void.void_opposite_node_pairs)
+            void_shape_loss = (training_cfg.loss_weights.void_length * void_l +
+                               training_cfg.loss_weights.void_collinear * void_c)
+        else:
+            void_shape_loss = 0.0
+    else:
+        void_shape_loss = 0.0
+
+    # 2f. Face inversion penalty — penalize faces whose vertices have flipped winding.
+    # Computed on mapped_state (Stage 0 output) so the gradient reaches the GNN directly.
+    # Uses the shoelace formula on CNVs: positive signed area = CCW (valid),
+    # negative = CW (inverted). relu(-area) = 0 for valid faces, >0 for inverted.
+    weight_inversion = training_cfg.loss_weights.face_inversion
+    if weight_inversion > 0.0:
+        ms = results['mapped_state']
+        cnvs = ms.centroid_node_vectors         # (n_faces, max_nodes, 2)
+        x = cnvs[:, :, 0]                      # (n_faces, max_nodes)
+        y = cnvs[:, :, 1]
+        x_next = jnp.roll(x, -1, axis=1)
+        y_next = jnp.roll(y, -1, axis=1)
+        signed_areas = 0.5 * jnp.sum(x * y_next - x_next * y, axis=1)  # (n_faces,)
+        face_inversion_loss = weight_inversion * jnp.sum(jax.nn.relu(-signed_areas))
+    else:
+        face_inversion_loss = 0.0
+
     # 3. Regularization (Prevents map_params from exploding)
     weight_reg = training_cfg.loss_weights.regularization
 
@@ -259,7 +298,7 @@ def compute_end_to_end_loss(
     squared_params = jax.tree_util.tree_map(lambda x: jnp.sum(x**2), map_params)
     reg_loss = weight_reg * jax.tree_util.tree_reduce(lambda a, b: a + b, squared_params, initializer=0.0)
 
-    total_loss = base_loss + material_area_loss + hinge_gap_loss + reg_loss + openness_loss + deformation_loss
+    total_loss = base_loss + material_area_loss + hinge_gap_loss + reg_loss + openness_loss + deformation_loss + face_inversion_loss + void_shape_loss
 
     # Update metrics
     loss_components['comp_regularization'] = reg_loss
@@ -268,7 +307,9 @@ def compute_end_to_end_loss(
     loss_components['hinge_gap'] = hinge_gap_loss
     loss_components['openness'] = openness_loss
     loss_components['deformation'] = deformation_loss
+    loss_components['face_inversion'] = face_inversion_loss
+    loss_components['void_shape'] = void_shape_loss
     loss_components['loss_total'] = total_loss
     loss_components['total'] = total_loss  # Backward compatibility
-    
+
     return total_loss, loss_components

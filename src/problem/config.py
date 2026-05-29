@@ -90,15 +90,20 @@ class LossWeights(eqx.Module):
     regularization: float
     coverage: float
     hinge_gap: float
-    openness: float    # reward large void area at Stage 1 (open initial state)
-    deformation: float # reward large Stage 2 displacement (significant closing)
+    openness: float      # reward large void area at Stage 1 (open initial state)
+    deformation: float   # reward large Stage 2 displacement (significant closing)
+    face_inversion: float # penalize inverted faces (negative winding order) at Stage 0
+    void_length: float   # enforce equal arm lengths (parallelogram voids) at Stage 0
+    void_collinear: float # enforce arm collinearity (parallelogram voids) at Stage 0
 
     def __init__(self, chamfer: float = 1.0, material_area: float = 1.0,
                  stretching: float = 0.1, shearing: float = 0.1,
                  bending: float = 0.1, contact: float = 1.0,
                  regularization: float = 0.001, coverage: float = 1.0,
                  hinge_gap: float = 0.0,
-                 openness: float = 0.0, deformation: float = 0.0):
+                 openness: float = 0.0, deformation: float = 0.0,
+                 face_inversion: float = 0.0,
+                 void_length: float = 0.0, void_collinear: float = 0.0):
         self.chamfer = float(chamfer)
         self.material_area = float(material_area)
         self.stretching = float(stretching)
@@ -109,6 +114,9 @@ class LossWeights(eqx.Module):
         self.coverage = float(coverage)
         self.hinge_gap = float(hinge_gap)
         self.openness = float(openness)
+        self.face_inversion = float(face_inversion)
+        self.void_length = float(void_length)
+        self.void_collinear = float(void_collinear)
         self.deformation = float(deformation)
 
 
@@ -132,6 +140,17 @@ class TrainingConfig(eqx.Module):
         self.geometric_loss_type = geometric_loss_type
         self.grad_clip = float(grad_clip)
         self.lr_schedule = str(lr_schedule)
+
+
+class PipelineConfig(eqx.Module):
+    use_stage0: bool
+    use_stage1: bool
+    use_stage2: bool
+
+    def __init__(self, use_stage0: bool = True, use_stage1: bool = True, use_stage2: bool = True):
+        self.use_stage0 = use_stage0
+        self.use_stage1 = use_stage1
+        self.use_stage2 = use_stage2
 
 
 class VisualizationConfig(eqx.Module):
@@ -175,10 +194,12 @@ class ExperimentConfig(eqx.Module):
     physics: PhysicsConfig
     training: TrainingConfig
     visualization: VisualizationConfig
+    pipeline: PipelineConfig
 
     def __init__(self, topology: dict, mapping: MappingConfig, target: TargetConfig,
                  validity: ValidityConfig, physics: PhysicsConfig,
-                 training: TrainingConfig, visualization: VisualizationConfig):
+                 training: TrainingConfig, visualization: VisualizationConfig,
+                 pipeline: PipelineConfig = None):
         self.topology = topology
         self.mapping = mapping
         self.target = target
@@ -186,6 +207,7 @@ class ExperimentConfig(eqx.Module):
         self.physics = physics
         self.training = training
         self.visualization = visualization
+        self.pipeline = pipeline if pipeline is not None else PipelineConfig()
 
 
 # ── Private parsing helpers ───────────────────────────────────────────────────
@@ -381,6 +403,12 @@ def _parse_full_raw(raw: dict, config_dir: str) -> 'ExperimentConfig':
     target_cfg = _parse_target_config(raw.get("target", {}))
     training_cfg = _parse_training_config(raw.get("training", {}), raw.get("loss_weights", {}))
     vis_cfg = _parse_visualization_config(raw.get("visualization", {}))
+    pipeline_raw = raw.get("pipeline", {})
+    pipeline_cfg = PipelineConfig(
+        use_stage0=bool(pipeline_raw.get("use_stage0", True)),
+        use_stage1=bool(pipeline_raw.get("use_stage1", True)),
+        use_stage2=bool(pipeline_raw.get("use_stage2", True)),
+    )
 
     topo_combined = {
         **topo_raw,
@@ -399,6 +427,7 @@ def _parse_full_raw(raw: dict, config_dir: str) -> 'ExperimentConfig':
         physics=physics_cfg,
         training=training_cfg,
         visualization=vis_cfg,
+        pipeline=pipeline_cfg,
     )
 
 

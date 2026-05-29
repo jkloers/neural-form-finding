@@ -136,19 +136,117 @@ def build_static_graph_features_mpnn(state: CentroidalState) -> dict:
     }
 
 
-def build_static_features(state: CentroidalState, map_type: str) -> dict:
+def build_static_features_hinge(state: CentroidalState, tessellation) -> dict:
+    """Precompute static features for the gnn_hinge parametrization.
+
+    Extends the MPNN base features with vertex-level topology needed to
+    reconstruct a CentroidalState from per-face vertex displacement predictions.
+
+    Args:
+        state:       Flat CentroidalState (concrete, not inside JIT).
+        tessellation: Tessellation object with .vertices, .faces, .hinges.
+
+    Returns:
+        Dict with all MPNN base keys plus hinge/boundary vertex arrays.
+    """
+    base = build_static_graph_features_mpnn(state)
+
+    verts = np.array(tessellation.vertices, dtype=np.float64)  # (n_total_verts, 2)
+    n_faces   = len(tessellation.faces)
+    max_nodes = max(len(f.vertex_indices) for f in tessellation.faces)
+
+    # ── face_vertex_indices + node_mask (same as build_direct_vertex_features) ─
+    fvi  = np.zeros((n_faces, max_nodes), dtype=np.int32)
+    mask = np.zeros((n_faces, max_nodes), dtype=np.float64)
+    for i, face in enumerate(tessellation.faces):
+        n = len(face.vertex_indices)
+        fvi[i, :n]  = face.vertex_indices
+        mask[i, :n] = 1.0
+
+    # ── Hinge vertex arrays ───────────────────────────────────────────────────
+    # hinge_node_pairs: (n_hinges, 2, 2) = [[face_i, local_j], [face_k, local_l]]
+    hnp = np.array(state.hinge_node_pairs, dtype=np.int32)  # (n_hinges, 2, 2)
+    h_face1  = hnp[:, 0, 0]   # face owning vertex1
+    h_local1 = hnp[:, 0, 1]   # local node index of vertex1 in face1
+    h_face2  = hnp[:, 1, 0]   # face owning vertex2
+    h_local2 = hnp[:, 1, 1]   # local node index of vertex2 in face2
+
+    h_v1 = np.array([h.vertex1 for h in tessellation.hinges], dtype=np.int32)
+    h_v2 = np.array([h.vertex2 for h in tessellation.hinges], dtype=np.int32)
+
+    # ── Boundary vertex arrays ────────────────────────────────────────────────
+    hinge_verts = set(h_v1.tolist()) | set(h_v2.tolist())
+    n_verts = len(verts)
+    # v_to_fn: vertex_global_id -> [face_id, local_node_id]
+    v_to_fn = np.full((n_verts, 2), -1, dtype=np.int32)
+    for i, face in enumerate(tessellation.faces):
+        for j, v in enumerate(face.vertex_indices):
+            v_to_fn[v] = [i, j]
+
+    bv_global_list = [v for v in range(n_verts)
+                      if v not in hinge_verts and v_to_fn[v, 0] != -1]
+    bv_global = np.array(bv_global_list, dtype=np.int32)
+    bv_face   = v_to_fn[bv_global, 0]
+    bv_local  = v_to_fn[bv_global, 1]
+
+    # ── Per-(face, local_node) partner lookup for JIT-safe averaging ──────────
+    # For hinge nodes: partner_{face,local} points to the other face's copy.
+    # For non-hinge nodes: self-reference (partner == self → no effect when masked).
+    # is_hinge_node flags which (face, local) entries need averaging.
+    partner_face  = np.zeros((n_faces, max_nodes), dtype=np.int32)
+    partner_local = np.zeros((n_faces, max_nodes), dtype=np.int32)
+    is_hinge_node = np.zeros((n_faces, max_nodes), dtype=np.float64)
+    for f in range(n_faces):
+        for n in range(max_nodes):
+            partner_face[f, n]  = f
+            partner_local[f, n] = n
+
+    for i in range(len(h_face1)):
+        f1, l1, f2, l2 = int(h_face1[i]), int(h_local1[i]), int(h_face2[i]), int(h_local2[i])
+        partner_face[f1, l1]  = f2;  partner_local[f1, l1] = l2;  is_hinge_node[f1, l1] = 1.0
+        partner_face[f2, l2]  = f1;  partner_local[f2, l2] = l1;  is_hinge_node[f2, l2] = 1.0
+
+    return {
+        **base,
+        'face_vertex_indices':      fvi,
+        'node_mask':                mask,
+        'initial_vertex_positions': verts,
+        'h_v1':    h_v1,
+        'h_v2':    h_v2,
+        'h_face1': h_face1,
+        'h_local1': h_local1,
+        'h_face2': h_face2,
+        'h_local2': h_local2,
+        'bv_global': bv_global,
+        'bv_face':   bv_face,
+        'bv_local':  bv_local,
+        'partner_face':  partner_face,
+        'partner_local': partner_local,
+        'is_hinge_node': is_hinge_node,
+        'max_nodes':    max_nodes,
+        'n_total_verts': n_verts,
+    }
+
+
+def build_static_features(state: CentroidalState, map_type: str,
+                           tessellation=None) -> dict:
     """Dispatcher: return the correct static features dict for a given map_type.
 
     Use this instead of calling the individual builders directly so that
     train.py and trainer.py stay in sync automatically.
 
     Args:
-        state:    Flat CentroidalState (must be concrete, not inside JIT).
-        map_type: The mapping type string (e.g. 'gnn_egnn', 'gnn_mpnn').
+        state:       Flat CentroidalState (must be concrete, not inside JIT).
+        map_type:    The mapping type string (e.g. 'gnn_egnn', 'gnn_mpnn').
+        tessellation: Required for 'gnn_hinge'; ignored otherwise.
 
     Returns:
         Static features dict ready for apply_gnn_mapping / init_*_params.
     """
+    if map_type == 'gnn_hinge':
+        if tessellation is None:
+            raise ValueError("tessellation is required for map_type='gnn_hinge'")
+        return build_static_features_hinge(state, tessellation)
     if map_type == 'gnn_mpnn':
         return build_static_graph_features_mpnn(state)
     return build_static_graph_features(state)

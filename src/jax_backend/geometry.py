@@ -69,8 +69,16 @@ def build_reference_bond_vectors(valid_state):
         valid_state.centroid_node_vectors,
         valid_state.hinge_node_pairs,
     )
-    # After validity optimization, these should be nearly coincident
-    return p2 - p1
+    bond = p2 - p1
+
+    # Guard against zero-length bonds (e.g. gnn_hinge produces exact zero gap).
+    # Zero reference vectors make the linearised strain formula singular (division
+    # by norm²).  Use a small canonical fallback so the ligaments have finite
+    # stiffness and jaxopt's backward pass remains well-conditioned.
+    norms = jnp.linalg.norm(bond, axis=-1, keepdims=True)
+    min_len = 1e-4
+    fallback = jnp.zeros_like(bond).at[:, 0].set(min_len)
+    return jnp.where(norms < min_len, fallback, bond)
 
 
 def hinge_adj_vertex_positions(face_centroids, cnv, hinge_adj_info):
