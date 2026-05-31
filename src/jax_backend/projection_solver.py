@@ -68,21 +68,24 @@ def project_void_parallelogram(
         cnv: jnp.ndarray,
         void_opposite_node_pairs: jnp.ndarray,
 ) -> jnp.ndarray:
-    """Equalize opposite void edges: project both edge vectors to their mean.
+    """Make opposite void edges antiparallel-equal: project to v1 + v2 = 0.
 
-    Constraint: cnv[f1,nb1] - cnv[f1,na1]  ==  cnv[f2,nb2] - cnv[f2,na2].
-    Projection: split the gap equally across the 4 involved nodes (orthogonal
-    projection onto the affine subspace defined by this equality).
+    In the RDQK_D tessellation (and generally for kirigami voids where opposite
+    edges are traversed in opposing winding directions), the parallelogram
+    condition is v1 = -v2, i.e. v1 + v2 = 0 — NOT v1 - v2 = 0.
 
-    The centroid terms cancel in the edge-vector difference, so this
-    projection is independent of face_centroids.
+    Verified on the flat RDQK_D 2×2 tessellation: |v1 + v2| = 0 for all 18
+    void pairs, while |v1 - v2| = 0.866 (= 2 × edge_length).
+
+    Projection: split the error e = v1 + v2 equally across the 4 involved nodes.
+    Minimum-change (orthogonal) projection onto the affine subspace {v1+v2=0}.
 
     Args:
         cnv:                       (n_faces, max_nodes, 2).
         void_opposite_node_pairs:  (n_pairs, 2, 3) — [[f1,na1,nb1],[f2,na2,nb2]].
 
     Returns:
-        cnv with all opposite void-edge vectors equal.
+        cnv satisfying v1 + v2 = 0 for all void pairs (parallelogram voids).
     """
     if void_opposite_node_pairs.shape[0] == 0:
         return cnv
@@ -94,15 +97,16 @@ def project_void_parallelogram(
     na2 = void_opposite_node_pairs[:, 1, 1]
     nb2 = void_opposite_node_pairs[:, 1, 2]
 
-    v1 = cnv[f1, nb1] - cnv[f1, na1]   # (n_pairs, 2) edge vector from face f1
-    v2 = cnv[f2, nb2] - cnv[f2, na2]   # (n_pairs, 2) opposite edge vector from f2
-    d  = (v1 - v2) / 4                  # quarter of gap → split across 4 nodes
+    v1 = cnv[f1, nb1] - cnv[f1, na1]   # (n_pairs, 2)
+    v2 = cnv[f2, nb2] - cnv[f2, na2]   # (n_pairs, 2)
+    d  = (v1 + v2) / 4                  # quarter of error e=v1+v2 → split across 4 nodes
 
-    # Each node absorbs one quarter of the gap correction
+    # New v1 = v1 - 2d = v1 - (v1+v2)/2 = (v1-v2)/2
+    # New v2 = v2 - 2d = v2 - (v1+v2)/2 = (v2-v1)/2 = -new_v1  ✓
     cnv = cnv.at[f1, nb1].add(-d)
     cnv = cnv.at[f1, na1].add(+d)
-    cnv = cnv.at[f2, nb2].add(+d)
-    cnv = cnv.at[f2, na2].add(-d)
+    cnv = cnv.at[f2, nb2].add(-d)   # same sign as f1 (antiparallel target)
+    cnv = cnv.at[f2, na2].add(+d)   # same sign as f1
     return cnv
 
 
@@ -127,7 +131,10 @@ def void_para_residual(
         cnv: jnp.ndarray,
         void_opposite_node_pairs: jnp.ndarray,
 ) -> jnp.ndarray:
-    """RMS parallelogram residual across all void edge pairs (scalar)."""
+    """RMS antiparallel residual |v1 + v2| across all void edge pairs (scalar).
+
+    The correct constraint is v1 + v2 = 0 (antiparallel equal-length edges).
+    """
     if void_opposite_node_pairs.shape[0] == 0:
         return jnp.array(0.0)
     f1  = void_opposite_node_pairs[:, 0, 0]
@@ -138,7 +145,7 @@ def void_para_residual(
     nb2 = void_opposite_node_pairs[:, 1, 2]
     v1 = cnv[f1, nb1] - cnv[f1, na1]
     v2 = cnv[f2, nb2] - cnv[f2, na2]
-    return jnp.sqrt(jnp.mean(jnp.sum((v1 - v2) ** 2, axis=-1)))
+    return jnp.sqrt(jnp.mean(jnp.sum((v1 + v2) ** 2, axis=-1)))
 
 
 # ── Main solver ───────────────────────────────────────────────────────────────

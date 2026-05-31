@@ -69,8 +69,21 @@ def build_reference_bond_vectors(valid_state):
         valid_state.centroid_node_vectors,
         valid_state.hinge_node_pairs,
     )
-    # After validity optimization, these should be nearly coincident
-    return p2 - p1
+    bond = p2 - p1
+
+    # Guard against zero-length bonds. This occurs when Stage 1 closes hinge
+    # gaps to machine precision (e.g. alternating-projection solver), making
+    # the ligament reference vector exactly zero → zero stiffness → NaN in
+    # Stage 2 under any external load.
+    #
+    # Use squared norm (no sqrt) for the condition so the backward pass never
+    # computes bond/|bond| at bond=0 (which would give NaN via 0*NaN in XLA).
+    # A canonical unit-x fallback gives finite stiffness in an arbitrary direction;
+    # the magnitude (min_len) is small enough not to affect the physics scale.
+    min_len = 1e-4
+    sq_norms = jnp.sum(bond ** 2, axis=-1, keepdims=True)   # gradient = 2*bond, zero at 0
+    fallback = jnp.zeros_like(bond).at[:, 0].set(min_len)   # [min_len, 0] per hinge
+    return jnp.where(sq_norms < min_len ** 2, fallback, bond)
 
 
 def hinge_adj_vertex_positions(face_centroids, cnv, hinge_adj_info):
