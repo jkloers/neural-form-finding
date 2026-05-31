@@ -114,12 +114,25 @@ def forward_pipeline(
 
     # ══════════════════════════════════════════════════════════════════════════
     # Stage 1 — Geometric Validity
-    # Optimizes face centroids and shapes to satisfy: connectivity (hinges
-    # must share a point), non-intersection, target fitting, and symmetry.
+    # Two implementations, selected by validity_cfg.validity_method:
+    #
+    #   'lbfgs' (default)              — weighted L-BFGS penalty minimisation.
+    #                                    Optimises both centroids and CNVs.
+    #
+    #   'alternating_projection'       — closed-form alternating projections.
+    #                                    Projects CNVs only (centroids fixed).
+    #                                    Enforces hinge gaps = 0 and voids
+    #                                    are parallelograms exactly, in O(n_iters)
+    #                                    instead of O(maxiter × LBFGS).
     # ══════════════════════════════════════════════════════════════════════════
     target_cloud = jnp.array(get_target_points(target_params, n_points=200))
-    valid_state = solve_geometric_validity(
-        mapped_state, target_cloud, validity_cfg=validity_cfg)
+    if getattr(validity_cfg, 'validity_method', 'lbfgs') == 'alternating_projection':
+        from jax_backend.projection_solver import solve_alternating_projections
+        valid_state = solve_alternating_projections(
+            mapped_state, n_iters=validity_cfg.n_proj_iters)
+    else:
+        valid_state = solve_geometric_validity(
+            mapped_state, target_cloud, validity_cfg=validity_cfg)
 
     # ══════════════════════════════════════════════════════════════════════════
     # Stage 2 — Static Physics Solver

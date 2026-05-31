@@ -44,9 +44,15 @@ class MappingConfig(eqx.Module):
 
 class ValidityConfig(eqx.Module):
     weights: Dict[str, float]
+    validity_method: str   # 'lbfgs' | 'alternating_projection'
+    n_proj_iters: int      # only used when validity_method == 'alternating_projection'
 
-    def __init__(self, weights: Dict[str, float]):
+    def __init__(self, weights: Dict[str, float],
+                 validity_method: str = 'lbfgs',
+                 n_proj_iters: int = 20):
         self.weights = weights
+        self.validity_method = validity_method
+        self.n_proj_iters = n_proj_iters
 
 
 class PhysicsConfig(eqx.Module):
@@ -252,8 +258,21 @@ def _parse_mapping_config(mapping_raw: dict) -> MappingConfig:
 
 
 def _parse_validity_config(weights_raw: dict) -> ValidityConfig:
-    """Parse the [optimization_weights] YAML section."""
-    return ValidityConfig(weights=weights_raw)
+    """Parse the [optimization_weights] YAML section.
+
+    Recognises two special keys that are not penalty weights:
+      validity_method : 'lbfgs' (default) | 'alternating_projection'
+      n_proj_iters    : int, only used when validity_method='alternating_projection'
+    All other keys are treated as penalty weights and passed to the L-BFGS solver.
+    """
+    raw = dict(weights_raw)  # copy so we don't mutate the caller's dict
+    validity_method = str(raw.pop('validity_method', 'lbfgs'))
+    n_proj_iters    = int(raw.pop('n_proj_iters', 20))
+    return ValidityConfig(
+        weights=raw,
+        validity_method=validity_method,
+        n_proj_iters=n_proj_iters,
+    )
 
 
 def _parse_physics_config(physics_raw: dict, domain_restriction: float) -> PhysicsConfig:
