@@ -9,7 +9,8 @@ after passing through the fully differentiable pipeline.
 import jax
 import jax.numpy as jnp
 
-from typing import Any
+from typing import Any, Optional
+from jaxtyping import Array, Float
 from jax_backend.pipeline import forward_pipeline
 from jax_backend.state import CentroidalState
 from jax_backend.geometry import compute_total_area, compute_void_area
@@ -17,19 +18,25 @@ from jax_backend.constraints import hinge_connectivity
 from problem.targets import get_target_points
 from problem.config import TargetConfig, PhysicsConfig, TrainingConfig, ValidityConfig
 
-def evaluate_physical_loss(solution, valid_state, target_cfg: TargetConfig, training_cfg: TrainingConfig):
+def evaluate_physical_loss(
+        solution,
+        valid_state,
+        target_cfg: TargetConfig,
+        training_cfg: TrainingConfig,
+        target_cloud: Float[Array, "n_target 2"],
+) -> tuple[Float[Array, ""], dict]:
     """Computes the pure physical objective from the pipeline results.
-    
-    This is independent of HOW the results were generated. It only looks at 
-    the physical state (energies, displacements) to calculate a score.
-    
+
     Args:
-        solution: SolutionData containing the equilibrium fields and energies.
-        valid_state: The CentroidalState right before physical loading.
-        target_params: Optional dict for target shape objectives.
-        
+        solution:      SolutionData containing the equilibrium fields and energies.
+        valid_state:   The CentroidalState right before physical loading.
+        target_cfg:    Structured TargetConfig (used only for fallback — prefer passing target_cloud).
+        training_cfg:  Structured TrainingConfig with loss weights.
+        target_cloud:  (n_target, 2) JAX array of target boundary points, precomputed
+                       before the JIT boundary to avoid rebaking at each trace.
+
     Returns:
-        Scalar loss value.
+        (loss, metrics_dict)
     """
     
     # 1. Extract Final Physical State
@@ -64,15 +71,7 @@ def evaluate_physical_loss(solution, valid_state, target_cfg: TargetConfig, trai
         geometric_positions = final_centroids[b_faces]
     
     # 3. Compute Geometric Loss (Chamfer distance)
-    # Generate the 2D point cloud for the target
-    target_params = {
-        'type': target_cfg.type, 
-        'center': target_cfg.center, 
-        'radius': target_cfg.radius
-    }
-    target_cloud = get_target_points(target_params, n_points=500)
-    target_cloud = jnp.asarray(target_cloud, dtype=float)
-    
+    # target_cloud is precomputed before the JIT boundary — it's a constant in XLA.
     # Compute pairwise squared distances: (N_boundary, M_target)
     dist_matrix = jnp.sum((geometric_positions[:, None, :] - target_cloud[None, :, :])**2, axis=-1)
     
@@ -151,19 +150,22 @@ def compute_end_to_end_loss(
         strict_boundary_fit: bool = True,
         learn_global_scale: bool = False,
         static_features: Any = None,
-        load_specs: Any = None):
-    """Wrapper function required by JAX for gradient computation.
-
-    In JAX, jax.grad needs a single function that takes parameters and
-    returns a scalar loss. This function chains the forward pass and the loss.
+        load_specs: Any = None,
+        target_cloud: Optional[Float[Array, "n_target 2"]] = None,
+) -> tuple[Float[Array, ""], dict]:
+    """Chains the forward pipeline with the loss, as required by jax.value_and_grad.
 
     Args:
-        learn_global_scale: When True (Option 2), a learnable log_scale parameter
-            is present in map_params and the area constraint is lifted — the
-            optimizer is free to dilate/contract the structure.
-            When False (Option 1), the total mapped area is penalised to stay
-            equal to the reference flat-tessellation area.
+        learn_global_scale: When True, a learnable log_scale is present in map_params
+            and the area constraint is lifted. When False, the total mapped area is
+            penalised to stay equal to the reference flat-tessellation area.
+        target_cloud: Precomputed (n_target, 2) target boundary points. Pass this from
+            outside the JIT boundary (e.g. from create_train_step) to avoid rebaking
+            the numpy→JAX conversion at every trace. If None, computed internally.
     """
+    if target_cloud is None:
+        target_params = {'type': target_cfg.type, 'center': target_cfg.center, 'radius': target_cfg.radius}
+        target_cloud = jnp.asarray(get_target_points(target_params, n_points=500), dtype=jnp.float64)
     
     # 1. Run the forward pipeline
     results = forward_pipeline(
@@ -180,11 +182,12 @@ def compute_end_to_end_loss(
     )
     
     # 2. Evaluate Physical Objective
-    base_loss, loss_components = evaluate_physical_loss(
+    base_loss, base_metrics = evaluate_physical_loss(
         results['solution'],
         results['valid_state'],
         target_cfg,
-        training_cfg
+        training_cfg,
+        target_cloud,
     )
 
     # 2a. Hinge Gap Penalty — computed at Stage 0 output (before Stage 1).
@@ -261,14 +264,15 @@ def compute_end_to_end_loss(
 
     total_loss = base_loss + material_area_loss + hinge_gap_loss + reg_loss + openness_loss + deformation_loss
 
-    # Update metrics
-    loss_components['comp_regularization'] = reg_loss
-    loss_components['comp_geom_material_area'] = material_area_loss
-    loss_components['global_material_area'] = area_deviation
-    loss_components['hinge_gap'] = hinge_gap_loss
-    loss_components['openness'] = openness_loss
-    loss_components['deformation'] = deformation_loss
-    loss_components['loss_total'] = total_loss
-    loss_components['total'] = total_loss  # Backward compatibility
-    
-    return total_loss, loss_components
+    all_metrics = {
+        **base_metrics,
+        'comp_regularization':    reg_loss,
+        'comp_geom_material_area': material_area_loss,
+        'global_material_area':   area_deviation,
+        'hinge_gap':              hinge_gap_loss,
+        'openness':               openness_loss,
+        'deformation':            deformation_loss,
+        'loss_total':             total_loss,
+        'total':                  total_loss,  # backward compatibility
+    }
+    return total_loss, all_metrics

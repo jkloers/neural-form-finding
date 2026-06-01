@@ -292,12 +292,16 @@ def apply_gnn_mapping(
 
     if map_type == 'gnn_egnn':
         from jax_backend.gnn.egnn import apply_egnn
+        num_layers = static_features.get('num_layers') or sum(
+            1 for k in gnn_params if k.endswith('_phi_x_W'))
         new_centroids, _, local_transform = apply_egnn(
-            gnn_params, h, x, senders_np, receivers_np, n_faces)
+            gnn_params, h, x, senders_np, receivers_np, n_faces, num_layers)
     elif map_type == 'gnn_mpnn':
         from jax_backend.gnn.mpnn import apply_mpnn
+        num_layers = static_features.get('num_layers') or sum(
+            1 for k in gnn_params if k.endswith('_phi_e_W1'))
         new_centroids, _, local_transform = apply_mpnn(
-            gnn_params, h, x, senders_np, receivers_np, n_faces)
+            gnn_params, h, x, senders_np, receivers_np, n_faces, num_layers)
     else:  # gnn_dummy (default) — comportement inchangé
         from jax_backend.gnn.dummy_gnn import apply_dummy_gnn
         new_centroids = apply_dummy_gnn(

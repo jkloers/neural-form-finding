@@ -8,7 +8,9 @@ and the fixed topology (hinge connectivity, BCs, mechanical properties).
 
 from typing import NamedTuple
 
+import numpy as np
 import jax.numpy as jnp
+from jaxtyping import Array, Float, Int
 
 
 class CentroidalState(NamedTuple):
@@ -42,31 +44,31 @@ class CentroidalState(NamedTuple):
         density:                (n_faces,)
     """
 
-    # ── Optimizable variables ─────────────────────────────────────────────────
-    face_centroids: jnp.ndarray
-    centroid_node_vectors: jnp.ndarray
+    # ── Optimizable variables (JAX arrays — may receive gradients) ───────────
+    face_centroids:         Float[Array, "n_faces 2"]
+    centroid_node_vectors:  Float[Array, "n_faces max_nodes 2"]
 
-    # ── Fixed topology ────────────────────────────────────────────────────────
-    hinge_face_pairs: jnp.ndarray
-    hinge_node_pairs: jnp.ndarray
-    bond_connectivity: jnp.ndarray
-    hinge_adj_info: jnp.ndarray
-    boundary_face_node_ids: jnp.ndarray
-    void_opposite_node_pairs: jnp.ndarray  # (n_void_edges, 2, 3) -> [[f1, na1, nb1], [f2, na2, nb2]]
+    # ── Fixed topology (NumPy arrays — never traced by JAX) ──────────────────
+    hinge_face_pairs:         Int[np.ndarray, "n_hinge_vertices 2"]
+    hinge_node_pairs:         Int[np.ndarray, "n_hinge_vertices 2 2"]
+    bond_connectivity:        Int[np.ndarray, "n_hinges 2"]
+    hinge_adj_info:           Int[np.ndarray, "n_hinges 5"]
+    boundary_face_node_ids:   Int[np.ndarray, "n_boundary_nodes 2"]
+    void_opposite_node_pairs: Int[np.ndarray, "n_void_edges 2 3"]
 
     # ── Boundary conditions ───────────────────────────────────────────────────
-    constrained_face_DOF_pairs: jnp.ndarray
-    loaded_face_DOF_pairs: jnp.ndarray
-    load_values: jnp.ndarray
+    constrained_face_DOF_pairs: Int[np.ndarray, "n_constraints 2"]
+    loaded_face_DOF_pairs:      Int[np.ndarray, "n_loaded 2"]
+    load_values:                Float[Array, "n_loaded"]
 
-    # ── Mechanical properties ─────────────────────────────────────────────────
-    k_stretch: jnp.ndarray
-    k_shear: jnp.ndarray
-    k_rot: jnp.ndarray
-    density: jnp.ndarray
+    # ── Mechanical properties (JAX arrays — broadcast-friendly scalars) ───────
+    k_stretch: Float[Array, "n_hinges"]
+    k_shear:   Float[Array, "n_hinges"]
+    k_rot:     Float[Array, "n_hinges"]
+    density:   Float[Array, "n_faces"]
 
-    # ── Area constraints (Étape 3) ───────────────────────────────────────────
-    initial_face_areas: jnp.ndarray # (n_faces,)
+    # ── Area constraints ──────────────────────────────────────────────────────
+    initial_face_areas: Float[Array, "n_faces"]
 
     # ── Methods ──────────────────────────────────────────────────────────────
 

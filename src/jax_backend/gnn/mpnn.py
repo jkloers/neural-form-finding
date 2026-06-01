@@ -47,6 +47,7 @@ Parameter layout (flat dict PyTree for optax / value_and_grad):
 import jax
 import jax.numpy as jnp
 import numpy as np
+from jaxtyping import Array, Float, Int
 
 EDGE_FEAT_DIM = 3  # (dx, dy, dist) — direction + magnitude of initial relative position
 
@@ -114,12 +115,13 @@ def _mlp2(x, W1, b1, W2, b2):
 
 def apply_mpnn(
         params: dict,
-        h_raw: jnp.ndarray,
-        x_init: jnp.ndarray,
-        senders_np: np.ndarray,
-        receivers_np: np.ndarray,
+        h_raw: Float[Array, "n_faces node_feat_dim"],
+        x_init: Float[Array, "n_faces 2"],
+        senders_np: Int[np.ndarray, "n_edges"],
+        receivers_np: Int[np.ndarray, "n_edges"],
         n_faces: int,
-) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+        num_layers: int,
+) -> tuple[Float[Array, "n_faces 2"], Float[Array, "n_faces hidden_dim"], Float[Array, "n_faces 2 2"]]:
     """Forward pass MPNN → new centroid positions and tile deformation matrices.
 
     Edge features are computed once from x_init (static throughout the forward
@@ -134,14 +136,14 @@ def apply_mpnn(
         senders_np:   (n_edges,) NumPy int32 — static sender indices.
         receivers_np: (n_edges,) NumPy int32 — static receiver indices.
         n_faces:      Python int.
+        num_layers:   Python int — number of message-passing layers.
 
     Returns:
         (x_new, h_new, local_transform) where:
-          x_new           — (n_faces, 2)        new centroid positions
+          x_new           — (n_faces, 2)         new centroid positions
           h_new           — (n_faces, hidden_dim) final node features
-          local_transform — (n_faces, 2, 2)      tile deformation (identity at init)
+          local_transform — (n_faces, 2, 2)       tile deformation (identity at init)
     """
-    num_layers = sum(1 for k in params if k.endswith('_phi_e_W1'))
 
     # ── Embedding ────────────────────────────────────────────────────────────────
     h = jnp.tanh(h_raw @ params['emb_W'] + params['emb_b'])   # (n_faces, hidden_dim)

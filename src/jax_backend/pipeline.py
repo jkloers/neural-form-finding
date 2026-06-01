@@ -25,7 +25,7 @@ gradient-based optimization of the mapping parameters.
 """
 
 import jax.numpy as jnp
-from typing import Optional
+from typing import Any, Optional
 
 from jax_backend.state import CentroidalState
 from jax_backend.geometry import reconstruct_vertices
@@ -51,10 +51,10 @@ def forward_pipeline(
         validity_cfg: ValidityConfig,
         physics_cfg: PhysicsConfig,
         map_type: str = 'conformal_polynomial',
-        map_params: Optional[jnp.ndarray] = None,
+        map_params: Optional[dict] = None,
         use_shirley_chiu: bool = True,
         strict_boundary_fit: bool = True,
-        static_features=None,
+        static_features: Optional[dict] = None,
         load_specs: Optional[list] = None) -> dict:
     """Full differentiable pipeline: initial map → geometric validity → static equilibrium.
 

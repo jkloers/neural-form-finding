@@ -22,6 +22,7 @@ import jax
 jax.config.update("jax_enable_x64", True)
 
 import csv
+import yaml
 import jax.numpy as jnp
 import numpy as np
 import argparse
@@ -99,7 +100,8 @@ def _init_gnn_params(config, initial_state):
         from jax_backend.gnn.dummy_gnn import init_dummy_gnn
         params = init_dummy_gnn(key, node_feat_dim, hidden_dim)
 
-    return params, static_features
+    # Expose num_layers so apply_egnn/apply_mpnn receive it as an explicit static arg.
+    return params, {**static_features, 'num_layers': num_layers}
 
 
 def _init_map_params(config, initial_state):
@@ -268,9 +270,8 @@ def run_suite(args):
         # Save the merged config for this problem
         prob_dir = os.path.join(run_dir, label)
         os.makedirs(prob_dir, exist_ok=True)
-        import yaml as _yaml
         with open(os.path.join(prob_dir, "merged_config.yaml"), 'w') as f:
-            _yaml.dump(merged, f, default_flow_style=False, allow_unicode=True)
+            yaml.dump(merged, f, default_flow_style=False, allow_unicode=True)
 
         try:
             metrics = _run_one_problem(config, label, run_dir)

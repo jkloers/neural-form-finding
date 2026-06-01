@@ -35,6 +35,7 @@ Structure des paramètres (dict plat, PyTree JAX) :
 import jax
 import jax.numpy as jnp
 import numpy as np
+from jaxtyping import Array, Float, Int
 
 
 def init_egnn(
@@ -100,12 +101,13 @@ def _mlp2(x, W1, b1, W2, b2):
 
 def apply_egnn(
         params: dict,
-        h_raw: jnp.ndarray,
-        x: jnp.ndarray,
-        senders_np: np.ndarray,
-        receivers_np: np.ndarray,
+        h_raw: Float[Array, "n_faces node_feat_dim"],
+        x: Float[Array, "n_faces 2"],
+        senders_np: Int[np.ndarray, "n_edges"],
+        receivers_np: Int[np.ndarray, "n_edges"],
         n_faces: int,
-) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+        num_layers: int,
+) -> tuple[Float[Array, "n_faces 2"], Float[Array, "n_faces hidden_dim"], Float[Array, "n_faces 2 2"]]:
     """Forward pass EGNN → nouvelles positions et features de nœuds.
 
     Args:
@@ -115,12 +117,13 @@ def apply_egnn(
         senders_np:   (n_edges,) NumPy int32 — indices statiques.
         receivers_np: (n_edges,) NumPy int32 — indices statiques.
         n_faces:      int Python — nécessaire pour les opérations scatter.
+        num_layers:   int Python — nombre de couches de message-passing.
 
     Returns:
         (x_new, h_new, local_transform) where:
-          x_new           — (n_faces, 2)       nouvelles positions (équivariant)
+          x_new           — (n_faces, 2)         nouvelles positions (équivariant)
           h_new           — (n_faces, hidden_dim) features finales (invariant)
-          local_transform — (n_faces, 2, 2)    matrice de transformation (identité à l'init)
+          local_transform — (n_faces, 2, 2)       matrice de transformation (identité à l'init)
 
     Equivariance E(2) :
         apply_egnn(params, h, R@x+t, ...) = (R @ x_out + t, h_out, transform_out)
@@ -129,7 +132,6 @@ def apply_egnn(
         Le clamping des faces (BCs Dirichlet) appartient au solveur physique (Stage 2),
         pas au mapping géométrique (Stage 0) — toutes les faces bougent librement ici.
     """
-    num_layers = sum(1 for k in params if k.endswith('_phi_x_W'))
 
     # Embedding des features statiques → espace caché
     h = jnp.tanh(h_raw @ params['emb_W'] + params['emb_b'])  # (n_faces, hidden_dim)
