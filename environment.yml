@@ -23,5 +23,7 @@ dependencies:
     - optax
     - jaxopt
     - jraph
+    - equinox
+    - jaxtyping
     - e3nn-jax
     - wandb
