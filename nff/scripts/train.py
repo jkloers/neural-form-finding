@@ -34,6 +34,7 @@ from nff.config.experiment import (
     _parse_full_raw,
 )
 from nff.stages.state import CentroidalState
+from nff.stages.mapping import init_direct_vertices_params
 from nff.stages.pipeline import forward_pipeline
 from nff.training.trainer import train_pipeline
 from nff.utils.pipeline_viz import visualize_pipeline_results, plot_loss_history
@@ -60,7 +61,11 @@ def _build_initial_state(config):
 
     configure_tessellation(tessellation, topo_obj)
 
-    if config.mapping.type.startswith('gnn_'):
+    if config.mapping.type.startswith('gnn_') or config.mapping.type == 'direct_vertices':
+        # Center the flat tessellation on the target before building the state.
+        # For direct_vertices the final centering/scaling is done in
+        # init_direct_vertices_params, but coarse pre-centering here keeps the
+        # topology-level coordinates in a sensible range.
         target_center = np.array(
             getattr(config.target, 'center', [0.0, 0.0]), dtype=float)
         tess_centroid = np.mean(tessellation.get_face_centroids(), axis=0)
@@ -98,10 +103,17 @@ def _init_gnn_params(config, initial_state):
 
 
 def _init_map_params(config, initial_state):
-    """Initialise mapping parameters (GNN or analytical)."""
+    """Initialise mapping parameters (GNN, direct_vertices, or analytical)."""
     if config.mapping.type.startswith('gnn_'):
         params, static_features = _init_gnn_params(config, initial_state)
         return params, static_features
+    elif config.mapping.type == 'direct_vertices':
+        target_params = {
+            'center': config.target.center,
+            'radius': config.target.radius,
+        }
+        params = init_direct_vertices_params(initial_state, target_params)
+        return params, None
     else:
         raw = config.mapping.params
         params = raw if isinstance(raw, dict) else {}

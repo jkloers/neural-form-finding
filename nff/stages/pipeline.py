@@ -29,14 +29,14 @@ from typing import Any, Optional
 
 from nff.stages.state import CentroidalState
 from nff.stages.geometry import reconstruct_vertices
-from nff.stages.mapping import build_mapping_fn, apply_mapping, apply_gnn_mapping
+from nff.stages.mapping import build_mapping_fn, apply_mapping, apply_gnn_mapping, apply_direct_mapping
 from nff.stages.validity import solve_geometric_validity
 from nff.stages.physics.energy import (
     build_potential_energy,
     build_energy_history,
 )
 from nff.stages.physics.statics import setup_static_solver
-from nff.stages.physics.params import ReferenceGeometry, build_control_params
+from nff.stages.physics.params import ReferenceGeometry, build_control_params, SolutionData
 from nff.stages.physics.force_types import (
     has_geometry_dependent_loads,
     build_geometry_dependent_loading,
@@ -97,6 +97,11 @@ def forward_pipeline(
             static_features = build_static_graph_features(initial_state)
         mapped_state = apply_gnn_mapping(initial_state, map_params, static_features, map_type=map_type)
         mapping_fn = None
+    elif map_type == 'direct_vertices':
+        # map_params IS the geometry: {'face_centroids': ..., 'centroid_node_vectors': ...}.
+        # Gradients flow directly from the loss back to these arrays — no Jacobian needed.
+        mapped_state = apply_direct_mapping(initial_state, map_params)
+        mapping_fn = None
     else:
         mapping_fn = build_mapping_fn(
             initial_state, target_params,
@@ -125,17 +130,41 @@ def forward_pipeline(
     #                                    instead of O(maxiter × LBFGS).
     # ══════════════════════════════════════════════════════════════════════════
     target_cloud = jnp.array(get_target_points(target_params, n_points=200))
-    if getattr(validity_cfg, 'validity_method', 'lbfgs') == 'alternating_projection':
+    if validity_cfg.validity_method == 'none':
+        # Stage 1 disabled: pass mapped geometry directly to Stage 2.
+        valid_state = mapped_state
+    elif validity_cfg.validity_method == 'alternating_projection':
         from nff.stages.projection import solve_alternating_projections
         valid_state = solve_alternating_projections(
             mapped_state, n_iters=validity_cfg.n_proj_iters)
-    else:
+    else:  # 'lbfgs' (default)
         valid_state = solve_geometric_validity(
             mapped_state, target_cloud, validity_cfg=validity_cfg)
 
     # ══════════════════════════════════════════════════════════════════════════
     # Stage 2 — Static Physics Solver
     # ══════════════════════════════════════════════════════════════════════════
+
+    if not getattr(physics_cfg, 'use_stage2', True):
+        # Stage 2 disabled: return zero-displacement solution.
+        # The loss function still runs but sees zero deformation and energy,
+        # so only chamfer / openness / hinge-gap terms contribute.
+        n_faces = valid_state.face_centroids.shape[0]
+        zero_fields = jnp.zeros((1, n_faces, 3), dtype=float)
+        dummy_energies = {k: jnp.zeros(1, dtype=float)
+                         for k in ('stretch', 'shear', 'rot', 'contact')}
+        solution = SolutionData(fields=zero_fields, energies=dummy_energies)
+        vertices_ref = reconstruct_vertices(
+            valid_state.face_centroids, valid_state.centroid_node_vectors)
+        return {
+            'mapped_state':           mapped_state,
+            'valid_state':            valid_state,
+            'solution':               solution,
+            'vertices_reference':     vertices_ref,
+            'reference_bond_vectors': jnp.zeros((0, 2), dtype=float),
+            'mapping_fn':             mapping_fn,
+            'map_params':             map_params,
+        }
 
     # 2.1 — Geometry instantiation (Factory Pattern)
     # ReferenceGeometry is the single geometry container. bond_connectivity

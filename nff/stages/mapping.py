@@ -327,6 +327,55 @@ def apply_gnn_mapping(
     return state._replace(face_centroids=new_centroids, centroid_node_vectors=new_cnvs)
 
 
+def apply_direct_mapping(state: CentroidalState, map_params: dict) -> CentroidalState:
+    """Stage 0 direct parameterization.
+
+    map_params is the learnable PyTree itself:
+        {'face_centroids': (n_faces, 2), 'centroid_node_vectors': (n_faces, max_nodes, 2)}
+
+    No analytical function, no Jacobian — the parameters ARE the geometry.
+    All downstream constraints (connectivity, non-intersection, physics) flow
+    gradients back through this identity-like pass.
+    """
+    return state._replace(
+        face_centroids=map_params['face_centroids'],
+        centroid_node_vectors=map_params['centroid_node_vectors'],
+    )
+
+
+def init_direct_vertices_params(state: CentroidalState, target_params: dict) -> dict:
+    """Initialize direct-vertex parameters from the flat tessellation.
+
+    Centers the tessellation on the target shape and scales it so the
+    bounding radius matches the target radius — the same initialization
+    used for GNN-based maps.
+
+    Args:
+        state:         CentroidalState of the flat (undeformed) tessellation.
+        target_params: dict with keys 'center' (2-vector) and 'radius' (scalar).
+
+    Returns:
+        dict with 'face_centroids' and 'centroid_node_vectors' as JAX arrays.
+    """
+    center = jnp.asarray(target_params.get('center', [0.0, 0.0]), dtype=float)
+    radius = float(target_params.get('radius', 1.0))
+
+    tess_centroid = jnp.mean(state.face_centroids, axis=0)
+
+    all_vertices = reconstruct_vertices(state.face_centroids, state.centroid_node_vectors)
+    vertices_flat = all_vertices.reshape(-1, 2)
+    current_max_dist = jnp.max(jnp.linalg.norm(vertices_flat - tess_centroid, axis=-1))
+    scale = radius / jnp.maximum(current_max_dist, 1e-6)
+
+    centered_centroids = (state.face_centroids - tess_centroid) * scale + center
+    scaled_cnvs = state.centroid_node_vectors * scale
+
+    return {
+        'face_centroids': centered_centroids,
+        'centroid_node_vectors': scaled_cnvs,
+    }
+
+
 def apply_mapping(
         state: CentroidalState,
         mapping_fn: Callable,
