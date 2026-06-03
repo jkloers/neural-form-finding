@@ -34,7 +34,7 @@ from nff.config.experiment import (
     _parse_full_raw,
 )
 from nff.stages.state import CentroidalState
-from nff.stages.mapping import init_direct_vertices_params
+from nff.stages.mapping import init_direct_vertices_params, init_direct_transform_params
 from nff.stages.pipeline import forward_pipeline
 from nff.training.trainer import train_pipeline
 from nff.utils.pipeline_viz import visualize_pipeline_results, plot_loss_history
@@ -61,10 +61,11 @@ def _build_initial_state(config):
 
     configure_tessellation(tessellation, topo_obj)
 
-    if config.mapping.type.startswith('gnn_') or config.mapping.type == 'direct_vertices':
+    _direct_type = config.mapping.type in ('direct_vertices', 'direct_transform')
+    if config.mapping.type.startswith('gnn_') or _direct_type:
         # Center the flat tessellation on the target before building the state.
-        # For direct_vertices the final centering/scaling is done in
-        # init_direct_vertices_params, but coarse pre-centering here keeps the
+        # For direct_* types the final centering/scaling is done in the
+        # respective init_* function, but coarse pre-centering here keeps the
         # topology-level coordinates in a sensible range.
         target_center = np.array(
             getattr(config.target, 'center', [0.0, 0.0]), dtype=float)
@@ -108,11 +109,12 @@ def _init_map_params(config, initial_state):
         params, static_features = _init_gnn_params(config, initial_state)
         return params, static_features
     elif config.mapping.type == 'direct_vertices':
-        target_params = {
-            'center': config.target.center,
-            'radius': config.target.radius,
-        }
+        target_params = {'center': config.target.center, 'radius': config.target.radius}
         params = init_direct_vertices_params(initial_state, target_params)
+        return params, None
+    elif config.mapping.type == 'direct_transform':
+        target_params = {'center': config.target.center, 'radius': config.target.radius}
+        params = init_direct_transform_params(initial_state, target_params)
         return params, None
     else:
         raw = config.mapping.params

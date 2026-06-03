@@ -238,20 +238,17 @@ def compute_end_to_end_loss(
     else:
         openness_loss = 0.0
 
-    # 2d. Deformation loss — reward Stage 2 hinge bending energy.
-    # Bending energy = k_rot × Σ(dθ²) at hinges: zero for rigid body modes,
-    # non-zero only for actual kinematic closing (arm rotation around hubs).
-    # log1p saturation prevents explosive exploitation of high-energy states.
-    # nan_to_num guards against Stage 2 physics solver divergence.
+    # Deformation reward: mean squared face displacement across all DOFs.
+    # Bounded by geometry (displacement can't exceed tessellation size), so log1p
+    # saturation is well-behaved and nan_to_num guards solver divergence.
     weight_deform = training_cfg.loss_weights.deformation
     if weight_deform > 0.0:
-        zero_fallback = jnp.zeros(1)
-        u_bend_hist = results['solution'].energies.get('rot', zero_fallback)
-        u_bend_final = u_bend_hist[-1]
-        u_bend_safe = jnp.clip(
-            jnp.nan_to_num(u_bend_final, nan=0.0, posinf=0.0, neginf=0.0),
-            0.0, 100.0)
-        deformation_loss = -weight_deform * jnp.log1p(u_bend_safe)
+        final_displacements = results['solution'].fields[-1]   # (n_faces, 3)
+        mean_sq_disp = jnp.mean(jnp.sum(final_displacements ** 2, axis=-1))
+        disp_safe = jnp.clip(
+            jnp.nan_to_num(mean_sq_disp, nan=0.0, posinf=0.0, neginf=0.0),
+            0.0, 10.0)
+        deformation_loss = -weight_deform * jnp.log1p(disp_safe)
     else:
         deformation_loss = 0.0
 

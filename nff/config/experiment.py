@@ -260,10 +260,10 @@ def _parse_mapping_config(mapping_raw: dict) -> MappingConfig:
         params_raw = {k: v for k, v in params_raw.items()
                       if k not in ('use_shirley_chiu', 's_val')}
 
-    # GNN and direct_vertices types don't have analytical params in the YAML.
+    # GNN and direct_* types don't have analytical params in the YAML.
     # GNN: params hold init config (hidden_dim, seed…), not trainable weights.
-    # direct_vertices: params are initialized from the tessellation at runtime.
-    if m_type.startswith('gnn_') or m_type == 'direct_vertices':
+    # direct_vertices / direct_transform: params initialized from the tessellation at runtime.
+    if m_type.startswith('gnn_') or m_type in ('direct_vertices', 'direct_transform'):
         parsed_params = params_raw if isinstance(params_raw, dict) else {}
     else:
         parsed_params = parse_map_params(params_raw)

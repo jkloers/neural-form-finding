@@ -148,6 +148,34 @@ def void_para_residual(
     return jnp.sqrt(jnp.mean(jnp.sum((v1 + v2) ** 2, axis=-1)))
 
 
+# ── Face orientation ─────────────────────────────────────────────────────────
+
+def project_face_orientation(cnv: jnp.ndarray) -> jnp.ndarray:
+    """Reflect any face with negative signed area to restore CCW winding.
+
+    Computes the shoelace signed area for each face in centroid-relative
+    coordinates (centroid = origin in CNV space). Inverted faces are reflected
+    about the x-axis (y-component negated) — the minimal closed-form correction
+    that restores positive area without changing vertex order.
+
+    Placed inside the fori_loop so hinge/void steps can re-trigger it.
+
+    Args:
+        cnv: (n_faces, max_nodes, 2) centroid-node vectors.
+
+    Returns:
+        cnv with all faces having positive signed area.
+    """
+    n = cnv.shape[1]
+    idx_next = (jnp.arange(n) + 1) % n
+    cross = cnv[:, :, 0] * cnv[:, idx_next, 1] - cnv[:, :, 1] * cnv[:, idx_next, 0]
+    signed_area = 0.5 * jnp.sum(cross, axis=1)          # (n_faces,)
+
+    flip_y = jnp.where(signed_area < 0.0, -1.0, 1.0)    # (n_faces,)
+    multiplier = jnp.stack([jnp.ones_like(flip_y), flip_y], axis=-1)  # (n_faces, 2)
+    return cnv * multiplier[:, None, :]
+
+
 # ── Main solver ───────────────────────────────────────────────────────────────
 
 def solve_alternating_projections(
@@ -181,6 +209,7 @@ def solve_alternating_projections(
     def one_iter(i, cnv):
         cnv = project_hinge_connectivity(face_centroids, cnv, hinge_node_pairs)
         cnv = project_void_parallelogram(cnv, void_opp)
+        cnv = project_face_orientation(cnv)
         return cnv
 
     cnv_valid = jax.lax.fori_loop(

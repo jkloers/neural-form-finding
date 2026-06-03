@@ -29,7 +29,10 @@ from typing import Any, Optional
 
 from nff.stages.state import CentroidalState
 from nff.stages.geometry import reconstruct_vertices
-from nff.stages.mapping import build_mapping_fn, apply_mapping, apply_gnn_mapping, apply_direct_mapping
+from nff.stages.mapping import (
+    build_mapping_fn, apply_mapping,
+    apply_gnn_mapping, apply_direct_mapping, apply_direct_transform_mapping,
+)
 from nff.stages.validity import solve_geometric_validity
 from nff.stages.physics.energy import (
     build_potential_energy,
@@ -101,6 +104,11 @@ def forward_pipeline(
         # map_params IS the geometry: {'face_centroids': ..., 'centroid_node_vectors': ...}.
         # Gradients flow directly from the loss back to these arrays — no Jacobian needed.
         mapped_state = apply_direct_mapping(initial_state, map_params)
+        mapping_fn = None
+    elif map_type == 'direct_transform':
+        # map_params = {'face_centroids': ..., 'local_transforms': (n_faces, 2, 2)}.
+        # CNVs = local_transforms[f] @ initial_cnvs[f, n] — mirrors GNN output structure.
+        mapped_state = apply_direct_transform_mapping(initial_state, map_params)
         mapping_fn = None
     else:
         mapping_fn = build_mapping_fn(
