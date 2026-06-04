@@ -259,6 +259,30 @@ num_layers: 3        # 3-hop message passing needed for hub face gradient
 
 **Key finding:** `void_closure=50` (delta-only) improved the hardest problems dramatically and was complementary to chamfer — not competitive. c009 improved 29× (0.409→0.014). Kirigami closing aligns with the circle target because a closed kirigami contracts inward.
 
+### MPNN inner_depth parameter (2026-06-04)
+
+The MPNN has two inner MLPs per layer: `phi_e` (edge update) and `phi_h` (node update). Each defaults to 2-layer (`inner_depth=2`). With `inner_depth=1`, each MLP is single-layer, halving the non-linear depth per step.
+
+**Why inner_depth=1 matters for deep networks:** Each inner layer adds tanh activations to the gradient path. With `inner_depth=2` and L message-passing layers: 4L tanh ops per gradient path. At L=7: 28 tanh ops → severe gradient vanishing. With `inner_depth=1`: 2L ops. At L=6: 12 tanh ops → manageable.
+
+**Critical bug fixed (2026-06-04):** `create_train_step` in `trainer.py` previously rebuilt `_static_features` from scratch (no `inner_depth`). This caused `apply_mpnn` to be called with `inner_depth=2` (default) during training, even when params were initialised with `inner_depth=1` (no W2/b2 keys) → KeyError at JAX trace time → NaN. Fix: thread `static_features` through `train_pipeline` → `create_train_step` so `inner_depth` reaches the JIT closure.
+
+**Validated 5×5 config:** `data/configs/architectures/mpnn_proj_5x5.yaml`
+- `num_layers: 6, inner_depth: 1` — 6 layers with shallow MLPs = 12 tanh ops.
+  - 8 layers caused gradient vanishing (chamfer 0.286 → 0.526 regression).
+  - 6 layers is optimal for 5×5 (center hub is ~5 hops from boundary).
+- `hinge_gap: 200` — same as 2×2 in absolute units; stable for 5×5.
+- Moment direction: **same-sign CCW for "iris" closing** (all 4 neighbors of center hub).
+  - Alternating ±5 works but activates swirl, not contraction.
+  - Same-sign +10 caused physics explosion (energy=433k). Safe value: **+5**.
+
+### 5×5 tessellation geometry
+
+- `width: 5, height: 5` → 100 faces, radius=2.5, total_area=18.75
+- Center hub: **face 50** (centroid ≈ 7.78, 7.78), degree-4
+- Center hub neighbors: **49** (below), **51** (left), **55** (right), **69** (above) — all degree-4 hubs
+- For iris closing: clamp face 50, apply same-sign moments to {49, 51, 55, 69}
+
 ---
 
 ## 6. Style conventions

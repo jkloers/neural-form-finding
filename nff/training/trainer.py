@@ -61,6 +61,7 @@ def create_train_step(
         learn_global_scale: bool = False,
         use_jit: bool = True,
         load_specs=None,
+        static_features=None,
 ):
     """Creates a compiled training step for optimizing map_params.
 
@@ -86,7 +87,12 @@ def create_train_step(
     # For GNN types: build_static_features() calls non-JAX numpy ops that would
     # crash the Metal backend if traced. Capturing the result here makes it an
     # XLA compile-time constant — correct and efficient.
-    if map_type.startswith('gnn_'):
+    # If caller provides static_features (e.g. with inner_depth, num_layers already
+    # set), use it directly — this preserves GNN-config metadata like inner_depth
+    # that is not recoverable from the initial_state alone.
+    if static_features is not None:
+        _static_features = static_features
+    elif map_type.startswith('gnn_'):
         from nff.models.graph_builder import build_static_features
         _static_features = build_static_features(initial_state, map_type)
     else:
@@ -162,6 +168,7 @@ def train_pipeline(
         use_jit: bool = True,
         load_specs=None,
         rng_seed: int = 0,
+        static_features=None,
 ) -> tuple[Any, list[dict]]:
     """Run the training loop to find optimal mapping parameters.
 
@@ -175,6 +182,7 @@ def train_pipeline(
         learn_global_scale=learn_global_scale,
         use_jit=use_jit,
         load_specs=load_specs,
+        static_features=static_features,
     )
 
     state = TrainState(

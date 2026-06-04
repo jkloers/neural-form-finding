@@ -300,10 +300,11 @@ def apply_gnn_mapping(
             gnn_params, h, x, senders_np, receivers_np, n_faces, num_layers)
     elif map_type == 'gnn_mpnn':
         from nff.models.mpnn import apply_mpnn
-        num_layers = static_features.get('num_layers') or sum(
+        num_layers  = static_features.get('num_layers') or sum(
             1 for k in gnn_params if k.endswith('_phi_e_W1'))
+        inner_depth = static_features.get('inner_depth', 2)
         new_centroids, _, local_transform = apply_mpnn(
-            gnn_params, h, x, senders_np, receivers_np, n_faces, num_layers)
+            gnn_params, h, x, senders_np, receivers_np, n_faces, num_layers, inner_depth)
     else:  # gnn_dummy (default) — identity-like pass-through
         from nff.models.dummy import apply_dummy_gnn
         new_centroids = apply_dummy_gnn(

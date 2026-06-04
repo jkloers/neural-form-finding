@@ -84,6 +84,7 @@ def _init_gnn_params(config, initial_state):
     gnn_cfg  = config.mapping.params if isinstance(config.mapping.params, dict) else {}
     hidden_dim  = int(gnn_cfg.get('hidden_dim', 16))
     num_layers  = int(gnn_cfg.get('num_layers', 2))
+    inner_depth = int(gnn_cfg.get('inner_depth', 2))
     seed        = int(gnn_cfg.get('seed', 0))
     key         = jax.random.PRNGKey(seed)
 
@@ -95,12 +96,12 @@ def _init_gnn_params(config, initial_state):
         params = init_egnn(key, node_feat_dim, hidden_dim, num_layers)
     elif map_type == 'gnn_mpnn':
         from nff.models.mpnn import init_mpnn
-        params = init_mpnn(key, node_feat_dim, hidden_dim, num_layers)
+        params = init_mpnn(key, node_feat_dim, hidden_dim, num_layers, inner_depth)
     else:
         from nff.models.dummy import init_dummy_gnn
         params = init_dummy_gnn(key, node_feat_dim, hidden_dim)
 
-    return params, {**static_features, 'num_layers': num_layers}
+    return params, {**static_features, 'num_layers': num_layers, 'inner_depth': inner_depth}
 
 
 def _init_map_params(config, initial_state):
@@ -156,6 +157,7 @@ def _run_one_problem(config, problem_label, run_dir):
         learn_global_scale=config.mapping.learn_global_scale,
         use_jit=_use_jit,
         load_specs=load_specs,
+        static_features=static_features,
     )
 
     prob_dir = None
