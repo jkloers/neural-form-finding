@@ -1,0 +1,288 @@
+# Benchmark suite — closing behavior, 10 problems
+#
+# Goal: learn the kirigami closing mechanism before attempting hard problems.
+# All forces are geometry-dependent (typed format, handled by force_types.py).
+#
+# ── Physical mechanism ─────────────────────────────────────────────────────────
+# The RDQK_D tessellation closes by rotating its hub tiles (2,7,9,12).
+# Each hub is the pivot of one "arm-quadrant". Closing a quadrant means:
+#   • the apertures (white gaps) between that hub's arms shrink
+#   • driven by moments on hub neighbors, or by inward compressive forces
+#     that produce rotation through the kirigami geometry
+#
+# Hub clamp: hub is a rigid fixed pivot; neighboring arms close around it.
+# Corner clamp: weakest anchor (degree-2); allows maximum global freedom.
+# → Hub clamp = local, stiff response → easier
+# → Corner clamp = global, flexible response → harder (larger load paths)
+#
+# ── Face layout ───────────────────────────────────────────────────────────────
+#
+#         col0   col1   col2   col3
+#  row3:   11     10     15     14   ← top edge
+#  row2:    8      9     12     13
+#  row1:    3      2      7      6
+#  row0:    0      1      4      5   ← bottom edge
+#
+# Hubs (degree-4): 2(BL) 7(BR) 9(TL) 12(TR)
+# Degree-2 corners: 0(BL) 11(TL) 13(BR) 14(TR)
+# Connectors (degree-3): 1 3 4 5 6 8 10 15
+#
+# Hinge adjacency:
+#   0:{1,3}  1:{0,2,4}  2:{1,3,5,7}  3:{0,2,8}
+#   4:{1,5,7} 5:{2,4,6} 6:{5,7,9}   7:{2,4,6,12}
+#   8:{3,9,11} 9:{6,8,10,12} 10:{9,11,15} 11:{8,10}
+#   12:{7,9,13,15} 13:{12,14} 14:{13,15} 15:{10,12,14}
+#
+# ── Load conventions ──────────────────────────────────────────────────────────
+# tile_to_tile:  magnitude < 0 → push BOTH tiles toward each other (compression)
+#                magnitude > 0 → pull BOTH tiles away from each other (tension)
+#                Each spec is bilateral — no need to duplicate with a reverse spec.
+# global_frame:  dof=2 (Mz), CCW positive — frame-independent
+#
+# ── Difficulty ordering ───────────────────────────────────────────────────────
+# Easy   c001-c003: hub-clamped, 1-hop
+# Medium c004-c007: no clamp or longer load path
+# Hard   c008-c010: combined/global loads
+
+physics_defaults:
+  use_contact: true
+  linearized_strains: true
+  updated_lagrangian: false
+  k_contact: 5000.0
+  min_angle: 1.0
+  cutoff_angle: 5.0
+  incremental: true
+  num_load_steps: 5
+  solver_maxiter: 1000
+  solver_tol: 1.0e-5
+
+material_defaults:
+  k_stretch: 1000.0
+  k_shear: 1000.0
+  k_rot: 0.5
+  density: 1.0
+
+# ─────────────────────────────────────────────────────────────────────────────
+problems:
+
+  # ── EASY — hub-clamped, moment at 1-hop neighbor ─────────────────────────
+
+  - id: "c001"
+    name: "hub_clamp_moment_1hop"
+    description: |
+      Clamp hub 9 (TL, rigid pivot).
+      CCW moment on hub 12 — its direct 1-hop neighbor.
+      Hub 12 rotates around the fixed pivot of hub 9, closing the TR quadrant.
+      Simplest possible closing signal: one hinge between load and clamp.
+    difficulty: 11
+    boundary_conditions:
+      clamped_faces: [9]
+    loads:
+      - type: global_frame
+        face: 12
+        dof: 2
+        value: 5.0
+
+  # ── EASY — 4-hub alternating moments (swirling closing mode) ─────────────
+
+  - id: "c002"
+    name: "four_hub_alternating_moments"
+    description: |
+      No clamped tile — self-equilibrating alternating moments (net M = 0).
+      Alternating moments on all 4 hub tiles:
+        • Hubs 9 and 7: CCW (Mz = +5) — trigo direction
+        • Hubs 12 and 2: CW  (Mz = -5) — horaire direction
+      Adjacent hubs rotate in opposite directions → swirling/shear-like
+      closing mode. All four quadrant arms activate simultaneously.
+    difficulty: 30
+    boundary_conditions:
+      clamped_faces: []
+    loads:
+      - type: global_frame
+        face: 9
+        dof: 2
+        value: 5.0
+      - type: global_frame
+        face: 7
+        dof: 2
+        value: 5.0
+      - type: global_frame
+        face: 12
+        dof: 2
+        value: -5.0
+      - type: global_frame
+        face: 2
+        dof: 2
+        value: -5.0
+
+  # ── EASY — hub-clamped, compression at 1-hop neighbor ────────────────────
+
+  - id: "c003"
+    name: "hub_clamp_compress_1hop"
+    description: |
+      Clamp hub 9 (TL, rigid pivot).
+      Bilateral compression between face 8 (direct 1-hop left-arm of hub 9)
+      and hub 9. Force on 9 is absorbed by the clamp reaction.
+      The kinematic constraint at the hinge forces hub 9's arms to rotate and close.
+    difficulty: 11
+    boundary_conditions:
+      clamped_faces: [9]
+    loads:
+      - type: tile_to_tile
+        source_face: 8
+        target_face: 9
+        magnitude: -5.0
+
+  # ── MEDIUM — hub-12 clamped, horizontal squeeze row 1 ────────────────────
+
+  - id: "c004"
+    name: "hub12_clamp_horizontal_squeeze"
+    description: |
+      Clamp hub 12 (TR, rigid pivot).
+      Bilateral compression between face 6 (col3/row1) and face 3 (col0/row1):
+      each tile_to_tile spec is bilateral — both tiles receive equal-and-opposite
+      compressive forces. Horizontal inward squeeze through the middle row,
+      activating hubs 2 and 7. Hub 12 anchors the TR quadrant.
+    difficulty: 22
+    boundary_conditions:
+      clamped_faces: [12]
+    loads:
+      - type: tile_to_tile
+        source_face: 6
+        target_face: 3
+        magnitude: -5.0
+
+  # ── MEDIUM — corner-clamped (same quadrant), moment + downward load ───────
+
+  - id: "c005"
+    name: "corner_clamp_moment_plus_downward"
+    description: |
+      Clamp corner 14 (TR, degree-2 — minimal constraint, same quadrant as moment).
+      CCW moment on hub 12 (2-hop: 14→13→12 or 14→15→12).
+      Additional downward force (−y) on face 3 (col0/row1, left-middle area).
+      Corner 14 anchors the TR quadrant; hub 12 rotates to close TR apertures
+      while face 3 is pulled downward, creating an asymmetric combined load.
+    difficulty: 16
+    boundary_conditions:
+      clamped_faces: [14]
+    loads:
+      - type: global_frame
+        face: 12
+        dof: 2
+        value: 5.0
+      - type: global_frame
+        face: 3
+        dof: 1
+        value: -5.0
+
+  # ── MEDIUM — corner-clamped opposite quadrant, 4-hop ─────────────────────
+
+  - id: "c006"
+    name: "corner_clamp_opposite_quad_moment"
+    description: |
+      Clamp corner 0 (BL, degree-2) — far from the load (4-hop path).
+      CCW moment on hub 12 (TR hub).
+      Long load path (4 hops) means the moment's effect must propagate through
+      the full structure — harder to transmit, easier to accommodate.
+    difficulty: 20
+    boundary_conditions:
+      clamped_faces: [0]
+    loads:
+      - type: global_frame
+        face: 12
+        dof: 2
+        value: 5.0
+
+  # ── MEDIUM — corner-11 clamped, far compression ───────────────────────────
+
+  - id: "c007"
+    name: "corner11_clamp_compress_far"
+    description: |
+      Clamp corner 11 (TL corner, degree-2) instead of hub 9.
+      Bilateral compression between corner 14 (TR) and hub 12 — load path to clamp:
+        14 → 13/15 → 12 → 9 → 10 → 11 (5 hops).
+      Longer and weaker anchor than the hub-clamped version in c001-c003.
+      The compression propagates diagonally across the TR and TL quadrants.
+    difficulty: 22
+    boundary_conditions:
+      clamped_faces: [11]
+    loads:
+      - type: tile_to_tile
+        source_face: 14
+        target_face: 12
+        magnitude: -5.0
+
+  # ── HARD — X-shaped diagonal squeeze, clamp corner 11 ────────────────────
+
+  - id: "c008"
+    name: "diagonal_squeeze_clamp11"
+    description: |
+      Clamp corner 11 (TL corner, degree-2).
+      Two bilateral compressions:
+        Main diagonal:   face 14 (TR) ↔ face 0 (BL) — squeezes the full diagonal
+        Anti-diagonal:   face 5 (BR) pushed toward fixed corner 11 (TL, clamped)
+      X-shaped global compression. Main diagonal is free to squeeze symmetrically;
+      anti-diagonal is one-sided (11 is fixed). Activates all quadrants.
+    difficulty: 42
+    boundary_conditions:
+      clamped_faces: [11]
+    loads:
+      - type: tile_to_tile
+        source_face: 14
+        target_face: 0
+        magnitude: -5.0
+      - type: tile_to_tile
+        source_face: 5
+        target_face: 11
+        magnitude: -5.0
+
+  # ── HARD — hub-7 clamped, CCW moments on all neighbors ───────────────────
+
+  - id: "c009"
+    name: "hub7_clamp_neighbor_moments"
+    description: |
+      Clamp hub 7 (BR hub, degree-4 — stiff pivot).
+      CCW moments (+5) applied to all four neighbors of hub 7: faces 12, 2, 6, 4.
+      Hub 7 adjacency: 7:{2,4,6,12}.
+      All four arms of hub 7 receive a moment simultaneously, driving symmetric
+      closing of the BR quadrant while the clamped hub prevents global translation.
+    difficulty: 28
+    boundary_conditions:
+      clamped_faces: [7]
+    loads:
+      - type: global_frame
+        face: 12
+        dof: 2
+        value: 5.0
+      - type: global_frame
+        face: 2
+        dof: 2
+        value: 5.0
+      - type: global_frame
+        face: 6
+        dof: 2
+        value: 5.0
+      - type: global_frame
+        face: 4
+        dof: 2
+        value: 5.0
+
+  # ── HARDEST — clamp 8, top-edge horizontal squeeze ────────────────────────
+
+  - id: "c010"
+    name: "top_edge_squeeze_clamp8"
+    description: |
+      Clamp connector 8 (col0/row2, left-middle area — hinge between 3, 9, 11).
+      Bilateral horizontal squeeze along the top edge:
+        face 11 (TL corner) ↔ face 14 (TR corner).
+      Horizontal compression of the top edge activates hubs 9 (TL) and 12 (TR),
+      closing the top quadrants. Face 8 anchors the left side mid-height while
+      the top edge compresses — shorter clamp-to-load path than corner-0 anchor.
+    difficulty: 28
+    boundary_conditions:
+      clamped_faces: [8]
+    loads:
+      - type: tile_to_tile
+        source_face: 11
+        target_face: 14
+        magnitude: -5.0
