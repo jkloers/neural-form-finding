@@ -176,6 +176,47 @@ def project_face_orientation(cnv: jnp.ndarray) -> jnp.ndarray:
     return cnv * multiplier[:, None, :]
 
 
+# ── Face convexity ───────────────────────────────────────────────────────────
+
+def project_face_convexity(cnv: jnp.ndarray) -> jnp.ndarray:
+    """Project reflex vertices back to the chord connecting their two neighbors.
+
+    For a CCW quad, vertex v_i is reflex when the cross product of its incoming
+    and outgoing edge vectors is ≤ 0.  This happens when a hinge or void
+    projection moves a vertex past another vertex of the same face, creating a
+    crossing edge.  The minimum-norm correction is to project v_i onto the chord
+    v_{i-1} → v_{i+1} — the boundary of the convex feasible set for that vertex.
+
+    Both the hinge and convexity constraints are affine subspaces, so alternating
+    between them converges by Von Neumann's theorem.
+
+    Args:
+        cnv: (n_faces, max_nodes, 2) centroid-node vectors.  Assumed CCW.
+
+    Returns:
+        cnv with no reflex vertices.
+    """
+    n = cnv.shape[1]
+    idx_prev = (jnp.arange(n) - 1) % n
+    idx_next = (jnp.arange(n) + 1) % n
+
+    v_prev = cnv[:, idx_prev, :]   # (n_faces, n, 2)
+    v_next = cnv[:, idx_next, :]   # (n_faces, n, 2)
+
+    e_in  = cnv    - v_prev        # v_i − v_{i−1}
+    e_out = v_next - cnv           # v_{i+1} − v_i
+
+    cross = e_in[:, :, 0] * e_out[:, :, 1] - e_in[:, :, 1] * e_out[:, :, 0]
+
+    chord    = v_next - v_prev
+    chord_sq = jnp.sum(chord ** 2, axis=-1, keepdims=True)
+    t        = jnp.sum((cnv - v_prev) * chord, axis=-1, keepdims=True) / jnp.maximum(chord_sq, 1e-12)
+    projected = v_prev + t * chord
+
+    is_reflex = (cross <= 0.0)[:, :, None]
+    return jnp.where(is_reflex, projected, cnv)
+
+
 # ── Main solver ───────────────────────────────────────────────────────────────
 
 def solve_alternating_projections(
@@ -209,10 +250,13 @@ def solve_alternating_projections(
     def one_iter(i, cnv):
         cnv = project_hinge_connectivity(face_centroids, cnv, hinge_node_pairs)
         cnv = project_void_parallelogram(cnv, void_opp)
-        cnv = project_face_orientation(cnv)
+        cnv = project_face_convexity(cnv)
         return cnv
 
-    cnv_valid = jax.lax.fori_loop(
-        0, n_iters, one_iter, initial_state.centroid_node_vectors)
+    # One orientation pass before the loop so hinge/void projections start
+    # from non-inverted faces, and one after as a final guard.
+    cnv_init = project_face_orientation(initial_state.centroid_node_vectors)
+    cnv_valid = jax.lax.fori_loop(0, n_iters, one_iter, cnv_init)
 
+    cnv_valid = project_face_orientation(cnv_valid)
     return initial_state._replace(centroid_node_vectors=cnv_valid)
