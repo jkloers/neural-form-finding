@@ -1,0 +1,76 @@
+# Architecture: 2×2 RDQK_D grid + MPNN with alternating-projection Stage 1
+#
+# ── Coverage weight — critical ────────────────────────────────────────────────
+# The chamfer formula is: geometric_loss = chamfer_w * (precision + coverage_w * recall)
+# Setting coverage = 1.0 gives a symmetric Chamfer (precision and recall equally
+# weighted by chamfer_w). Setting coverage = chamfer_w would give recall a weight
+# of chamfer_w², inflating the loss and causing the training to plateau on recall
+# while precision stagnates.
+# ── MPNN-specific rules ───────────────────────────────────────────────────────
+# hinge_gap MUST be active (small value ~4 is enough with n_proj_iters=100).
+# contact: off (0.0) by default.
+# deformation: ≤1% of chamfer_w (50 when chamfer=5000).
+#
+# Run against the compressive suite:
+#   python train.py --arch architectures/mpnn_proj --suite problems/suite_compressive
+
+tessellation:
+  width: 2
+  height: 2
+  pattern: "unit_RDQK_D"
+  total_area: 3.0
+
+target:
+  type: "circle"
+  center: [0.0, 0.0]
+  radius: 1.0
+
+mapping:
+  map_type: gnn_mpnn
+  domain_restriction: 1.0
+  use_shirley_chiu: false
+  strict_boundary_fit: false
+  learn_global_scale: false
+  map_params:
+    hidden_dim: 32
+    num_layers: 3
+    seed: 2
+
+optimization_weights:
+  validity_method: alternating_projection
+  n_proj_iters: 100
+
+training:
+  num_epochs: 1000
+  learning_rate: 0.01
+  optimizer: "adam"
+  lr_schedule: "cosine"
+  geometric_loss_type: "boundary_vertices"
+  grad_clip: 1.0
+
+loss_weights:
+  chamfer: 5000.0
+  coverage: 1.0
+  material_area: 0.0
+  stretching: 1.0
+  shearing: 10.0
+  bending: 0.0
+  contact: 0.0
+  regularization: 0.0001
+  hinge_gap: 200.0
+  openness: 0.0
+  deformation: 0.0
+  void_closure: 50.0
+
+visualization:
+  stage0: true
+  stage1: true
+  stage2: true
+  energy_plot: true
+  animation: true
+  show_plots: false
+  save_outputs: true
+  show_hinges: true
+  show_hinge_indices: false
+  show_external_forces: true
+  show_kinematic_blocks: true

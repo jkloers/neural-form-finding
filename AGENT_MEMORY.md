@@ -199,20 +199,30 @@ Topology arrays are used as indices in scatter operations inside JIT (`jnp.zeros
 ## 5. Loss function components
 
 ```
-total = chamfer + coverage * chamfer_coverage
-      + w_stretch * u_stretch + w_shear * u_shear + w_bend * u_bend + w_contact * u_contact
-      + w_hinge_gap * hinge_gap
+total = chamfer_w * (precision + coverage_w * recall)       ← shape matching
+      + w_stretch * u_stretch + w_shear * u_shear + w_contact * u_contact
+      + w_hinge_gap * hinge_gap                              ← connectivity (at Stage 0)
       + w_material * (mapped_area - initial_area)²
-      - w_openness * log1p(void_area)      ← reward: large void area at Stage 1
-      - w_deformation * log1p(u_bend)      ← reward: bending energy at Stage 2
+      - w_openness * log1p(void_area_stage1)                 ← reward: large void at Stage 1
+      - w_void_closure * log1p(void_stage1 - void_stage2)    ← reward: void area closed by loads
+      - w_deformation * log1p(mean_sq_disp)                  ← DEPRECATED — see below
       + w_reg * Σ param²
 ```
 
 The `target_cloud` (n_points=500) is precomputed before JIT in `create_train_step` and closed over in `loss_fn`. Do not call `get_target_points()` inside the loss — it would be rebaked into XLA on every retrace.
 
-**`chamfer` and `coverage` weights must always be equal.** They are the two halves of the bidirectional Chamfer distance (precision and recall toward the target shape). Setting them to different values breaks the symmetry of the fitting signal. Always verify `loss_weights.chamfer == loss_weights.coverage` when writing or editing a config.
+**`coverage` must be 1.0 for symmetric Chamfer.** The chamfer formula is `chamfer_w × (precision + coverage_w × recall)`. Setting `coverage_w = chamfer_w` inflates recall by `chamfer_w²` and precision by `chamfer_w` — a massive asymmetry that causes the training to plateau immediately on recall while precision stagnates. Always set `coverage: 1.0` and adjust `chamfer` alone for global scaling.
 
-**`openness` and `deformation` rewards must stay ≤ 20 % of the `chamfer` signal.** These secondary rewards encourage a good initial configuration (open void area) and meaningful deformation. If they exceed ~20 % of the chamfer weight, they dominate training and the network stops learning the shape.
+**`void_closure` is the correct kirigami closing signal.** It rewards the *decrease* in void area from Stage 1 (reference) to Stage 2 (deformed):
+```
+delta = max(0, void_area_stage1 - void_area_deformed)
+loss  = -void_closure * log1p(delta)   ← reward, negative contribution
+```
+A rigid-body swing around the clamp leaves void area invariant (delta=0, no reward). Genuine kirigami closing (hub rotation → arm folding → aperture closure) reduces void area (delta>0, positive reward). The delta gradient simultaneously encourages the reference to be open (large void_stage1) AND the loads to close the apertures (small void_stage2) in a single term.
+
+**`deformation` is deprecated.** `mean_sq_disp` rewards large absolute displacement, which is easily satisfied by a rigid-body swing around the clamped tile without any kirigami closing. Set `deformation: 0.0` and use `void_closure` instead.
+
+**Secondary rewards (`openness`, `void_closure`) must stay ≤ 20% of the chamfer signal.** At max saturation: `void_closure × log1p(20) ≈ void_closure × 3`. This must be < `0.2 × chamfer × typical_chamfer_distance`. With chamfer=5000 and convergence at ~0.013: budget = 0.2 × 65 = 13 → `void_closure ≤ 4`. Safe value: `void_closure: 5.0` (slightly above, but log1p saturation prevents explosion).
 
 ---
 

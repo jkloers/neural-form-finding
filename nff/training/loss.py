@@ -252,6 +252,54 @@ def compute_end_to_end_loss(
     else:
         deformation_loss = 0.0
 
+    # 2d. Closure delta reward — reward the decrease in void area from Stage 1 to Stage 2.
+    #
+    # delta = max(0, void_area_stage1 - void_area_stage2)
+    # loss  = -w * log1p(delta)   [reward: larger delta = more closing = lower total loss]
+    #
+    # Why delta instead of absolute void area:
+    #   • Rigid-body swing around a clamp moves all tiles together — void area is
+    #     invariant under rigid motion, so delta=0. No reward. The cheat is closed.
+    #   • Genuine kirigami closing (hub rotation → arm folding) reduces void area,
+    #     so delta>0. The optimizer is rewarded.
+    #   • The delta gradient simultaneously encourages large void_stage1 (start open,
+    #     more potential to close) AND small void_stage2 (actually close under load).
+    #     This replaces both the separate `openness` and `void_closure` terms.
+    #
+    # Gradients flow through the Stage 2 physics solver (lax.scan is differentiable)
+    # and through the Stage 1 alternating projections back to Stage 0 (MPNN).
+    weight_void_closure = training_cfg.loss_weights.void_closure
+    if weight_void_closure > 0.0:
+        vs = results['valid_state']
+
+        # Stage 1 void area (reference — before physics)
+        void_stage1 = compute_void_area(
+            vs.face_centroids, vs.centroid_node_vectors, vs.boundary_face_node_ids)
+        void_stage1_safe = jnp.clip(
+            jnp.nan_to_num(void_stage1, nan=0.0, posinf=0.0, neginf=0.0), 0.0, 20.0)
+
+        # Stage 2 void area (deformed — after physics)
+        final_displacements = results['solution'].fields[-1]   # (n_faces, 3)
+        deformed_centroids = vs.face_centroids + final_displacements[:, :2]
+        thetas = final_displacements[:, 2]
+        cos_t = jnp.cos(thetas)
+        sin_t = jnp.sin(thetas)
+        cnv = vs.centroid_node_vectors
+        deformed_cnv = jnp.stack([
+            cos_t[:, None] * cnv[:, :, 0] - sin_t[:, None] * cnv[:, :, 1],
+            sin_t[:, None] * cnv[:, :, 0] + cos_t[:, None] * cnv[:, :, 1],
+        ], axis=-1)
+        void_stage2 = compute_void_area(
+            deformed_centroids, deformed_cnv, vs.boundary_face_node_ids)
+        void_stage2_safe = jnp.clip(
+            jnp.nan_to_num(void_stage2, nan=0.0, posinf=0.0, neginf=0.0), 0.0, 20.0)
+
+        # Delta: how much void was actually closed
+        delta = jnp.clip(void_stage1_safe - void_stage2_safe, 0.0, 20.0)
+        void_closure_loss = -weight_void_closure * jnp.log1p(delta)
+    else:
+        void_closure_loss = 0.0
+
     # 3. Regularization (Prevents map_params from exploding)
     weight_reg = training_cfg.loss_weights.regularization
 
@@ -259,7 +307,8 @@ def compute_end_to_end_loss(
     squared_params = jax.tree_util.tree_map(lambda x: jnp.sum(x**2), map_params)
     reg_loss = weight_reg * jax.tree_util.tree_reduce(lambda a, b: a + b, squared_params, initializer=0.0)
 
-    total_loss = base_loss + material_area_loss + hinge_gap_loss + reg_loss + openness_loss + deformation_loss
+    total_loss = (base_loss + material_area_loss + hinge_gap_loss + reg_loss
+                  + openness_loss + deformation_loss + void_closure_loss)
 
     all_metrics = {
         **base_metrics,
@@ -269,6 +318,7 @@ def compute_end_to_end_loss(
         'hinge_gap':              hinge_gap_loss,
         'openness':               openness_loss,
         'deformation':            deformation_loss,
+        'void_closure':           void_closure_loss,
         'loss_total':             total_loss,
         'total':                  total_loss,  # backward compatibility
     }
