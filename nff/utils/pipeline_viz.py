@@ -52,12 +52,14 @@ def _draw_typed_loads(ax, load_specs, valid_centroids, eq_centroids):
             src = int(spec['source_face'])
             tgt = int(spec['target_face'])
             mag = float(spec['magnitude'])
-            # Convention: diff = source - target (outward), magnitude < 0 → compression
+            # Bilateral: source gets mag*d, target gets -mag*d (Newton's 3rd law).
             diff = eq_centroids[src] - eq_centroids[tgt]
             norm = np.linalg.norm(diff)
             d = diff / norm if norm > 1e-8 else np.array([1.0, 0.0])
             face_fx[src] = face_fx.get(src, 0.0) + mag * d[0]
             face_fy[src] = face_fy.get(src, 0.0) + mag * d[1]
+            face_fx[tgt] = face_fx.get(tgt, 0.0) - mag * d[0]
+            face_fy[tgt] = face_fy.get(tgt, 0.0) - mag * d[1]
 
         elif load_type == 'tess_frame':
             face     = int(spec['face'])

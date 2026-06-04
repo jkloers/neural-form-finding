@@ -116,9 +116,10 @@ class LossWeights(eqx.Module):
     regularization: float
     coverage: float
     hinge_gap: float
-    openness: float     # reward large void area at Stage 1 (open initial state)
-    deformation: float  # reward large Stage 2 displacement (significant closing)
-    void_closure: float # penalize large void area in the Stage 2 deformed state
+    openness: float      # reward large void area at Stage 1 (open initial state)
+    deformation: float   # DEPRECATED — use void_closure / closure_delta instead
+    void_closure: float  # penalty: +w * log1p(void_area_stage2) — minimise remaining void
+    closure_delta: float # reward: -w * log1p(void_stage1 - void_stage2) — maximise void closed
 
     def __init__(self, chamfer: float = 1.0, material_area: float = 1.0,
                  stretching: float = 0.1, shearing: float = 0.1,
@@ -126,7 +127,7 @@ class LossWeights(eqx.Module):
                  regularization: float = 0.001, coverage: float = 1.0,
                  hinge_gap: float = 0.0,
                  openness: float = 0.0, deformation: float = 0.0,
-                 void_closure: float = 0.0):
+                 void_closure: float = 0.0, closure_delta: float = 0.0):
         self.chamfer = float(chamfer)
         self.material_area = float(material_area)
         self.stretching = float(stretching)
@@ -139,6 +140,7 @@ class LossWeights(eqx.Module):
         self.openness = float(openness)
         self.deformation = float(deformation)
         self.void_closure = float(void_closure)
+        self.closure_delta = float(closure_delta)
 
 
 class TrainingConfig(eqx.Module):

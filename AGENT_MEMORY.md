@@ -199,30 +199,65 @@ Topology arrays are used as indices in scatter operations inside JIT (`jnp.zeros
 ## 5. Loss function components
 
 ```
-total = chamfer_w * (precision + coverage_w * recall)       ← shape matching
+total = chamfer_w * (precision + coverage_w * recall)          ← shape matching
       + w_stretch * u_stretch + w_shear * u_shear + w_contact * u_contact
-      + w_hinge_gap * hinge_gap                              ← connectivity (at Stage 0)
+      + w_hinge_gap * hinge_gap                                 ← connectivity (at Stage 0)
       + w_material * (mapped_area - initial_area)²
-      - w_openness * log1p(void_area_stage1)                 ← reward: large void at Stage 1
-      - w_void_closure * log1p(void_stage1 - void_stage2)    ← reward: void area closed by loads
-      - w_deformation * log1p(mean_sq_disp)                  ← DEPRECATED — see below
+      - w_openness * log1p(void_area_stage1)                    ← reward: large void at Stage 1
+      + w_void_closure * log1p(void_area_stage2)                ← penalty: remaining void after load
+      - w_closure_delta * log1p(void_stage1 - void_stage2)      ← reward: void closed by loads
+      - w_deformation * log1p(mean_sq_disp)                     ← DEPRECATED
       + w_reg * Σ param²
 ```
 
 The `target_cloud` (n_points=500) is precomputed before JIT in `create_train_step` and closed over in `loss_fn`. Do not call `get_target_points()` inside the loss — it would be rebaked into XLA on every retrace.
 
-**`coverage` must be 1.0 for symmetric Chamfer.** The chamfer formula is `chamfer_w × (precision + coverage_w × recall)`. Setting `coverage_w = chamfer_w` inflates recall by `chamfer_w²` and precision by `chamfer_w` — a massive asymmetry that causes the training to plateau immediately on recall while precision stagnates. Always set `coverage: 1.0` and adjust `chamfer` alone for global scaling.
+### Coverage formula — critical
 
-**`void_closure` is the correct kirigami closing signal.** It rewards the *decrease* in void area from Stage 1 (reference) to Stage 2 (deformed):
+**`coverage` must be 1.0 for symmetric Chamfer.** The formula is `chamfer_w × (precision + coverage_w × recall)`. Setting `coverage_w = chamfer_w` inflates recall by `chamfer_w²` while precision only gets `chamfer_w` — a factor-of-chamfer_w asymmetry. Training immediately plateaus on recall; precision stagnates. Always `coverage: 1.0`, adjust `chamfer` alone for global scaling.
+
+### Kirigami closing terms
+
+Two independent closing terms can be used separately or together:
+
+**`void_closure` — absolute penalty on Stage 2 void area:**
 ```
-delta = max(0, void_area_stage1 - void_area_deformed)
-loss  = -void_closure * log1p(delta)   ← reward, negative contribution
+loss = +void_closure * log1p(void_area_stage2)   ← penalty
 ```
-A rigid-body swing around the clamp leaves void area invariant (delta=0, no reward). Genuine kirigami closing (hub rotation → arm folding → aperture closure) reduces void area (delta>0, positive reward). The delta gradient simultaneously encourages the reference to be open (large void_stage1) AND the loads to close the apertures (small void_stage2) in a single term.
+No Stage 1 reference. The model is penalised purely for open voids after loading. Cannot cheat by inflating the starting void. Strong, direct signal.
 
-**`deformation` is deprecated.** `mean_sq_disp` rewards large absolute displacement, which is easily satisfied by a rigid-body swing around the clamped tile without any kirigami closing. Set `deformation: 0.0` and use `void_closure` instead.
+**`closure_delta` — reward for void area decrease Stage 1 → Stage 2:**
+```
+delta = max(0, void_area_stage1 - void_area_stage2)
+loss  = -closure_delta * log1p(delta)             ← reward
+```
+Rewards the decrease in void area caused by the loads. A rigid-body swing leaves void area invariant (delta=0, no reward). The delta gradient is two-sided: encourages a reference that is open (large void_stage1) AND loads that close (small void_stage2). Can be gamed by inflating void_stage1, but `void_closure` together prevents this.
 
-**Secondary rewards (`openness`, `void_closure`) must stay ≤ 20% of the chamfer signal.** At max saturation: `void_closure × log1p(20) ≈ void_closure × 3`. This must be < `0.2 × chamfer × typical_chamfer_distance`. With chamfer=5000 and convergence at ~0.013: budget = 0.2 × 65 = 13 → `void_closure ≤ 4`. Safe value: `void_closure: 5.0` (slightly above, but log1p saturation prevents explosion).
+**Using both simultaneously** gives complementary signals: `void_closure` ensures the final state is closed; `closure_delta` ensures it is the loads doing the closing (not just a pre-collapsed reference).
+
+**`deformation` — DEPRECATED.** `mean_sq_disp` rewards large absolute displacement, trivially satisfied by rigid-body swing around the clamp. Set `deformation: 0.0`.
+
+### Validated MPNN + alternating-projection config (2026-06-04)
+
+Canonical reference: `data/configs/architectures/mpnn_proj_base.yaml`
+
+```yaml
+chamfer: 5000.0
+coverage: 1.0        # symmetric Chamfer — never set equal to chamfer
+hinge_gap: 200.0     # prevents centroid gap explosion during chamfer optimisation
+void_closure: 100.0  # penalty on remaining Stage 2 void area
+closure_delta: 50.0  # reward for void closed by loads
+deformation: 0.0     # deprecated
+openness: 0.0        # redundant when closure_delta is active
+contact: 0.0         # off — destabilises early training
+num_layers: 3        # 3-hop message passing needed for hub face gradient
+```
+
+**Why hinge_gap=200:** With chamfer=5000 and clean symmetric gradients, the MPNN freely moves centroids to fit the circle, opening hinge gaps >1 face-length. This makes alternating projections unstable (large CNV corrections → face intersections → physics NaN). Balance formula: `hinge_gap × 24 × (0.1-unit gap)² ≈ chamfer × convergence_chamfer` → ~270. Safe value: 200.
+
+**Why coverage=1.0 not equal to chamfer:** With coverage=500, chamfer=500: recall gets 250,000× weight, precision gets 500×. Training plateau on recall at epoch ~5; loss stays at 10³–10⁴. With coverage=1.0, chamfer=5000: symmetric, loss drops to 10¹–10², chamfer ≈ 0.013 at convergence.
+
+**Key finding:** `void_closure=50` (delta-only) improved the hardest problems dramatically and was complementary to chamfer — not competitive. c009 improved 29× (0.409→0.014). Kirigami closing aligns with the circle target because a closed kirigami contracts inward.
 
 ---
 

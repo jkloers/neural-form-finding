@@ -213,11 +213,13 @@ def train_pipeline(
             open_val    = aux.get('openness', 0.0)
             deform_val  = aux.get('deformation', 0.0)
             vc_val      = aux.get('void_closure', 0.0)
+            cd_val      = aux.get('closure_delta', 0.0)
             closing_str = ""
-            if open_val != 0.0 or deform_val != 0.0 or vc_val != 0.0:
+            if open_val != 0.0 or deform_val != 0.0 or vc_val != 0.0 or cd_val != 0.0:
                 closing_str = (f" | Open: {float(open_val):.3e}"
                                f" | Deform: {float(deform_val):.3e}"
-                               f" | CloseDelta: {float(vc_val):.3e}")
+                               f" | VoidS2: {float(vc_val):.3e}"
+                               f" | CloseDelta: {float(cd_val):.3e}")
             print(
                 f"Epoch {epoch:03d} | Loss: {aux['total']:.4e} | "
                 f"Chamfer: {aux['chamfer_total']:.4e} | Energy: {aux['energy']:.4e}"

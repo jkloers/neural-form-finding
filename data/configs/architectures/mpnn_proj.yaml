@@ -60,7 +60,8 @@ loss_weights:
   hinge_gap: 200.0
   openness: 0.0
   deformation: 0.0
-  void_closure: 50.0
+  void_closure: 100.0
+  closure_delta: 50.0
 
 visualization:
   stage0: true
