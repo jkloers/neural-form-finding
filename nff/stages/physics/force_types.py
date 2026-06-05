@@ -3,8 +3,9 @@ Geometry-dependent force types for neural form-finding.
 
 Replaces global-frame Neumann BCs with physically meaningful alternatives:
 
-  tile_to_tile  — force on source_face pointing toward/away from target_face.
-                  Direction is computed from live centroid positions (differentiable).
+  tile_to_tile  — equal-and-opposite forces on source_face and target_face along
+                  the centroid-centroid line. Direction is computed from reference
+                  centroid positions (post-Stage-1, constant during Stage 2).
                   Physical analogue: cable, spring or actuator between two tiles.
 
   tess_frame    — force along the major or minor principal axis of the mapped
@@ -33,8 +34,9 @@ New formats (require a 'type' key; handled here, NOT by conditions.py):
     - type: tile_to_tile
       source_face: 3
       target_face: 7
-      magnitude: -1.0   # <0 → push source toward target (compression/closing)
-                         # >0 → pull source away from target (tension/opening)
+      magnitude: -1.0   # <0 → push both tiles toward each other (compression/closing)
+                         # >0 → pull both tiles away from each other (tension/opening)
+                         # Force is constant: direction fixed at reference geometry (post-Stage-1)
 
   tess_frame:
     - type: tess_frame
@@ -138,13 +140,18 @@ def build_geometry_dependent_loading(
             force_values.append(jnp.array(value, dtype=jnp.float64))
 
         elif load_type == 'tile_to_tile':
-            # Force on source_face directed toward (magnitude < 0) or away from
-            # (magnitude > 0) target_face. Direction is differentiable.
+            # Equal-and-opposite forces on source_face and target_face along
+            # the centroid-centroid line (Newton's 3rd law / cable analogy).
             #
             # Convention: diff = source - target points OUTWARD (away from target).
-            # force = magnitude * diff_normalised
-            #   magnitude < 0 → force opposes outward = pushes source TOWARD target
-            #   magnitude > 0 → force along outward   = pulls source AWAY from target
+            # source force = magnitude * diff_normalised
+            # target force = -magnitude * diff_normalised  (opposite direction)
+            #   magnitude < 0 → pushes both tiles TOWARD each other (compression)
+            #   magnitude > 0 → pulls both tiles AWAY from each other (tension)
+            #
+            # The direction is computed from reference centroids (after Stage 0+1)
+            # and is constant throughout Stage 2 — it does not update with tile
+            # movement during the physics solve.
             source    = int(spec['source_face'])
             target    = int(spec['target_face'])
             magnitude = float(spec['magnitude'])
@@ -152,11 +159,17 @@ def build_geometry_dependent_loading(
             diff      = face_centroids[source] - face_centroids[target]  # (2,) outward from target
             direction = _unit_vec(diff)                                   # (2,) JAX
 
-            # Decompose into x and y DOFs (moment is not meaningful here)
+            # Source: force along the outward direction
             dof_pairs.append((source, 0))
             dof_pairs.append((source, 1))
             force_values.append(magnitude * direction[0])
             force_values.append(magnitude * direction[1])
+
+            # Target: equal-and-opposite force
+            dof_pairs.append((target, 0))
+            dof_pairs.append((target, 1))
+            force_values.append(-magnitude * direction[0])
+            force_values.append(-magnitude * direction[1])
 
         elif load_type == 'tess_frame':
             # Force along a principal axis of the mapped tessellation.

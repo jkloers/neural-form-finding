@@ -283,13 +283,13 @@ def compute_geometric_objective(face_centroids, cnv, state, target_cloud, validi
 
     e_area = face_area_penalty(cnv, state.initial_face_areas)
 
-    return (weights['connectivity']      * e_connect +
-            weights['non_intersection']  * e_non_inv +
-            weights['target']            * e_target +
-            weights['arm_symmetry']      * e_symmetry +
-            weights['void_length']       * e_void_l +
-            weights['void_collinear']    * e_void_c +
-            weights['anchoring']         * e_anchoring +
-            weights['boundary_rigidity'] * e_bound_rigid +
-            weights['face_inversion']    * e_inversion +
-            weights['face_area']         * e_area)
+    return (weights['connectivity']              * e_connect +
+            weights['non_intersection']          * e_non_inv +
+            weights['target']                    * e_target +
+            weights['arm_symmetry']              * e_symmetry +
+            weights['void_length']               * e_void_l +
+            weights['void_collinear']            * e_void_c +
+            weights['anchoring']                 * e_anchoring +
+            weights['boundary_rigidity']         * e_bound_rigid +
+            weights.get('face_inversion', 0.0)  * e_inversion +
+            weights['face_area']                 * e_area)

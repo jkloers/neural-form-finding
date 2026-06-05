@@ -300,10 +300,11 @@ def apply_gnn_mapping(
             gnn_params, h, x, senders_np, receivers_np, n_faces, num_layers)
     elif map_type == 'gnn_mpnn':
         from nff.models.mpnn import apply_mpnn
-        num_layers = static_features.get('num_layers') or sum(
+        num_layers  = static_features.get('num_layers') or sum(
             1 for k in gnn_params if k.endswith('_phi_e_W1'))
+        inner_depth = static_features.get('inner_depth', 2)
         new_centroids, _, local_transform = apply_mpnn(
-            gnn_params, h, x, senders_np, receivers_np, n_faces, num_layers)
+            gnn_params, h, x, senders_np, receivers_np, n_faces, num_layers, inner_depth)
     else:  # gnn_dummy (default) — identity-like pass-through
         from nff.models.dummy import apply_dummy_gnn
         new_centroids = apply_dummy_gnn(
@@ -325,6 +326,112 @@ def apply_gnn_mapping(
     new_cnvs = jnp.einsum('fab,fnb->fna', local_transform, cnvs)
 
     return state._replace(face_centroids=new_centroids, centroid_node_vectors=new_cnvs)
+
+
+def apply_direct_transform_mapping(state: CentroidalState, map_params: dict) -> CentroidalState:
+    """Stage 0 direct-transform parameterization.
+
+    Mirrors the GNN output structure without message passing:
+        map_params = {
+            'face_centroids':   (n_faces, 2),     — directly optimized positions
+            'local_transforms': (n_faces, 2, 2),  — per-face linear deformation of initial shapes
+        }
+
+    CNVs are derived as local_transforms[f] @ initial_cnvs[f, n], identical to
+    the GNN line:  new_cnvs = einsum('fab,fnb->fna', local_transform, cnvs)
+
+    Initialized to scale*I so the output equals the scaled flat tessellation.
+    Adjacent faces receive correlated gradients, keeping hinge gaps small.
+    """
+    new_cnvs = jnp.einsum('fab,fnb->fna', map_params['local_transforms'],
+                           state.centroid_node_vectors)
+    return state._replace(
+        face_centroids=map_params['face_centroids'],
+        centroid_node_vectors=new_cnvs,
+    )
+
+
+def init_direct_transform_params(state: CentroidalState, target_params: dict) -> dict:
+    """Initialize direct-transform parameters from the flat tessellation.
+
+    Produces the same initial output as init_direct_vertices_params:
+    centered/scaled centroids and local_transforms = scale*I so that
+    new_cnvs = scale * initial_cnvs.
+
+    Args:
+        state:         CentroidalState of the centered flat tessellation.
+        target_params: dict with keys 'center' and 'radius'.
+
+    Returns:
+        dict with 'face_centroids' (n_faces, 2) and 'local_transforms' (n_faces, 2, 2).
+    """
+    center = jnp.asarray(target_params.get('center', [0.0, 0.0]), dtype=float)
+    radius = float(target_params.get('radius', 1.0))
+    n_faces = state.face_centroids.shape[0]
+
+    tess_centroid = jnp.mean(state.face_centroids, axis=0)
+    all_vertices = reconstruct_vertices(state.face_centroids, state.centroid_node_vectors)
+    vertices_flat = all_vertices.reshape(-1, 2)
+    current_max_dist = jnp.max(jnp.linalg.norm(vertices_flat - tess_centroid, axis=-1))
+    scale = radius / jnp.maximum(current_max_dist, 1e-6)
+
+    centered_centroids = (state.face_centroids - tess_centroid) * scale + center
+    # scale*I: initial output = scale * initial_cnvs, matching direct_vertices init
+    identity_transforms = jnp.tile(jnp.eye(2, dtype=float) * scale, (n_faces, 1, 1))
+
+    return {
+        'face_centroids':   centered_centroids,
+        'local_transforms': identity_transforms,
+    }
+
+
+def apply_direct_mapping(state: CentroidalState, map_params: dict) -> CentroidalState:
+    """Stage 0 direct parameterization.
+
+    map_params is the learnable PyTree itself:
+        {'face_centroids': (n_faces, 2), 'centroid_node_vectors': (n_faces, max_nodes, 2)}
+
+    No analytical function, no Jacobian — the parameters ARE the geometry.
+    All downstream constraints (connectivity, non-intersection, physics) flow
+    gradients back through this identity-like pass.
+    """
+    return state._replace(
+        face_centroids=map_params['face_centroids'],
+        centroid_node_vectors=map_params['centroid_node_vectors'],
+    )
+
+
+def init_direct_vertices_params(state: CentroidalState, target_params: dict) -> dict:
+    """Initialize direct-vertex parameters from the flat tessellation.
+
+    Centers the tessellation on the target shape and scales it so the
+    bounding radius matches the target radius — the same initialization
+    used for GNN-based maps.
+
+    Args:
+        state:         CentroidalState of the flat (undeformed) tessellation.
+        target_params: dict with keys 'center' (2-vector) and 'radius' (scalar).
+
+    Returns:
+        dict with 'face_centroids' and 'centroid_node_vectors' as JAX arrays.
+    """
+    center = jnp.asarray(target_params.get('center', [0.0, 0.0]), dtype=float)
+    radius = float(target_params.get('radius', 1.0))
+
+    tess_centroid = jnp.mean(state.face_centroids, axis=0)
+
+    all_vertices = reconstruct_vertices(state.face_centroids, state.centroid_node_vectors)
+    vertices_flat = all_vertices.reshape(-1, 2)
+    current_max_dist = jnp.max(jnp.linalg.norm(vertices_flat - tess_centroid, axis=-1))
+    scale = radius / jnp.maximum(current_max_dist, 1e-6)
+
+    centered_centroids = (state.face_centroids - tess_centroid) * scale + center
+    scaled_cnvs = state.centroid_node_vectors * scale
+
+    return {
+        'face_centroids': centered_centroids,
+        'centroid_node_vectors': scaled_cnvs,
+    }
 
 
 def apply_mapping(

@@ -61,7 +61,7 @@ class MappingConfig(eqx.Module):
 
 class ValidityConfig(eqx.Module):
     weights: Dict[str, float]
-    validity_method: str   # 'lbfgs' | 'alternating_projection'
+    validity_method: str   # 'none' | 'lbfgs' | 'alternating_projection'
     n_proj_iters: int      # only used when validity_method == 'alternating_projection'
 
     def __init__(self, weights: Dict[str, float],
@@ -84,12 +84,14 @@ class PhysicsConfig(eqx.Module):
     solver_maxiter: int
     solver_tol: float
     updated_lagrangian: bool
+    use_stage2: bool   # set False to skip Stage 2 (returns zero-displacement solution)
 
     def __init__(self, domain_restriction: float, use_contact: bool,
                  k_contact: float, min_angle: float, cutoff_angle: float,
                  linearized_strains: bool, incremental: bool,
                  num_load_steps: int, solver_maxiter: int = 1000,
-                 solver_tol: float = 1e-5, updated_lagrangian: bool = False):
+                 solver_tol: float = 1e-5, updated_lagrangian: bool = False,
+                 use_stage2: bool = True):
         self.domain_restriction = domain_restriction
         self.use_contact = use_contact
         self.k_contact = k_contact
@@ -101,6 +103,7 @@ class PhysicsConfig(eqx.Module):
         self.solver_maxiter = solver_maxiter
         self.solver_tol = solver_tol
         self.updated_lagrangian = updated_lagrangian
+        self.use_stage2 = use_stage2
 
 
 class LossWeights(eqx.Module):
@@ -113,15 +116,18 @@ class LossWeights(eqx.Module):
     regularization: float
     coverage: float
     hinge_gap: float
-    openness: float    # reward large void area at Stage 1 (open initial state)
-    deformation: float # reward large Stage 2 displacement (significant closing)
+    openness: float      # reward large void area at Stage 1 (open initial state)
+    deformation: float   # DEPRECATED — use void_closure / closure_delta instead
+    void_closure: float  # penalty: +w * log1p(void_area_stage2) — minimise remaining void
+    closure_delta: float # reward: -w * log1p(void_stage1 - void_stage2) — maximise void closed
 
     def __init__(self, chamfer: float = 1.0, material_area: float = 1.0,
                  stretching: float = 0.1, shearing: float = 0.1,
                  bending: float = 0.1, contact: float = 1.0,
                  regularization: float = 0.001, coverage: float = 1.0,
                  hinge_gap: float = 0.0,
-                 openness: float = 0.0, deformation: float = 0.0):
+                 openness: float = 0.0, deformation: float = 0.0,
+                 void_closure: float = 0.0, closure_delta: float = 0.0):
         self.chamfer = float(chamfer)
         self.material_area = float(material_area)
         self.stretching = float(stretching)
@@ -133,6 +139,8 @@ class LossWeights(eqx.Module):
         self.hinge_gap = float(hinge_gap)
         self.openness = float(openness)
         self.deformation = float(deformation)
+        self.void_closure = float(void_closure)
+        self.closure_delta = float(closure_delta)
 
 
 class TrainingConfig(eqx.Module):
@@ -257,9 +265,10 @@ def _parse_mapping_config(mapping_raw: dict) -> MappingConfig:
         params_raw = {k: v for k, v in params_raw.items()
                       if k not in ('use_shirley_chiu', 's_val')}
 
-    # Pour les types GNN, map_params contient la config d'initialisation
-    # (hidden_dim, seed…), pas des poids entraînables. On la garde brute.
-    if m_type.startswith('gnn_'):
+    # GNN and direct_* types don't have analytical params in the YAML.
+    # GNN: params hold init config (hidden_dim, seed…), not trainable weights.
+    # direct_vertices / direct_transform: params initialized from the tessellation at runtime.
+    if m_type.startswith('gnn_') or m_type in ('direct_vertices', 'direct_transform'):
         parsed_params = params_raw if isinstance(params_raw, dict) else {}
     else:
         parsed_params = parse_map_params(params_raw)
@@ -278,9 +287,11 @@ def _parse_validity_config(weights_raw: dict) -> ValidityConfig:
     """Parse the [optimization_weights] YAML section.
 
     Recognises two special keys that are not penalty weights:
-      validity_method : 'lbfgs' (default) | 'alternating_projection'
+      validity_method : 'none' | 'lbfgs' (default) | 'alternating_projection'
       n_proj_iters    : int, only used when validity_method='alternating_projection'
     All other keys are treated as penalty weights and passed to the L-BFGS solver.
+
+    validity_method='none' skips Stage 1 entirely (pass-through).
     """
     raw = dict(weights_raw)  # copy so we don't mutate the caller's dict
     validity_method = str(raw.pop('validity_method', 'lbfgs'))
@@ -292,9 +303,11 @@ def _parse_validity_config(weights_raw: dict) -> ValidityConfig:
     )
 
 
-def _parse_physics_config(physics_raw: dict, domain_restriction: float) -> PhysicsConfig:
+def _parse_physics_config(physics_raw: dict, domain_restriction: float,
+                           pipeline_raw: dict = None) -> PhysicsConfig:
     """Parse the [physics] YAML section. Angles are converted from degrees to radians."""
     deg_to_rad = float(jnp.pi / 180.0)
+    use_stage2 = bool((pipeline_raw or {}).get('use_stage2', True))
     return PhysicsConfig(
         domain_restriction=domain_restriction,
         use_contact=bool(physics_raw.get("use_contact", True)),
@@ -307,6 +320,7 @@ def _parse_physics_config(physics_raw: dict, domain_restriction: float) -> Physi
         solver_maxiter=int(physics_raw.get("solver_maxiter", 1000)),
         solver_tol=float(physics_raw.get("solver_tol", 1e-5)),
         updated_lagrangian=bool(physics_raw.get("updated_lagrangian", False)),
+        use_stage2=use_stage2,
     )
 
 
@@ -409,11 +423,12 @@ def _parse_full_raw(raw: dict, config_dir: str) -> 'ExperimentConfig':
     mat_raw = raw.get("material", {})
     bc_raw = raw.get("boundary_conditions", {})
     loads_raw = raw.get("loads", [])
+    pipeline_raw = raw.get("pipeline", {})
 
     pattern_obj = _load_pattern(topo_raw, config_dir)
     mapping_cfg = _parse_mapping_config(mapping_raw)
     validity_cfg = _parse_validity_config(raw.get("optimization_weights", {}))
-    physics_cfg = _parse_physics_config(raw.get("physics", {}), mapping_cfg.domain_restriction)
+    physics_cfg = _parse_physics_config(raw.get("physics", {}), mapping_cfg.domain_restriction, pipeline_raw)
     target_cfg = _parse_target_config(raw.get("target", {}))
     training_cfg = _parse_training_config(raw.get("training", {}), raw.get("loss_weights", {}))
     vis_cfg = _parse_visualization_config(raw.get("visualization", {}))

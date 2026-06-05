@@ -199,20 +199,89 @@ Topology arrays are used as indices in scatter operations inside JIT (`jnp.zeros
 ## 5. Loss function components
 
 ```
-total = chamfer + coverage * chamfer_coverage
-      + w_stretch * u_stretch + w_shear * u_shear + w_bend * u_bend + w_contact * u_contact
-      + w_hinge_gap * hinge_gap
+total = chamfer_w * (precision + coverage_w * recall)          ← shape matching
+      + w_stretch * u_stretch + w_shear * u_shear + w_contact * u_contact
+      + w_hinge_gap * hinge_gap                                 ← connectivity (at Stage 0)
       + w_material * (mapped_area - initial_area)²
-      - w_openness * log1p(void_area)      ← reward: large void area at Stage 1
-      - w_deformation * log1p(u_bend)      ← reward: bending energy at Stage 2
+      - w_openness * log1p(void_area_stage1)                    ← reward: large void at Stage 1
+      + w_void_closure * log1p(void_area_stage2)                ← penalty: remaining void after load
+      - w_closure_delta * log1p(void_stage1 - void_stage2)      ← reward: void closed by loads
+      - w_deformation * log1p(mean_sq_disp)                     ← DEPRECATED
       + w_reg * Σ param²
 ```
 
 The `target_cloud` (n_points=500) is precomputed before JIT in `create_train_step` and closed over in `loss_fn`. Do not call `get_target_points()` inside the loss — it would be rebaked into XLA on every retrace.
 
-**`chamfer` and `coverage` weights must always be equal.** They are the two halves of the bidirectional Chamfer distance (precision and recall toward the target shape). Setting them to different values breaks the symmetry of the fitting signal. Always verify `loss_weights.chamfer == loss_weights.coverage` when writing or editing a config.
+### Coverage formula — critical
 
-**`openness` and `deformation` rewards must stay ≤ 20 % of the `chamfer` signal.** These secondary rewards encourage a good initial configuration (open void area) and meaningful deformation. If they exceed ~20 % of the chamfer weight, they dominate training and the network stops learning the shape.
+**`coverage` must be 1.0 for symmetric Chamfer.** The formula is `chamfer_w × (precision + coverage_w × recall)`. Setting `coverage_w = chamfer_w` inflates recall by `chamfer_w²` while precision only gets `chamfer_w` — a factor-of-chamfer_w asymmetry. Training immediately plateaus on recall; precision stagnates. Always `coverage: 1.0`, adjust `chamfer` alone for global scaling.
+
+### Kirigami closing terms
+
+Two independent closing terms can be used separately or together:
+
+**`void_closure` — absolute penalty on Stage 2 void area:**
+```
+loss = +void_closure * log1p(void_area_stage2)   ← penalty
+```
+No Stage 1 reference. The model is penalised purely for open voids after loading. Cannot cheat by inflating the starting void. Strong, direct signal.
+
+**`closure_delta` — reward for void area decrease Stage 1 → Stage 2:**
+```
+delta = max(0, void_area_stage1 - void_area_stage2)
+loss  = -closure_delta * log1p(delta)             ← reward
+```
+Rewards the decrease in void area caused by the loads. A rigid-body swing leaves void area invariant (delta=0, no reward). The delta gradient is two-sided: encourages a reference that is open (large void_stage1) AND loads that close (small void_stage2). Can be gamed by inflating void_stage1, but `void_closure` together prevents this.
+
+**Using both simultaneously** gives complementary signals: `void_closure` ensures the final state is closed; `closure_delta` ensures it is the loads doing the closing (not just a pre-collapsed reference).
+
+**`deformation` — DEPRECATED.** `mean_sq_disp` rewards large absolute displacement, trivially satisfied by rigid-body swing around the clamp. Set `deformation: 0.0`.
+
+### Validated MPNN + alternating-projection config (2026-06-04)
+
+Canonical reference: `data/configs/architectures/mpnn_proj_base.yaml`
+
+```yaml
+chamfer: 5000.0
+coverage: 1.0        # symmetric Chamfer — never set equal to chamfer
+hinge_gap: 200.0     # prevents centroid gap explosion during chamfer optimisation
+void_closure: 100.0  # penalty on remaining Stage 2 void area
+closure_delta: 50.0  # reward for void closed by loads
+deformation: 0.0     # deprecated
+openness: 0.0        # redundant when closure_delta is active
+contact: 0.0         # off — destabilises early training
+num_layers: 3        # 3-hop message passing needed for hub face gradient
+```
+
+**Why hinge_gap=200:** With chamfer=5000 and clean symmetric gradients, the MPNN freely moves centroids to fit the circle, opening hinge gaps >1 face-length. This makes alternating projections unstable (large CNV corrections → face intersections → physics NaN). Balance formula: `hinge_gap × 24 × (0.1-unit gap)² ≈ chamfer × convergence_chamfer` → ~270. Safe value: 200.
+
+**Why coverage=1.0 not equal to chamfer:** With coverage=500, chamfer=500: recall gets 250,000× weight, precision gets 500×. Training plateau on recall at epoch ~5; loss stays at 10³–10⁴. With coverage=1.0, chamfer=5000: symmetric, loss drops to 10¹–10², chamfer ≈ 0.013 at convergence.
+
+**Key finding:** `void_closure=50` (delta-only) improved the hardest problems dramatically and was complementary to chamfer — not competitive. c009 improved 29× (0.409→0.014). Kirigami closing aligns with the circle target because a closed kirigami contracts inward.
+
+### MPNN inner_depth parameter (2026-06-04)
+
+The MPNN has two inner MLPs per layer: `phi_e` (edge update) and `phi_h` (node update). Each defaults to 2-layer (`inner_depth=2`). With `inner_depth=1`, each MLP is single-layer, halving the non-linear depth per step.
+
+**Why inner_depth=1 matters for deep networks:** Each inner layer adds tanh activations to the gradient path. With `inner_depth=2` and L message-passing layers: 4L tanh ops per gradient path. At L=7: 28 tanh ops → severe gradient vanishing. With `inner_depth=1`: 2L ops. At L=6: 12 tanh ops → manageable.
+
+**Critical bug fixed (2026-06-04):** `create_train_step` in `trainer.py` previously rebuilt `_static_features` from scratch (no `inner_depth`). This caused `apply_mpnn` to be called with `inner_depth=2` (default) during training, even when params were initialised with `inner_depth=1` (no W2/b2 keys) → KeyError at JAX trace time → NaN. Fix: thread `static_features` through `train_pipeline` → `create_train_step` so `inner_depth` reaches the JIT closure.
+
+**Validated 5×5 config:** `data/configs/architectures/mpnn_proj_5x5.yaml`
+- `num_layers: 6, inner_depth: 1` — 6 layers with shallow MLPs = 12 tanh ops.
+  - 8 layers caused gradient vanishing (chamfer 0.286 → 0.526 regression).
+  - 6 layers is optimal for 5×5 (center hub is ~5 hops from boundary).
+- `hinge_gap: 200` — same as 2×2 in absolute units; stable for 5×5.
+- Moment direction: **same-sign CCW for "iris" closing** (all 4 neighbors of center hub).
+  - Alternating ±5 works but activates swirl, not contraction.
+  - Same-sign +10 caused physics explosion (energy=433k). Safe value: **+5**.
+
+### 5×5 tessellation geometry
+
+- `width: 5, height: 5` → 100 faces, radius=2.5, total_area=18.75
+- Center hub: **face 50** (centroid ≈ 7.78, 7.78), degree-4
+- Center hub neighbors: **49** (below), **51** (left), **55** (right), **69** (above) — all degree-4 hubs
+- For iris closing: clamp face 50, apply same-sign moments to {49, 51, 55, 69}
 
 ---
 
