@@ -5,6 +5,7 @@ This module provides the training logic to optimize mapping parameters
 (or future GNN weights) using the differentiable physics pipeline.
 """
 
+import math
 import time
 from typing import Any, NamedTuple
 
@@ -69,11 +70,33 @@ def create_train_step(
         (optimizer, train_step_fn) where train_step_fn : TrainState → (TrainState, float, dict)
     """
 
-    if getattr(training_cfg, 'lr_schedule', 'constant') == 'cosine':
+    lr_schedule = getattr(training_cfg, 'lr_schedule', 'constant')
+    if lr_schedule == 'cosine':
         lr = optax.cosine_decay_schedule(
             init_value=training_cfg.learning_rate,
             decay_steps=training_cfg.num_epochs,
             alpha=0.1,
+        )
+    elif lr_schedule == 'warmup_cosine':
+        # Linear warm-up for first 5% of epochs (min 20, max 100), then cosine decay.
+        # Prevents the large initial gradient steps from pushing the tessellation into
+        # contact-singularity or near-mechanism configurations on the very first epochs.
+        warmup_steps = max(20, min(100, training_cfg.num_epochs // 20))
+        decay_steps  = max(1, training_cfg.num_epochs - warmup_steps)
+        lr = optax.join_schedules(
+            schedules=[
+                optax.linear_schedule(
+                    init_value=training_cfg.learning_rate * 0.01,
+                    end_value=training_cfg.learning_rate,
+                    transition_steps=warmup_steps,
+                ),
+                optax.cosine_decay_schedule(
+                    init_value=training_cfg.learning_rate,
+                    decay_steps=decay_steps,
+                    alpha=0.1,
+                ),
+            ],
+            boundaries=[warmup_steps],
         )
     else:
         lr = training_cfg.learning_rate
@@ -135,7 +158,16 @@ def create_train_step(
         grad_norms = jax.tree_util.tree_map(
             lambda g: jnp.sqrt(jnp.sum(g ** 2)), grads)
 
-        updates, new_opt_state = optimizer.update(grads, state.opt_state)
+        # NaN/Inf-safe update: replace any non-finite gradient entry with zero
+        # before clipping and applying. This makes individual contact-singularity
+        # spikes non-destructive — the optimizer step is skipped for the affected
+        # parameters rather than corrupting them with inf/nan values.
+        safe_grads = jax.tree_util.tree_map(
+            lambda g: jnp.where(jnp.isfinite(g), g, jnp.zeros_like(g)),
+            grads,
+        )
+
+        updates, new_opt_state = optimizer.update(safe_grads, state.opt_state)
         new_params = optax.apply_updates(state.params, updates)
 
         new_state = TrainState(params=new_params, opt_state=new_opt_state, rng=rng)
@@ -195,9 +227,20 @@ def train_pipeline(
     t_train_start = time.time()
     t_epoch_start = time.time()
 
+    # Best-checkpoint: track the params that achieved the lowest valid chamfer
+    # loss during the entire training run. Gradient explosions can corrupt the
+    # final state — returning the best-seen params prevents that.
+    best_chamfer  = float('inf')
+    best_params   = initial_map_params
+
     for epoch in range(training_cfg.num_epochs):
         state, loss, aux = train_step_fn(state)
         history_loss.append(aux)
+
+        chamfer_val = float(aux.get('chamfer_total', float('nan')))
+        if math.isfinite(chamfer_val) and chamfer_val < best_chamfer:
+            best_chamfer = chamfer_val
+            best_params  = state.params
 
         if epoch % 5 == 0 or epoch == training_cfg.num_epochs - 1:
             t_now = time.time()
@@ -238,7 +281,13 @@ def train_pipeline(
             print(f"         grads: {per_param}")
 
     total_time = time.time() - t_train_start
+    final_chamfer = float(history_loss[-1].get('chamfer_total', float('nan'))) if history_loss else float('nan')
     print(f"\nTraining complete: {training_cfg.num_epochs} epochs in {total_time/60:.1f}min "
           f"({total_time/training_cfg.num_epochs:.1f}s/epoch avg)")
+    if best_chamfer < final_chamfer - 1e-6:
+        print(f"  ✓ Returning best checkpoint: chamfer={best_chamfer:.4f} "
+              f"(final was {final_chamfer:.4f} — checkpoint saved {final_chamfer/best_chamfer:.1f}× improvement)")
+    else:
+        print(f"  ✓ Final state is best: chamfer={final_chamfer:.4f}")
 
-    return state.params, history_loss
+    return best_params, history_loss

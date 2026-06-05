@@ -344,11 +344,12 @@ def visualize_pipeline_results(result, tessellation, config, target_params, conf
 
 
 def plot_loss_history(history, config, run_dir=None):
-    """Plots the training loss history.
+    """Loss history with stacked component contributions.
 
-    Panel 1 (always): standard penalty terms on a log scale.
-    Panel 2 (when active): closing reward terms on a linear scale — only
-      rendered when openness or deformation weights are non-zero.
+    Positive penalty terms are drawn as a stackplot (same style as the energy
+    balance plot).  Negative reward terms (closure_delta, openness, deformation)
+    are stacked as filled areas below zero.  The total loss is a bold black line
+    on top so the reader can immediately see which components dominate.
     """
     if not history:
         return
@@ -356,82 +357,121 @@ def plot_loss_history(history, config, run_dir=None):
     plt.rcParams.update({
         'font.family': 'serif',
         'axes.linewidth': 1.0,
-        'font.size': 10,
-        'grid.alpha': 0.3
+        'lines.linewidth': 1.5,
+        'font.size': 11,
+        'legend.frameon': True,
+        'legend.edgecolor': 'black',
+        'legend.fancybox': False,
     })
 
     epochs = np.arange(len(history))
 
-    def _series(key, default=0.0):
-        return [float(h.get(key, default)) for h in history]
+    def _s(key):
+        return np.array([float(h.get(key, 0.0)) for h in history])
 
-    total       = _series('loss_total')
-    geom_total  = _series('loss_geometric')
-    phys_total  = _series('loss_physical')
-    chamfer     = _series('comp_geom_chamfer')
-    hinge_gap   = _series('hinge_gap')
-    reg         = _series('comp_regularization')
-    mat_area    = _series('comp_geom_material_area')
-    openness    = _series('openness')
-    deformation = _series('deformation')
+    def _active(arr):
+        return bool(np.any(np.abs(arr) > 1e-10))
 
-    has_openness    = any(v != 0.0 for v in openness)
-    has_deformation = any(v != 0.0 for v in deformation)
-    has_hinge_gap   = any(v != 0.0 for v in hinge_gap)
-    has_closing     = has_openness or has_deformation
+    # ── Positive (penalty) terms — regularization excluded (too small to read) ─
+    chamfer    = _s('comp_geom_chamfer')
+    void_cl    = _s('void_closure')
+    hinge_gap  = _s('hinge_gap')
+    stretching = _s('comp_phys_stretching')
+    shearing   = _s('comp_phys_shearing')
+    bending    = _s('comp_phys_bending')
+    contact    = _s('comp_phys_contact')
+    mat_area   = _s('comp_geom_material_area')
 
-    n_rows = 2 if has_closing else 1
-    fig, axes = plt.subplots(n_rows, 1, figsize=(10, 5 * n_rows), squeeze=False)
-    ax = axes[0, 0]
+    # ── Negative (reward) terms ───────────────────────────────────────────────
+    cl_delta   = _s('closure_delta')   # ≤ 0
+    openness   = _s('openness')        # ≤ 0
+    deform     = _s('deformation')     # ≤ 0
 
-    # ── Panel 1: standard penalty terms (log scale) ───────────────────────────
-    ax.plot(epochs, total,      color='#111111', linewidth=3.0, label='Total',     zorder=10)
-    ax.plot(epochs, geom_total, color='#F58025', linewidth=2.0, label='Geometric', zorder=5)
-    ax.plot(epochs, phys_total, color='#2D6A4F', linewidth=2.0, label='Physical',  zorder=5)
-    ax.plot(epochs, chamfer,    color='#E07B39', linewidth=1.5, linestyle='--',
-            label='Chamfer', zorder=4, alpha=0.8)
-    if has_hinge_gap:
-        ax.plot(epochs, hinge_gap, color='#9B59B6', linewidth=1.5, linestyle='--',
-                label='Hinge Gap', zorder=4, alpha=0.8)
-    if any(v != 0.0 for v in reg):
-        ax.plot(epochs, reg, color='#888888', linewidth=1.2, linestyle=':',
-                label='Regularization', zorder=3, alpha=0.7)
-    if any(v != 0.0 for v in mat_area):
-        ax.plot(epochs, mat_area, color='#BDC3C7', linewidth=1.2, linestyle=':',
-                label='Material Area', zorder=3, alpha=0.7)
+    total = _s('total')
 
-    pos_vals = [v for v in total + geom_total + phys_total + chamfer if v > 0]
-    if pos_vals:
-        ax.set_yscale('log')
+    # Build active stacks (no regularization)
+    pos_terms = [
+        (chamfer,    'Chamfer',       '#E07B39'),
+        (void_cl,    'Void closure',  '#1565C0'),
+        (hinge_gap,  'Hinge gap',     '#8E24AA'),
+        (stretching, 'Stretching',    '#2D6A4F'),
+        (shearing,   'Shearing',      '#4CAF50'),
+        (bending,    'Bending',       '#80CBC4'),
+        (contact,    'Contact',       '#9E9E9E'),
+        (mat_area,   'Material area', '#BDBDBD'),
+    ]
+    neg_terms = [
+        (cl_delta, 'Closure delta  (reward ↓)', '#D32F2F'),
+        (openness, 'Openness  (reward ↓)',       '#1976D2'),
+        (deform,   'Deformation  (reward ↓)',    '#F57C00'),
+    ]
+
+    active_pos = [(a, l, c) for a, l, c in pos_terms if _active(a)]
+    active_neg = [(a, l, c) for a, l, c in neg_terms if _active(a)]
+
+    # ── Compute robust y-limits BEFORE plotting so data is clipped at the axis ─
+    # y_max must cover the stacked SUM (not individual terms) and the total loss.
+    # y_min must cover the negative stacked bottom and any negative total loss.
+    # Skip the first 10 epochs (JIT warmup spike) when computing the limits.
+    skip = min(10, max(1, len(epochs) // 20))
+    s = slice(skip, None)
+
+    pos_sum = np.zeros(len(epochs))
+    for a, _, _ in active_pos:
+        pos_sum += a
+
+    neg_bottom = np.zeros(len(epochs))
+    for a, _, _ in active_neg:
+        neg_bottom += a
+
+    total_clean = np.where(np.isfinite(total), total, 0.0)
+    pos_sum_clean = np.where(np.isfinite(pos_sum), pos_sum, 0.0)
+    neg_clean = np.where(np.isfinite(neg_bottom), neg_bottom, 0.0)
+
+    above = np.concatenate([pos_sum_clean[s], total_clean[s][total_clean[s] > 0]])
+    below = np.concatenate([neg_clean[s][neg_clean[s] < 0],
+                            total_clean[s][total_clean[s] < 0]])
+
+    y_max = float(np.percentile(above, 99)) * 1.35 if above.size > 0 else 1.0
+    y_min = (float(np.percentile(below, 1)) * 1.25
+             if below.size > 0 else -0.04 * y_max)
+    y_min = min(y_min, -0.03 * y_max)  # always show a small negative margin
+
+    fig, ax = plt.subplots(figsize=(11, 5.5))
+    ax.set_ylim(y_min, y_max)           # set FIRST so all subsequent draws are clipped
+
+    # ── Stacked positive area ─────────────────────────────────────────────────
+    if active_pos:
+        arrays = [a for a, _, _ in active_pos]
+        labels = [l for _, l, _ in active_pos]
+        colors = [c for _, _, c in active_pos]
+        ax.stackplot(epochs, *arrays, labels=labels, colors=colors, alpha=0.70, zorder=2)
+
+    # ── Stacked negative area (below zero) ────────────────────────────────────
+    cum = np.zeros(len(epochs))
+    for arr, label, color in active_neg:
+        ax.fill_between(epochs, cum, cum + arr,
+                        color=color, alpha=0.55, label=label, zorder=2)
+        cum = cum + arr
+
+    # ── Total loss line ───────────────────────────────────────────────────────
+    ax.plot(epochs, total, color='#111111', linewidth=2.5, label='Total loss', zorder=10)
+    ax.axhline(0, color='#333333', linewidth=0.8, linestyle='-', alpha=0.4)
+
     ax.set_xlabel('Training Epoch', fontweight='bold')
-    ax.set_ylabel('Weighted Loss (log scale)', fontweight='bold')
-    ax.set_title('Training Loss — Standard Terms', fontsize=13, pad=12, fontweight='bold')
-    ax.grid(True, which="both", linestyle='--', alpha=0.3)
-    ax.legend(loc='upper right', frameon=True, fontsize=10, ncol=2)
-
-    # ── Panel 2: closing reward terms (linear scale, values are negative) ─────
-    if has_closing:
-        ax2 = axes[1, 0]
-        if has_openness:
-            ax2.plot(epochs, openness, color='#1A73E8', linewidth=2.5,
-                     label='Openness (−w·log1p(void))', zorder=5)
-        if has_deformation:
-            ax2.plot(epochs, deformation, color='#CC0000', linewidth=2.5,
-                     label='Deformation (−w·log1p(U_bend))', zorder=5)
-        ax2.axhline(0, color='#888888', linewidth=0.8, linestyle='-')
-
-        ax2.set_xlabel('Training Epoch', fontweight='bold')
-        ax2.set_ylabel('Reward value  (↓ = more active)', fontweight='bold')
-        ax2.set_title('Training Loss — Closing Reward Terms', fontsize=13, pad=12, fontweight='bold')
-        ax2.grid(True, linestyle='--', alpha=0.3)
-        ax2.legend(loc='lower right', frameon=True, fontsize=10)
+    ax.set_ylabel('Weighted loss contribution', fontweight='bold')
+    ax.set_title('Training Loss — Component Contributions',
+                 fontsize=13, pad=12, fontweight='bold')
+    ax.grid(True, linestyle=':', alpha=0.3, zorder=1)
+    # Legend at lower right — converged values are lowest there, maximising clear space
+    ax.legend(loc='lower right', fontsize=9, ncol=2, frameon=True, framealpha=0.92)
 
     plt.tight_layout()
 
     if config.visualization.save_outputs and run_dir:
         save_path = os.path.join(run_dir, "training_loss.png")
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"  Saved loss history plot to {save_path}")
+        print(f"  Saved loss history to {save_path}")
 
     if config.visualization.show_plots:
         plt.show()
