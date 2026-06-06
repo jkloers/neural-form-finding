@@ -272,6 +272,95 @@ Do not edit these files without first proposing a written plan and receiving exp
 
 ---
 
+## 9. SOFA Physics Oracle & Tesseract Integration
+
+**Branch:** `Tesseract_SOFA`  
+**Status:** Phase 2 complete (Tesseract wrapper built, Docker not yet built/tested).
+
+---
+
+### 9.1 Module map and roles
+
+```
+sofa/
+├── simulate_cell.py     Physics core — SOFA headless simulation, pure physics,
+│                        no Tesseract awareness. Entry point: evaluate_unit_cell().
+│                        Run locally: ./sofa/run_sofa.sh sofa/simulate_cell.py
+└── run_sofa.sh          macOS launcher — sets SOFA env vars, calls Homebrew Python 3.12
+
+tesseract/
+├── tesseract_api.py     Tesseract API layer — InputSchema/OutputSchema (Pydantic),
+│                        apply(), finite-difference gradients. Imports simulate_cell.
+├── tesseract_config.yaml Docker build recipe — downloads SOFA Linux binary,
+│                         sets PYTHONPATH/LD_LIBRARY_PATH, copies simulate_cell.py.
+├── tesseract_requirements.txt   pip deps (numpy only)
+└── example_inputs.json  Smoke-test payloads for `tesseract apply`
+
+data/configs/sofa/
+└── sandbox_1x1.yaml     NFF config for 1×1 unit_RDQK_0 tessellation (4 faces,
+                         total_area=4.0, direct_transform mapping, 200 epochs).
+                         Use with: python train.py --config-dir sofa --config-name sandbox_1x1
+```
+
+---
+
+### 9.2 Two-environment architecture
+
+| Environment | Python | SOFA | Purpose |
+|---|---|---|---|
+| `kgnn_mac` (conda) | 3.10 | — | JAX / NFF pipeline |
+| Homebrew + `kgnn_sofa` | 3.12 | macOS ARM64 binary | Local SOFA development |
+| Docker (Tesseract) | 3.12 | Linux x86_64 binary | Deployed oracle |
+
+The Docker container is **self-contained**. It communicates with the JAX pipeline exclusively via the Tesseract HTTP API — no shared Python env, no shared filesystem.
+
+---
+
+### 9.3 Critical invariants — do not violate
+
+**SOFA global state:** SOFA uses a process-level singleton registry. Concurrent `evaluate_unit_cell()` calls in the same process corrupt state. The `_SOFA_LOCK` in `tesseract_api.py` serialises all calls. Do not remove it or call `evaluate_unit_cell()` from multiple threads without this lock.
+
+**Stateless `apply()`:** Every call to `apply()` must create a fresh `Sofa.Core.Node("root")` and call `Sofa.Simulation.unload(root)` in a `finally` block. Never cache a root node between calls.
+
+**Energy extraction:** `Sofa.Simulation.getPotentialEnergy()` does not exist in SOFA v25.12. Energy is computed analytically via `_euler_bernoulli_energy()` in `simulate_cell.py`, applied to the equilibrium positions returned by SOFA. This is intentional — do not attempt to re-introduce SOFA API energy extraction without verifying the v25.12 API.
+
+**SOFA plugin names (v25.12):** Component names changed between versions. The working set for our scene is:
+- `DefaultAnimationLoop` (required for `Sofa.Simulation.animate()`)
+- `CGLinearSolver` — from `Sofa.Component.LinearSolver.Iterative`
+- `CollisionResponse` (NOT `DefaultContactManager` — removed in v24.12)
+- `Sofa.Component.Visual` (NOT `Sofa.Component.Visual.Style`)
+
+**BeamFEMForceField template:** Requires `Rigid3d` MechanicalObject. Does not support `listRadius` or `useShearStressComputation` in v25.12. Use separate child nodes (`mech.addChild("arms")`, `mech.addChild("hinges")`) each with their own `EdgeSetTopologyContainer` + `BeamFEMForceField` to achieve per-group radius.
+
+---
+
+### 9.4 Gradient strategy
+
+SOFA has no adjoint. Gradients come from Tesseract's `finite_difference_jacobian` (central differences, `eps=fd_eps`, default `1e-5`). Cost: 2 × n_differentiable_inputs SOFA simulations per gradient call (6 total for Phase 2's 3 inputs).
+
+---
+
+### 9.5 Phase roadmap
+
+| Phase | Status | Description |
+|---|---|---|
+| 1 | Done | Standalone `simulate_cell.py` — 1×1 unit cell, BeamFEM, analytical energy |
+| 2 | Built, not deployed | Tesseract wrapper — Docker build, HTTP API, finite-diff gradients |
+| 3 | Planned | Richer physics (3D deployment, actual face mesh, contact). Inputs from `CentroidalState`. |
+| 4 | Planned | Use Tesseract energy as reward signal / fine-tuning in NFF training loop |
+
+---
+
+### 9.6 Files that require a written plan before editing
+
+| File | Reason |
+|---|---|
+| `sofa/simulate_cell.py` | Any geometry change invalidates the `_euler_bernoulli_energy` reference positions |
+| `tesseract/tesseract_api.py` | Schema changes break existing JAX callers |
+| `tesseract/tesseract_config.yaml` | Wrong SOFA download URL or ENV will silently break the Docker build |
+
+---
+
 ## 8. Quick reference — critical functions
 
 | Function | File | Role |

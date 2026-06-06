@@ -32,35 +32,33 @@ build_config:
 
   # Copy the SOFA physics core into the container root.
   # tesseract_api.py imports simulate_cell via `import simulate_cell`.
+  # simulate_cell.py is kept in sofa/ for development but copied to tesseract/
+  # so it lands in __tesseract_source__ (the Docker build context).
+  # package_data paths are relative to the tesseract/ directory.
   package_data:
-    - ["sofa/simulate_cell.py", "simulate_cell.py"]
+    - ["simulate_cell.py", "simulate_cell.py"]
 
   custom_build_steps:
     # ── Download and install SOFA v25.12 Linux / Python 3.12 binary ────────────
-    # The binary is ~300 MB. It contains the full SOFA framework and the
-    # SofaPython3 plugin pre-built against CPython 3.12.
-    #
-    # SOFA does not ship a pip wheel, so we fetch the pre-compiled archive
-    # directly from GitHub Releases and extract it to /opt/sofa.
+    # SOFA does not ship a pip wheel — fetch the pre-compiled archive from
+    # GitHub Releases and extract to /opt/sofa (~300 MB download).
     - |
       RUN wget -q \
             "https://github.com/sofa-framework/sofa/releases/download/v25.12.00/SOFA_v25.12.00_Linux-Python_3.12.zip" \
             -O /tmp/sofa.zip \
           && unzip -q /tmp/sofa.zip -d /opt \
-          && mv /opt/SOFA_v25.12.00_Linux-Python_3.12 /opt/sofa \
+          && mv /opt/SOFA_v25.12.00_Linux* /opt/sofa \
           && rm /tmp/sofa.zip
 
     # ── Wire SOFA into the Python path ─────────────────────────────────────────
-    # PYTHONPATH makes `import Sofa` work for any Python process in the container.
-    # LD_LIBRARY_PATH lets the dynamic linker find SOFA's shared libraries when
-    # the SofaPython3 .so files are loaded by the Python interpreter.
+    # Use explicit values (no variable expansion) to avoid Dockerfile warnings
+    # about undefined $PYTHONPATH / $LD_LIBRARY_PATH at build time.
     - |
       ENV SOFA_ROOT=/opt/sofa
-      ENV PYTHONPATH=/opt/sofa/plugins/SofaPython3/lib/python3/site-packages:${PYTHONPATH}
-      ENV LD_LIBRARY_PATH=/opt/sofa/lib:/opt/sofa/plugins/SofaPython3/lib:${LD_LIBRARY_PATH}
+      ENV PYTHONPATH=/opt/sofa/plugins/SofaPython3/lib/python3/site-packages
+      ENV LD_LIBRARY_PATH=/opt/sofa/lib:/opt/sofa/plugins/SofaPython3/lib
 
     # ── Verify the SOFA import at build time ───────────────────────────────────
-    # Fails the Docker build immediately if the binary or env wiring is broken,
-    # rather than surfacing errors at runtime.
+    # Fails the build immediately if the binary or env wiring is broken.
     - |
       RUN python -c "import Sofa; import Sofa.Core; import Sofa.Simulation; print('SOFA import OK')"

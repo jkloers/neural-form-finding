@@ -39,6 +39,65 @@ Each stage is defined by a single interface. Swapping an implementation only req
 
 ---
 
+## SOFA Physics Oracle (branch `Tesseract_SOFA`)
+
+A high-fidelity physics oracle that complements the JAX pipeline. SOFA handles mechanics the JAX solver cannot: thick rigid faces, 3D buckling, and self-contact. It connects to JAX via [Tesseract](https://github.com/pasteurlabs/tesseract-core) (Pasteur Labs), which wraps the simulation as a containerised HTTP microservice and provides finite-difference gradient fallbacks.
+
+```
+JAX pipeline  ──HTTP──▶  Tesseract container (Docker, Linux/amd64)
+(Python 3.10)                │
+                        tesseract/tesseract_api.py
+                             │  imports
+                        sofa/simulate_cell.py
+                             │  calls
+                        SOFA v25.12  (/opt/sofa/)
+                             │
+                        ◀── strain_energy (float) ──
+```
+
+**Phase 2 (current):** scalar filament geometry → scalar strain energy, with finite-difference Jacobians for JAX.  
+**Phase 3 (planned):** array inputs from `CentroidalState`, richer QoIs (per-hinge energy, equilibrium positions).
+
+### Local SOFA setup (macOS ARM64)
+
+Prerequisites: Homebrew Python 3.12, SOFA v25.12 macOS binary at `~/sofa/v25.12/`.
+
+```bash
+# Run the simulation directly (sets env vars automatically)
+./sofa/run_sofa.sh sofa/simulate_cell.py
+
+# Expected output:
+# thin/long  → ~7.9 J
+# thick/short → ~3142 J
+# Monotonicity check: PASS
+```
+
+### Tesseract deployment
+
+```bash
+# 1. Install the Tesseract CLI (any Python env)
+pip install tesseract-core
+
+# 2. Build the Docker image (~5 min, downloads SOFA Linux binary)
+cd tesseract
+tesseract build .
+
+# 3. Smoke test
+tesseract apply '{"filament_thickness": 0.01, "filament_length": 0.2, "applied_displacement": 0.1}'
+# → {"strain_energy": ~7.9}
+
+# 4. Gradient test (calls apply 6× internally via central FD)
+tesseract apply --jacobian '{"filament_thickness": 0.01, "filament_length": 0.2, "applied_displacement": 0.1}'
+```
+
+### NFF config for 1×1 unit cell
+
+```bash
+python train.py --config-dir sofa --config-name sandbox_1x1
+```
+
+---
+
 ## Installation
 
 ```bash
