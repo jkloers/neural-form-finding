@@ -1,0 +1,17 @@
+{
+  "_comment": "Test payloads for `tesseract apply`. Run both and verify E_thick > E_thin.",
+
+  "thin_long": {
+    "filament_thickness": 0.01,
+    "filament_length": 0.20,
+    "applied_displacement": 0.10,
+    "fd_eps": 1e-5
+  },
+
+  "thick_short": {
+    "filament_thickness": 0.05,
+    "filament_length": 0.05,
+    "applied_displacement": 0.10,
+    "fd_eps": 1e-5
+  }
+}
