@@ -275,7 +275,7 @@ Do not edit these files without first proposing a written plan and receiving exp
 ## 9. SOFA Physics Oracle & Tesseract Integration
 
 **Branch:** `Tesseract_SOFA`  
-**Status:** Phase 2 complete (Tesseract wrapper built, Docker not yet built/tested).
+**Status:** Phase 3b complete — unified mesh, correct hinge geometry, kirigami loading. Docker not yet built/tested.
 
 ---
 
@@ -283,18 +283,34 @@ Do not edit these files without first proposing a written plan and receiving exp
 
 ```
 sofa/
-├── simulate_cell.py     Physics core — SOFA headless simulation, pure physics,
-│                        no Tesseract awareness. Entry point: evaluate_unit_cell().
-│                        Run locally: ./sofa/run_sofa.sh sofa/simulate_cell.py
+├── simulate_cell.py     Thin entry point — evaluate_unit_cell() public API.
+│                        Imports from geometry/materials/scene_builder.
+│                        Run: ./sofa/run_sofa.sh sofa/simulate_cell.py
+├── geometry.py          Unified hex mesh builder — build_unified_mesh().
+│                        Face panels + hinge strips in one MechanicalObject.
+│                        Hinge positions from patterns.yaml vertex pairs (corners).
+├── materials.py         SvK energy + von Mises stress post-processing.
+├── scene_builder.py     SOFA scene — FixedConstraint on F0, rotation loading on F1.
+│                        Loading: F1 rotates about H0 fold axis at x=a (not shear).
+├── dump_results.py      Saves nodes_nat/cur + hexes + bc_masks + QoIs to .npz.
+│                        No matplotlib (avoids SOFA+Qt crash on macOS).
+│                        Run: ./sofa/run_sofa.sh sofa/dump_results.py [args]
+├── visualize.py         6-panel figure: z-disp, von Mises, face identity, 2 side
+│                        views, QoI table. Runs in kgnn_mac conda env.
+│                        Run: conda run -n kgnn_mac python sofa/visualize.py --npz ...
+├── run_viz.sh           Combined wrapper: dump → visualize.
+│                        Usage: ./sofa/run_viz.sh [--save] [--fold-length 0.010 ...]
+│                        Output: sofa/output/sofa_result.png
 └── run_sofa.sh          macOS launcher — sets SOFA env vars, calls Homebrew Python 3.12
 
-tesseract/
-├── tesseract_api.py     Tesseract API layer — InputSchema/OutputSchema (Pydantic),
-│                        apply(), finite-difference gradients. Imports simulate_cell.
-├── tesseract_config.yaml Docker build recipe — downloads SOFA Linux binary,
-│                         sets PYTHONPATH/LD_LIBRARY_PATH, copies simulate_cell.py.
-├── tesseract_requirements.txt   pip deps (numpy only)
-└── example_inputs.json  Smoke-test payloads for `tesseract apply`
+tesseract/              (kept in sync with sofa/ — copy shipped in Docker)
+├── tesseract_api.py     Tesseract API — InputSchema/OutputSchema, apply(), FD grads.
+├── tesseract_config.yaml
+├── tesseract_requirements.txt
+├── simulate_cell.py    } Mirror of sofa/*.py — keep in sync manually after sofa/ changes
+├── geometry.py         }
+├── materials.py        }
+└── scene_builder.py    }
 
 data/configs/sofa/
 └── sandbox_1x1.yaml     NFF config for 1×1 unit_RDQK_0 tessellation (4 faces,
@@ -345,9 +361,12 @@ SOFA has no adjoint. Gradients come from Tesseract's `finite_difference_jacobian
 | Phase | Status | Description |
 |---|---|---|
 | 1 | Done | Standalone `simulate_cell.py` — 1×1 unit cell, BeamFEM, analytical energy |
-| 2 | Built, not deployed | Tesseract wrapper — Docker build, HTTP API, finite-diff gradients |
-| 3 | Planned | Richer physics (3D deployment, actual face mesh, contact). Inputs from `CentroidalState`. |
-| 4 | Planned | Use Tesseract energy as reward signal / fine-tuning in NFF training loop |
+| 2 | Done | Tesseract wrapper — Docker build recipe, HTTP API, finite-diff gradients (BeamFEM, superseded) |
+| 3a | Done | HexahedronFEM physics + Tesseract wrapper synced (superseded by 3b) |
+| 3b | Done | Unified mesh (faces+hinges), correct hinge corners, rotation loading on F1 |
+| 3c | Planned | Face-face contact (FreeMotionAnimationLoop) |
+| 3d | Planned | Plasticity (d_plasticYieldThreshold) |
+| 4 | Planned | Use Tesseract strain_energy as reward signal / fine-tuning in NFF training loop |
 
 ---
 
@@ -355,7 +374,10 @@ SOFA has no adjoint. Gradients come from Tesseract's `finite_difference_jacobian
 
 | File | Reason |
 |---|---|
-| `sofa/simulate_cell.py` | Any geometry change invalidates the `_euler_bernoulli_energy` reference positions |
+| `sofa/simulate_cell.py` | Public API — changes affect Tesseract callers |
+| `sofa/geometry.py` | Any geometry change invalidates the hex mesh layout and SvK reference positions |
+| `tesseract/simulate_cell.py` | Must stay in sync with `sofa/simulate_cell.py` |
+| `tesseract/geometry.py` | Must stay in sync with `sofa/geometry.py` — shipped in Docker |
 | `tesseract/tesseract_api.py` | Schema changes break existing JAX callers |
 | `tesseract/tesseract_config.yaml` | Wrong SOFA download URL or ENV will silently break the Docker build |
 

@@ -1,17 +1,27 @@
 {
-  "_comment": "Test payloads for `tesseract apply`. Run both and verify E_thick > E_thin.",
+  "_comment": "Test payloads for `tesseract apply` (Phase 3a HexahedronFEM). Run both and verify E_narrow_long > E_wide_short: narrower arm = shorter cantilever = stiffer; longer fold = more material = stiffer.",
 
-  "thin_long": {
-    "filament_thickness": 0.01,
-    "filament_length": 0.20,
-    "applied_displacement": 0.10,
+  "narrow_long": {
+    "hinge_arm_width": 0.003,
+    "hinge_fold_length": 0.030,
+    "applied_displacement": 0.010,
+    "face_size": 0.100,
+    "sheet_thickness": 0.001,
+    "young_modulus": 3.5e9,
+    "poisson_ratio": 0.36,
+    "yield_strength": 55e6,
     "fd_eps": 1e-5
   },
 
-  "thick_short": {
-    "filament_thickness": 0.05,
-    "filament_length": 0.05,
-    "applied_displacement": 0.10,
+  "wide_short": {
+    "hinge_arm_width": 0.010,
+    "hinge_fold_length": 0.010,
+    "applied_displacement": 0.010,
+    "face_size": 0.100,
+    "sheet_thickness": 0.001,
+    "young_modulus": 3.5e9,
+    "poisson_ratio": 0.36,
+    "yield_strength": 55e6,
     "fd_eps": 1e-5
   }
 }

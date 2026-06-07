@@ -1,15 +1,18 @@
 name: nff-sofa-oracle
-version: "0.1.0"
+version: "0.2.0"
 description: |
   High-fidelity SOFA physics oracle for the Neural Form-Finding (NFF) pipeline.
 
-  Simulates a 1×1 kirigami unit cell (4 rigid faces + 4 filament hinges) using
-  SOFA v25.12 BeamFEM and returns the filament strain energy at static equilibrium.
-  Gradients are computed via central finite differences, making this oracle
-  plug-and-play with JAX via the Tesseract interface.
+  Simulates a 1×1 kirigami unit cell (4 rigid faces + 4 volumetric hinge strips)
+  using SOFA v25.12 HexahedronFEMForceField (corotational large) and returns four
+  mechanical quantities at static equilibrium: SvK strain energy, peak von Mises
+  stress, peak out-of-plane displacement, and first-yield fraction.
+  Gradients are computed via central finite differences (6 SOFA calls per gradient).
 
-  Phase 2 — scalar inputs (filament geometry + applied displacement).
-  Phase 3 will extend inputs to full face geometry from NFF CentroidalState.
+  Phase 3a — HexahedronFEM inputs (hinge_arm_width, hinge_fold_length,
+  applied_displacement) + material constants.
+  Phase 4 will connect face_centroids from NFF CentroidalState as differentiable
+  inputs and use strain_energy as a training reward signal.
 
 build_config:
   # Ubuntu/Debian base with Python 3.12 — matches local kgnn_sofa SOFA environment.
