@@ -294,9 +294,13 @@ sofa/
 │                        Loading: F1 rotates about H0 fold axis at x=a (not shear).
 ├── dump_results.py      Saves nodes_nat/cur + hexes + bc_masks + QoIs to .npz.
 │                        No matplotlib (avoids SOFA+Qt crash on macOS).
+│                        Args: --mode rotation|moment --angle [deg] --moment
+│                              --arm-width --fold-length --thickness
+│                        Full 3D rotation formula (no small-angle approx); works 0-90+°
 │                        Run: ./sofa/run_sofa.sh sofa/dump_results.py [args]
-├── visualize.py         6-panel figure: z-disp, von Mises, face identity, 2 side
-│                        views, QoI table. Runs in kgnn_mac conda env.
+├── visualize.py         Two-panel "kirigami opening" figure:
+│                        LEFT = flat natural state top-down (hatched void cuts, hinge labels)
+│                        RIGHT = 3D deformed butterfly fold (boundary surface, isometric)
 │                        Run: conda run -n kgnn_mac python sofa/visualize.py --npz ...
 ├── run_viz.sh           Combined wrapper: dump → visualize.
 │                        Usage: ./sofa/run_viz.sh [--save] [--fold-length 0.010 ...]

@@ -67,3 +67,34 @@ def vm_stress_per_tet(pos_nat: np.ndarray, pos_cur: np.ndarray,
         s = sigma - np.trace(sigma)/3 * np.eye(3)
         vm_list.append(float(np.sqrt(1.5 * np.sum(s**2))))
     return np.array(vm_list) if vm_list else np.array([0.0])
+
+
+def vm_stress_per_hex(pos_nat: np.ndarray, pos_cur: np.ndarray,
+                      hexes: np.ndarray, young: float, nu: float) -> np.ndarray:
+    """Per-hex average von Mises stress [Pa] (mean of 5-tet decomposition)."""
+    lam = young * nu / ((1 + nu) * (1 - 2*nu))
+    mu  = young / (2 * (1 + nu))
+    vm_hex = np.zeros(len(hexes))
+    for h_idx, nodes in enumerate(hexes):
+        n0,n1,n2,n3,n4,n5,n6,n7 = nodes
+        tet_5 = [
+            [n0,n1,n2,n5], [n0,n2,n3,n7], [n0,n5,n7,n4],
+            [n2,n5,n6,n7], [n0,n5,n2,n7],
+        ]
+        vals = []
+        for tet in tet_5:
+            dX = (pos_nat[tet[1:]] - pos_nat[tet[0]]).T
+            dx = (pos_cur[tet[1:]] - pos_cur[tet[0]]).T
+            if abs(np.linalg.det(dX)) < 1e-30:
+                continue
+            F  = dx @ np.linalg.inv(dX)
+            J  = np.linalg.det(F)
+            if abs(J) < 1e-10:
+                continue
+            E  = 0.5 * (F.T @ F - np.eye(3))
+            S  = lam * np.trace(E) * np.eye(3) + 2*mu * E
+            sig = F @ S @ F.T / J
+            s  = sig - np.trace(sig)/3 * np.eye(3)
+            vals.append(float(np.sqrt(1.5 * np.sum(s**2))))
+        vm_hex[h_idx] = np.mean(vals) if vals else 0.0
+    return vm_hex

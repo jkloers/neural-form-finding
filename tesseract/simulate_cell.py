@@ -6,7 +6,7 @@ Pipeline:
   scene_builder.py : build_scene         — SOFA scene + BCs
   materials.py     : svk_energy, vm_stress_per_tet  — post-processing
 
-Loading regime: F0 clamped, F1 driven in z → kirigami closing / opening.
+Loading regime: F0 clamped, F1 driven IN-PLANE (XY) → kirigami opening in 2D plane.
 Same material (PLA) throughout; hinge strips are geometrically thin (fold_length << face_size)
 so deformation concentrates there.
 
@@ -46,16 +46,18 @@ _SOFA_LOCK = threading.Lock()
 
 
 def evaluate_unit_cell(
-    hinge_arm_width:      float = 0.005,
-    hinge_fold_length:    float = 0.020,
-    applied_displacement: float = 0.010,
+    hinge_arm_width:      float = 0.010,
+    hinge_fold_length:    float = 0.003,
+    rotation_angle_deg:   float = 45.0,
+    applied_moment:       float = 0.0,
+    loading_mode:         str   = 'rotation',
     face_size:            float = FACE_SIZE,
     sheet_thickness:      float = SHEET_THICKNESS,
     young_modulus:        float = YOUNG_MODULUS,
     poisson_ratio:        float = POISSON_RATIO,
     yield_strength:       float = YIELD_STRENGTH,
     n_face:               int   = 4,
-    n_hinge:              int   = 2,
+    n_hinge:              int   = 4,
     n_z:                  int   = 2,
 ) -> dict:
     """
@@ -67,9 +69,19 @@ def evaluate_unit_cell(
         Gap between adjacent face panels (= arm of hinge) [m]. Default: 5 mm.
     hinge_fold_length : float
         Length of uncut hinge strip at each corner [m]. Default: 20 mm.
-        Must be << face_size for faces to behave quasi-rigidly.
-    applied_displacement : float
-        Peak z-displacement applied to face F1 [m]. Default: 10 mm.
+    rotation_angle_deg : float
+        In-plane rotation angle for F1 about hinge corner (x_fold, 0) [degrees].
+        0=flat, 45=moderate opening, 90=large in-plane rotation.
+    hinge_fold_length : float
+        Length of hinge strip ALONG the face edge at each corner [m].
+        This is the THIN dimension of the hinge (≪ face_size and ≪ arm_width).
+        The hinge spans arm_width (gap) in one direction and fold_length (tiny) in the other.
+        Default: 3mm. Makes the strip behave as a beam storing moment about z-axis.
+    applied_moment : float
+        In-plane torque (about z-axis) [N·m] — used when loading_mode='moment'.
+    loading_mode : str
+        'rotation' — displacement-controlled, prescribes exact in-plane angle.
+        'moment'   — force-controlled (in-plane tangential forces, F1 finds equilibrium).
     face_size : float
         Square face panel side [m]. Default: 100 mm.
     sheet_thickness : float
@@ -82,7 +94,8 @@ def evaluate_unit_cell(
     dict with keys:
       strain_energy         [J]    — total SvK elastic energy
       max_von_mises_stress  [Pa]   — peak von Mises stress
-      max_z_displacement    [m]    — peak |z| on free nodes
+      max_xy_displacement   [m]    — peak in-plane |XY| displacement on free nodes
+      max_z_displacement    [m]    — peak |z| buckling on all nodes (undesired)
       first_yield_fraction  []     — max_vm / yield_strength
       nodes_nat             (N,3)  — natural node positions
       nodes_cur             (N,3)  — equilibrium node positions
@@ -103,7 +116,12 @@ def evaluate_unit_cell(
         root = Sofa.Core.Node("root")
         mstate = build_scene(
             root, nodes, hexes, bc_masks,
-            applied_displacement, young_modulus, poisson_ratio, sheet_thickness,
+            rotation_angle_deg = rotation_angle_deg,
+            applied_moment     = applied_moment,
+            loading_mode       = loading_mode,
+            young              = young_modulus,
+            nu                 = poisson_ratio,
+            sheet_thickness    = sheet_thickness,
         )
         Sofa.Simulation.init(root)
         for _ in range(N_STEPS):
@@ -115,15 +133,26 @@ def evaluate_unit_cell(
     tets = hex_to_5tets(hexes)
     strain_e = svk_energy(nodes, nodes_cur, tets, young_modulus, poisson_ratio)
     vm       = vm_stress_per_tet(nodes, nodes_cur, tets, young_modulus, poisson_ratio)
+    max_vm   = float(np.max(vm))
 
+    # In-plane displacement: XY motion of non-clamped nodes (desired mechanism signal)
     free_mask = ~bc_masks['f0'] & ~bc_masks['f1']
-    z_free = np.abs(nodes_cur[free_mask, 2])
-    max_z  = float(np.max(z_free)) if len(z_free) > 0 else 0.0
-    max_vm = float(np.max(vm))
+    if free_mask.any():
+        disp_xy = np.sqrt(
+            (nodes_cur[free_mask, 0] - nodes[free_mask, 0])**2 +
+            (nodes_cur[free_mask, 1] - nodes[free_mask, 1])**2
+        )
+        max_xy = float(np.max(disp_xy))
+    else:
+        max_xy = 0.0
+
+    # Z buckling: out-of-plane deformation (undesired, should stay near 0)
+    max_z = float(np.max(np.abs(nodes_cur[:, 2] - nodes[:, 2])))
 
     return {
         "strain_energy":        strain_e,
         "max_von_mises_stress": max_vm,
+        "max_xy_displacement":  max_xy,
         "max_z_displacement":   max_z,
         "first_yield_fraction": max_vm / yield_strength,
         # raw data for visualisation / debugging

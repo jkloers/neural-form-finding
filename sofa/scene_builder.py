@@ -1,20 +1,25 @@
 """
 scene_builder.py — SOFA scene for the unified kirigami unit-cell mesh.
 
+The kirigami mechanism is IN-PLANE (XY plane). Faces rotate about the z-axis;
+hinge strips bend in the XY plane. No out-of-plane motion is prescribed.
+
 Loading regime options (controlled by loading_mode):
 
-  'rotation'  (default) — displacement-controlled:
+  'rotation'  (default) — displacement-controlled, in-plane rigid-body rotation:
     F0 : FixedConstraint (clamped)
-    F1 : LinearMovementConstraint — z_disp(x) = (x-a)/(a+w) * applied_displacement
-         Prescribes a rigid-body rotation of F1 about the fold axis at x = a.
-         Stable even on near-mechanism structures.
+    F1 : LinearMovementConstraint — in-plane rotation of F1 about pivot (x_fold, y_min).
+         Each node at (x₀,y₀) gets:
+           dx = (x₀-xp)*(cosθ-1) - (y₀-yp)*sinθ
+           dy = (x₀-xp)*sinθ     + (y₀-yp)*(cosθ-1)
+           dz = 0   (in-plane, no out-of-plane motion prescribed)
+         Works for any angle θ.  Pivot xp=x_fold (right edge of F0), yp=0.
 
-  'moment'    — force-controlled:
+  'moment'    — force-controlled in-plane torque (CCW about z-axis):
     F0 : FixedConstraint (clamped)
-    F1 : ConstantForceField — f_z(x_i) proportional to (x_i - x_fold)
-         Applies a pure bending moment M [N·m] about the fold axis; zero net force.
-         F1 finds its own equilibrium angle.
-         Use small applied_moment values to avoid divergence.
+    F1 : ConstantForceField — tangential in-plane forces on F1 nodes.
+         F_i = scale * (−dy_i, dx_i, 0) where (dx_i,dy_i) = (x_i−xp, y_i−yp).
+         Scale chosen so net moment = applied_moment [N·m] about pivot.
 
   F2, F3 are always free — driven kinematically through hinges H1, H2, H3.
 """
@@ -26,13 +31,13 @@ YOUNG_MODULUS  = 3.5e9
 POISSON_RATIO  = 0.36
 DENSITY        = 1250.0
 
-N_STEPS = 100
+N_STEPS = 500     # more steps → smoother large-rotation ramp
 DT      = 0.01
 
 
 def build_scene(root, nodes: np.ndarray, hexes: np.ndarray,
                 bc_masks: dict,
-                applied_displacement: float = 0.010,
+                rotation_angle_deg: float = 45.0,
                 applied_moment: float = 0.0,
                 loading_mode: str = 'rotation',
                 young: float = YOUNG_MODULUS,
@@ -43,15 +48,17 @@ def build_scene(root, nodes: np.ndarray, hexes: np.ndarray,
 
     Parameters
     ----------
-    root                 : Sofa.Core.Node
-    nodes                : (N, 3) float64 — natural node positions
-    hexes                : (H, 8) int32   — hex connectivity
-    bc_masks             : dict 'f0'..'f3' → (N,) bool
-    applied_displacement : float — peak z-displacement of F1 [m] (rotation mode)
-    applied_moment       : float — bending moment about fold axis [N·m] (moment mode)
-    loading_mode         : 'rotation' | 'moment'
-    young, nu            : material (same for faces and hinges)
-    sheet_thickness      : used only to estimate density volume
+    root                : Sofa.Core.Node
+    nodes               : (N, 3) float64 — natural node positions
+    hexes               : (H, 8) int32   — hex connectivity
+    bc_masks            : dict 'f0'..'f3' → (N,) bool
+    rotation_angle_deg  : float — fold angle for F1 about the H0 axis [degrees]
+                          0° = flat, 90° = F1 stands vertical.
+                          Used when loading_mode='rotation'.
+    applied_moment      : float — bending moment [N·m], used when loading_mode='moment'.
+    loading_mode        : 'rotation' | 'moment'
+    young, nu           : material (same for faces and hinges)
+    sheet_thickness     : used only to estimate density volume
 
     Returns
     -------
@@ -92,7 +99,6 @@ def build_scene(root, nodes: np.ndarray, hexes: np.ndarray,
     cell.addObject("HexahedronSetTopologyModifier")
     cell.addObject("HexahedronSetGeometryAlgorithms", template="Vec3d")
 
-    # Rough total volume for mass — use full bounding box × sheet thickness fraction
     cell.addObject("UniformMass", totalMass=float(DENSITY * len(hexes) * 1e-8))
 
     cell.addObject(
@@ -105,41 +111,55 @@ def build_scene(root, nodes: np.ndarray, hexes: np.ndarray,
     f0_idx   = np.where(bc_masks['f0'])[0]
     f1_nodes = np.where(bc_masks['f1'])[0]
 
-    # F0: fully clamped
     cell.addObject("FixedConstraint", name="clamp_F0", indices=f0_idx.tolist())
 
-    # Fold axis = right edge of F0 = left edge of H0 strip
-    x_fold = float(nodes[f0_idx, 0].max())   # = a
-    x_f1   = nodes[f1_nodes, 0]
-    x_span = float(x_f1.max() - x_fold)       # = a + w
+    # In-plane pivot: corner of H0 where it meets F0 (x = a, y = 0)
+    x_fold = float(nodes[f0_idx, 0].max())   # a = F0 right edge
+    y_min  = float(nodes[:, 1].min())         # 0 = bottom of structure
+    xp, yp = x_fold, y_min
 
     if loading_mode == 'rotation':
-        # Displacement-controlled rotation of F1 about the fold axis.
-        # z_disp(x) = (x - x_fold) / x_span * applied_displacement
-        # Prescribes the angle; stable on near-mechanism structures.
-        for xi in np.unique(x_f1):
-            xi_idx = f1_nodes[x_f1 == xi].tolist()
-            z_disp = float((xi - x_fold) / x_span * applied_displacement)
+        # In-plane rotation of F1 about z-axis through pivot (xp, yp).
+        # Each F1 node at (x₀,y₀) gets:
+        #   dx = (x₀-xp)*(cosθ-1) - (y₀-yp)*sinθ
+        #   dy = (x₀-xp)*sinθ     + (y₀-yp)*(cosθ-1)
+        #   dz = 0   (no out-of-plane motion)
+        # Group by (x,y) so z-layer nodes share the same constraint.
+        theta = np.radians(rotation_angle_deg)
+        cosT  = float(np.cos(theta))
+        sinT  = float(np.sin(theta))
+
+        xy_f1     = nodes[f1_nodes, :2]
+        xy_round  = np.round(xy_f1, decimals=9)
+        unique_xy, inverse = np.unique(xy_round, axis=0, return_inverse=True)
+
+        for k in range(len(unique_xy)):
+            x0, y0    = float(unique_xy[k, 0]), float(unique_xy[k, 1])
+            group_idx = f1_nodes[inverse == k].tolist()
+            dx = (x0 - xp) * (cosT - 1.0) - (y0 - yp) * sinT
+            dy = (x0 - xp) * sinT          + (y0 - yp) * (cosT - 1.0)
             cell.addObject(
                 "LinearMovementConstraint",
-                name=f"drive_F1_{len(xi_idx)}_{z_disp:.5f}",
+                name=f"drive_F1_{k}",
                 template="Vec3d",
-                indices=xi_idx,
+                indices=group_idx,
                 keyTimes=[0.0, T_final],
-                movements=[[0.0, 0.0, 0.0], [0.0, 0.0, z_disp]],
+                movements=[[0.0, 0.0, 0.0], [float(dx), float(dy), 0.0]],
             )
 
     elif loading_mode == 'moment':
-        # Force-controlled: ConstantForceField with f_z(x) ∝ (x - x_fold).
-        # Net moment about x = x_fold = applied_moment [N·m]; net vertical force = 0.
-        # The structure finds its own equilibrium rotation angle.
-        lever  = x_f1 - x_fold                     # (n_f1,)
-        denom  = float(np.sum(lever ** 2))
+        # In-plane torque (CCW about z-axis) at pivot (xp, yp).
+        # Tangential force: F_i = scale * (−dy_i, dx_i, 0)
+        # Net moment = scale * sum(dx_i² + dy_i²) = applied_moment
+        dx_nodes = nodes[f1_nodes, 0] - xp
+        dy_nodes = nodes[f1_nodes, 1] - yp
+        denom    = float(np.sum(dx_nodes**2 + dy_nodes**2))
         if denom < 1e-30:
-            raise ValueError("All F1 nodes are at the fold axis — cannot apply moment.")
-        scale  = applied_moment / denom             # [N / m²]
+            raise ValueError("All F1 nodes are at pivot — cannot apply in-plane moment.")
+        scale  = applied_moment / denom
         forces = np.zeros((len(f1_nodes), 3))
-        forces[:, 2] = scale * lever                # f_z = scale * (x - x_fold)
+        forces[:, 0] = -scale * dy_nodes   # Fx tangential
+        forces[:, 1] =  scale * dx_nodes   # Fy tangential
         cell.addObject(
             "ConstantForceField", name="moment_F1",
             template="Vec3d",
