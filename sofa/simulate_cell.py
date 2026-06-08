@@ -59,6 +59,7 @@ def evaluate_unit_cell(
     n_face:               int   = 4,
     n_hinge:              int   = 4,
     n_z:                  int   = 2,
+    mesh_data:            tuple = None,
 ) -> dict:
     """
     Simulate the 1×1 kirigami unit cell and return mechanical quantities.
@@ -88,6 +89,11 @@ def evaluate_unit_cell(
         Plate thickness in z [m]. Default: 1 mm.
     young_modulus, poisson_ratio, yield_strength : material params.
     n_face, n_hinge, n_z : mesh resolution (elements per region).
+    mesh_data : tuple or None
+        Optional pre-built (nodes, hexes, bc_masks) from
+        nff.sofa.mesh_builder.build_mesh_from_centroidal_state.
+        When provided, skips the build_unified_mesh call entirely.
+        bc_masks must contain 'f0'..'f3' and 'clamped'/'loaded' keys.
 
     Returns
     -------
@@ -102,15 +108,18 @@ def evaluate_unit_cell(
       hexes                 (H,8)  — hex connectivity
       bc_masks              dict   — 'f0'..'f3' bool masks
     """
-    nodes, hexes, bc_masks = build_unified_mesh(
-        face_size       = face_size,
-        arm_width       = hinge_arm_width,
-        fold_length     = hinge_fold_length,
-        sheet_thickness = sheet_thickness,
-        n_face          = n_face,
-        n_hinge         = n_hinge,
-        n_z             = n_z,
-    )
+    if mesh_data is not None:
+        nodes, hexes, bc_masks = mesh_data
+    else:
+        nodes, hexes, bc_masks = build_unified_mesh(
+            face_size       = face_size,
+            arm_width       = hinge_arm_width,
+            fold_length     = hinge_fold_length,
+            sheet_thickness = sheet_thickness,
+            n_face          = n_face,
+            n_hinge         = n_hinge,
+            n_z             = n_z,
+        )
 
     with _SOFA_LOCK:
         root = Sofa.Core.Node("root")
