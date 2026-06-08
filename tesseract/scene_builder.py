@@ -148,7 +148,11 @@ def build_scene(root, nodes: np.ndarray, hexes: np.ndarray,
             )
 
     elif loading_mode == 'moment':
-        # In-plane torque (CCW about z-axis) at pivot (xp, yp).
+        # In-plane torque (CCW about z-axis) about face-1 centroid.
+        # Pivot at face-1 centroid ensures net force = 0 — a pure torque,
+        # matching JAX's generalized force on DOF 2 (no net Fx or Fy).
+        xp = float(nodes[f1_nodes, 0].mean())
+        yp = float(nodes[f1_nodes, 1].mean())
         # Tangential force: F_i = scale * (−dy_i, dx_i, 0)
         # Net moment = scale * sum(dx_i² + dy_i²) = applied_moment
         dx_nodes = nodes[f1_nodes, 0] - xp

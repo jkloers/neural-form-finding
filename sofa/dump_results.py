@@ -5,11 +5,18 @@ NO matplotlib import — avoids the SOFA+Qt/Cocoa crash on macOS.
 Results are loaded by sofa/visualize.py in the kgnn_mac conda env.
 
 Usage (via run_sofa.sh):
-    ./sofa/run_sofa.sh sofa/dump_results.py
+    # Config-driven (recommended — single source of truth):
+    ./sofa/run_sofa.sh sofa/dump_results.py \\
+        --config data/configs/sofa/moment_1x1.yaml
+
+    # Config + pre-built CS mesh:
+    ./sofa/run_sofa.sh sofa/dump_results.py \\
+        --config data/configs/sofa/moment_1x1.yaml \\
+        --mesh-npz sofa/output/cs_mesh.npz
+
+    # Legacy — explicit geometry/material flags:
     ./sofa/run_sofa.sh sofa/dump_results.py --arm-width 0.010 --fold-length 0.020 --angle 90
     ./sofa/run_sofa.sh sofa/dump_results.py --out /tmp/sofa_result.npz
-
-    # Use a pre-built mesh from CentroidalState (correct mesh builder):
     ./sofa/run_sofa.sh sofa/dump_results.py \\
         --mesh-npz sofa/output/cs_mesh.npz --mode moment --moment 1.0
 """
@@ -17,9 +24,12 @@ Usage (via run_sofa.sh):
 import sys
 import os
 import argparse
+import math
 import numpy as np
 
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, os.path.dirname(__file__))
+sys.path.insert(0, REPO_ROOT)
 
 try:
     import Sofa
@@ -33,6 +43,7 @@ from simulate_cell import (
     FACE_SIZE, SHEET_THICKNESS, YOUNG_MODULUS, POISSON_RATIO, YIELD_STRENGTH,
 )
 from materials import vm_stress_per_hex
+from nff.sofa.config_to_physical import physical_scale_from_config
 
 DEFAULT_OUT = os.path.join(os.path.dirname(__file__), 'output', 'sofa_result.npz')
 
@@ -127,6 +138,9 @@ def run_and_dump(
 
 def _parse():
     p = argparse.ArgumentParser()
+    p.add_argument('--config',      type=str,   default=None,
+                   help='Path to sofa YAML config (single source of truth). '
+                        'Overrides all geometry/material flags below.')
     p.add_argument('--arm-width',   type=float, default=0.010,
                    help='Gap between panels [m] (default 10mm)')
     p.add_argument('--fold-length', type=float, default=0.003,
@@ -143,6 +157,9 @@ def _parse():
     p.add_argument('--poisson',     type=float, default=POISSON_RATIO)
     p.add_argument('--yield-str',   type=float, default=YIELD_STRENGTH)
     p.add_argument('--out',         type=str,   default=DEFAULT_OUT)
+    p.add_argument('--out-dir',     type=str,   default=None,
+                   help='Run directory (from compare_jax_sofa.py). '
+                        'Saves sofa_result.npz there; overrides --out.')
     p.add_argument('--mesh-npz',    type=str,   default=None,
                    help='Pre-built mesh .npz from build_mesh_from_centroidal_state. '
                         'When provided, skips build_unified_mesh.')
@@ -150,22 +167,77 @@ def _parse():
 
 
 if __name__ == '__main__':
+    import yaml
+
     args = _parse()
-    label = (f'mode={args.mode}  w={args.arm_width*1e3:.1f}mm  '
-             f'L={args.fold_length*1e3:.1f}mm  angle={args.angle:.0f}deg  '
-             f't={args.thickness*1e3:.1f}mm')
+
+    if args.config is not None:
+        # Config-driven path — single source of truth
+        config_path = os.path.abspath(args.config)
+        with open(config_path) as f:
+            raw = yaml.safe_load(f)
+        phys     = physical_scale_from_config(raw)
+        sofa_raw = raw.get('sofa', {})
+        loads    = raw.get('loads', [])
+
+        arm_width       = phys.arm_width
+        fold_length     = phys.fold_length
+        face_size       = phys.face_size
+        sheet_thickness = phys.sheet_thickness
+        young_modulus   = phys.young_modulus
+        poisson_ratio   = phys.poisson_ratio
+        yield_strength  = phys.yield_strength
+        loading_mode    = sofa_raw.get('loading_mode', 'moment')
+        applied_moment  = float(loads[0]['value']) if loads else 0.0
+        rotation_angle  = -45.0   # not used in moment mode
+
+        # --out-dir puts sofa_result.npz in the run directory
+        if args.out_dir is not None:
+            out_path = os.path.join(args.out_dir, 'sofa_result.npz')
+            # auto-detect cs_mesh.npz in run dir if --mesh-npz not given
+            if args.mesh_npz is None:
+                candidate = os.path.join(args.out_dir, 'cs_mesh.npz')
+                if os.path.exists(candidate):
+                    args.mesh_npz = candidate
+        elif args.out != DEFAULT_OUT:
+            out_path = args.out
+        else:
+            out_path = os.path.join(os.path.dirname(__file__), 'output', 'sofa_moment.npz')
+
+        label = (f'config={os.path.basename(config_path)}  '
+                 f'mode={loading_mode}  M={applied_moment:.3f}N·m  '
+                 f'w={arm_width*1e3:.1f}mm  L={fold_length*1e3:.1f}mm  '
+                 f'E={young_modulus/1e9:.1f}GPa  t={sheet_thickness*1e3:.1f}mm')
+    else:
+        # Legacy explicit-flag path
+        arm_width       = args.arm_width
+        fold_length     = args.fold_length
+        face_size       = args.face_size
+        sheet_thickness = args.thickness
+        young_modulus   = args.young
+        poisson_ratio   = args.poisson
+        yield_strength  = args.yield_str
+        loading_mode    = args.mode
+        applied_moment  = args.moment
+        rotation_angle  = args.angle
+        out_path        = (os.path.join(args.out_dir, 'sofa_result.npz')
+                           if args.out_dir is not None else args.out)
+        label = (f'mode={args.mode}  w={args.arm_width*1e3:.1f}mm  '
+                 f'L={args.fold_length*1e3:.1f}mm  angle={args.angle:.0f}deg  '
+                 f't={args.thickness*1e3:.1f}mm')
+
     print(f'\nSOFA dump  ({label})')
     run_and_dump(
-        hinge_arm_width    = args.arm_width,
-        hinge_fold_length  = args.fold_length,
-        rotation_angle_deg = args.angle,
-        applied_moment     = args.moment,
-        loading_mode       = args.mode,
-        face_size          = args.face_size,
-        sheet_thickness    = args.thickness,
-        young_modulus      = args.young,
-        poisson_ratio      = args.poisson,
-        yield_strength     = args.yield_str,
-        out_path           = args.out,
+        hinge_arm_width    = arm_width,
+        hinge_fold_length  = fold_length,
+        rotation_angle_deg = rotation_angle,
+        applied_moment     = applied_moment,
+        loading_mode       = loading_mode,
+        face_size          = face_size,
+        sheet_thickness    = sheet_thickness,
+        young_modulus      = young_modulus,
+        poisson_ratio      = poisson_ratio,
+        yield_strength     = yield_strength,
+        out_path           = out_path,
         mesh_npz           = args.mesh_npz,
     )

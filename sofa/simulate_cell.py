@@ -11,8 +11,8 @@ Same material (PLA) throughout; hinge strips are geometrically thin (fold_length
 so deformation concentrates there.
 
 Extension path:
-  Phase 3b : face-face contact
-  Phase 3c : plasticity (d_plasticYieldThreshold)
+  Phase 3c : face-face contact (FreeMotionAnimationLoop)
+  Phase 3d : plasticity (d_plasticYieldThreshold)
   Phase 4  : Tesseract HTTP API → JAX training reward
 """
 
@@ -67,17 +67,14 @@ def evaluate_unit_cell(
     Parameters
     ----------
     hinge_arm_width : float
-        Gap between adjacent face panels (= arm of hinge) [m]. Default: 5 mm.
+        Gap between adjacent face panels (hinge spans this) [m]. Default: 10 mm.
     hinge_fold_length : float
-        Length of uncut hinge strip at each corner [m]. Default: 20 mm.
+        Thin dimension of the hinge strip along the face edge [m]. Default: 3 mm.
+        The strip spans arm_width in one direction and fold_length (tiny) in the
+        other — making it a slender beam that stores bending moment about z.
     rotation_angle_deg : float
         In-plane rotation angle for F1 about hinge corner (x_fold, 0) [degrees].
-        0=flat, 45=moderate opening, 90=large in-plane rotation.
-    hinge_fold_length : float
-        Length of hinge strip ALONG the face edge at each corner [m].
-        This is the THIN dimension of the hinge (≪ face_size and ≪ arm_width).
-        The hinge spans arm_width (gap) in one direction and fold_length (tiny) in the other.
-        Default: 3mm. Makes the strip behave as a beam storing moment about z-axis.
+        Negative = CW = correct RDQK opening direction. 0 = flat, -45 = canonical.
     applied_moment : float
         In-plane torque (about z-axis) [N·m] — used when loading_mode='moment'.
     loading_mode : str
@@ -183,18 +180,18 @@ if __name__ == "__main__":
     print("-" * len(hdr))
 
     cases = [
-        dict(label="baseline (w=5mm, L=20mm, t=1mm, δ=10mm)",
-             hinge_arm_width=0.005, hinge_fold_length=0.020,
-             applied_displacement=0.010),
-        dict(label="short hinge (L=10mm)",
-             hinge_arm_width=0.005, hinge_fold_length=0.010,
-             applied_displacement=0.010),
-        dict(label="thin sheet  (t=0.5mm)",
-             hinge_arm_width=0.005, hinge_fold_length=0.020,
-             applied_displacement=0.010, sheet_thickness=0.0005),
-        dict(label="large δ    (δ=20mm)",
-             hinge_arm_width=0.005, hinge_fold_length=0.020,
-             applied_displacement=0.020),
+        dict(label="canonical  (w=10mm, L=3mm, θ=−45°)",
+             hinge_arm_width=0.010, hinge_fold_length=0.003,
+             rotation_angle_deg=-45.0),
+        dict(label="short hinge (L=1.5mm, θ=−45°)",
+             hinge_arm_width=0.010, hinge_fold_length=0.0015,
+             rotation_angle_deg=-45.0),
+        dict(label="thin sheet  (t=0.5mm, θ=−45°)",
+             hinge_arm_width=0.010, hinge_fold_length=0.003,
+             rotation_angle_deg=-45.0, sheet_thickness=0.0005),
+        dict(label="large angle (θ=−90°)",
+             hinge_arm_width=0.010, hinge_fold_length=0.003,
+             rotation_angle_deg=-90.0),
     ]
 
     for case in cases:
@@ -207,7 +204,7 @@ if __name__ == "__main__":
 
     print("-" * len(hdr))
     print("\nExpected:")
-    print("  short hinge → higher stress concentration, z_max ↑ (easier fold)")
-    print("  thin sheet  → energy ↓ ×8 (EI ∝ t³), z_max ↑")
-    print("  large δ     → energy ↑ ~×4, stress ↑ proportionally")
+    print("  short hinge → higher stress, easier fold (EI ∝ L³)")
+    print("  thin sheet  → energy ↓ ×8 (EI ∝ t³), more z-buckling")
+    print("  large angle → energy ↑, stress ↑, z-buckling ↑")
     print("=" * 72)

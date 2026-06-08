@@ -22,11 +22,12 @@ import numpy as np
 import jax
 jax.config.update('jax_enable_x64', True)
 
-# Allow sofa/ imports
+# sofa/geometry.py is a SOFA-env module; import it by path since it doesn't
+# belong to any conda package (it runs under Homebrew Python normally).
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'sofa'))
-
 from geometry import build_unified_mesh
-from geometry_translator import translate_rdqk_unit_cell
+
+from nff.sofa.geometry_translator import translate_rdqk_unit_cell
 
 FACE_SIZE       = 0.100   # m — 100 mm (must match ARM_WIDTH scale)
 ARM_WIDTH       = 0.010   # m — 10 mm
