@@ -38,14 +38,18 @@ try:
 except ImportError as e:
     sys.exit(f"Cannot import SOFA: {e}\nRun via ./sofa/run_sofa.sh")
 
-from simulate_cell import (
-    evaluate_unit_cell,
-    FACE_SIZE, SHEET_THICKNESS, YOUNG_MODULUS, POISSON_RATIO, YIELD_STRENGTH,
-)
+from simulate_cell import evaluate_unit_cell
 from materials import vm_stress_per_hex
 from nff.sofa.config_to_physical import physical_scale_from_config
 
-DEFAULT_OUT = os.path.join(os.path.dirname(__file__), 'output', 'sofa_result.npz')
+DEFAULT_OUT     = os.path.join(os.path.dirname(__file__), 'output', 'sofa_result.npz')
+
+# Legacy CLI defaults (used only when --config is not provided)
+_FACE_SIZE       = 0.100
+_SHEET_THICKNESS = 0.001
+_YOUNG_MODULUS   = 3.5e9
+_POISSON_RATIO   = 0.36
+_YIELD_STRENGTH  = 55e6
 
 
 def run_and_dump(
@@ -54,11 +58,11 @@ def run_and_dump(
     rotation_angle_deg   = -45.0,
     applied_moment       = 0.0,
     loading_mode         = 'rotation',
-    face_size            = FACE_SIZE,
-    sheet_thickness      = SHEET_THICKNESS,
-    young_modulus        = YOUNG_MODULUS,
-    poisson_ratio        = POISSON_RATIO,
-    yield_strength       = YIELD_STRENGTH,
+    face_size            = _FACE_SIZE,
+    sheet_thickness      = _SHEET_THICKNESS,
+    young_modulus        = _YOUNG_MODULUS,
+    poisson_ratio        = _POISSON_RATIO,
+    yield_strength       = _YIELD_STRENGTH,
     out_path             = DEFAULT_OUT,
     mesh_npz             = None,
 ):
@@ -69,18 +73,22 @@ def run_and_dump(
         d = np.load(mesh_npz)
         nodes = d['nodes']
         hexes = d['hexes']
-        n = len(nodes)
-        bc_masks = {
-            'f0': d['f0_mask'].astype(bool), 'f1': d['f1_mask'].astype(bool),
-            'f2': d['f2_mask'].astype(bool), 'f3': d['f3_mask'].astype(bool),
-            'face_0': d['f0_mask'].astype(bool), 'face_1': d['f1_mask'].astype(bool),
-            'face_2': d['f2_mask'].astype(bool), 'face_3': d['f3_mask'].astype(bool),
-            'clamped': d.get('clamped_mask', d['f0_mask']).astype(bool),
-            'loaded':  d.get('loaded_mask',  d['f1_mask']).astype(bool),
-        }
+        # Detect number of faces from npz keys (f0_mask, f1_mask, ...).
+        n_mesh_faces = int(d.get('n_faces', 0))
+        if n_mesh_faces == 0:
+            n_mesh_faces = sum(1 for k in d.files
+                               if k.startswith('f') and k.endswith('_mask')
+                               and k[1:-5].isdigit())
+        bc_masks = {}
+        for i in range(n_mesh_faces):
+            m = d[f'f{i}_mask'].astype(bool)
+            bc_masks[f'f{i}']      = m
+            bc_masks[f'face_{i}']  = m
+        bc_masks['clamped'] = d.get('clamped_mask', d['f0_mask']).astype(bool)
+        bc_masks['loaded']  = d.get('loaded_mask',  d['f1_mask']).astype(bool)
         mesh_data = (nodes, hexes, bc_masks)
         face_size = float(d.get('face_size', face_size))
-        print(f"  Mesh: {len(nodes)} nodes, {len(hexes)} hexes")
+        print(f"  Mesh: {len(nodes)} nodes, {len(hexes)} hexes  ({n_mesh_faces} faces)")
 
     print("  Running SOFA simulation ...")
     r = evaluate_unit_cell(
@@ -101,17 +109,18 @@ def run_and_dump(
     # Per-hex von Mises stress for field visualization
     vm_hex = vm_stress_per_hex(r['nodes_nat'], r['nodes_cur'], r['hexes'],
                                 young_modulus, poisson_ratio)
+    # Collect all face masks (works for any number of faces).
+    n_faces_out = sum(1 for k in bc if k.startswith('f') and k[1:].isdigit())
+    face_mask_dict = {f'f{i}_mask': bc[f'f{i}'] for i in range(n_faces_out)}
     os.makedirs(os.path.dirname(out_path) or '.', exist_ok=True)
     np.savez(
         out_path,
         nodes_nat            = r['nodes_nat'],
         nodes_cur            = r['nodes_cur'],
         hexes                = r['hexes'],
-        f0_mask              = bc['f0'],
-        f1_mask              = bc['f1'],
-        f2_mask              = bc['f2'],
-        f3_mask              = bc['f3'],
+        **face_mask_dict,
         vm_per_hex           = vm_hex,
+        n_faces              = np.int32(n_faces_out),
         strain_energy        = np.array(r['strain_energy']),
         max_von_mises_stress = np.array(r['max_von_mises_stress']),
         max_xy_displacement  = np.array(r['max_xy_displacement']),
@@ -151,11 +160,11 @@ def _parse():
                    help='Applied bending moment on F1 [N.m] (moment mode only)')
     p.add_argument('--mode',        type=str,   default='rotation',
                    choices=['rotation', 'moment'])
-    p.add_argument('--face-size',   type=float, default=FACE_SIZE)
-    p.add_argument('--thickness',   type=float, default=SHEET_THICKNESS)
-    p.add_argument('--young',       type=float, default=YOUNG_MODULUS)
-    p.add_argument('--poisson',     type=float, default=POISSON_RATIO)
-    p.add_argument('--yield-str',   type=float, default=YIELD_STRENGTH)
+    p.add_argument('--face-size',   type=float, default=_FACE_SIZE)
+    p.add_argument('--thickness',   type=float, default=_SHEET_THICKNESS)
+    p.add_argument('--young',       type=float, default=_YOUNG_MODULUS)
+    p.add_argument('--poisson',     type=float, default=_POISSON_RATIO)
+    p.add_argument('--yield-str',   type=float, default=_YIELD_STRENGTH)
     p.add_argument('--out',         type=str,   default=DEFAULT_OUT)
     p.add_argument('--out-dir',     type=str,   default=None,
                    help='Run directory (from compare_jax_sofa.py). '
@@ -188,7 +197,10 @@ if __name__ == '__main__':
         poisson_ratio   = phys.poisson_ratio
         yield_strength  = phys.yield_strength
         loading_mode    = sofa_raw.get('loading_mode', 'moment')
-        applied_moment  = float(loads[0]['value']) if loads else 0.0
+        # sofa.applied_moment is in physical N·m.
+        # loads[0].value is JAX-normalized training units — never use for SOFA.
+        applied_moment  = float(sofa_raw.get('applied_moment',
+                                             loads[0]['value'] if loads else 0.0))
         rotation_angle  = -45.0   # not used in moment mode
 
         # --out-dir puts sofa_result.npz in the run directory

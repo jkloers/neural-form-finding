@@ -149,6 +149,14 @@ def _run_one_problem(config, problem_label, run_dir):
         prob_dir = os.path.join(run_dir, problem_label)
         os.makedirs(prob_dir, exist_ok=True)
 
+    # Save trained parameters so compare_jax_sofa.py can load them.
+    if prob_dir and config.mapping.type.startswith('gnn_'):
+        import pickle
+        ckpt_path = os.path.join(prob_dir, 'best_params.pkl')
+        with open(ckpt_path, 'wb') as _f:
+            pickle.dump(optimized_params, _f)
+        print(f"  Checkpoint → {ckpt_path}")
+
     _any_viz = (config.visualization.save_outputs or config.visualization.show_plots
                 or config.visualization.stage0 or config.visualization.stage1
                 or config.visualization.stage2 or config.visualization.energy_plot)

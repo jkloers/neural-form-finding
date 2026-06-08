@@ -32,16 +32,6 @@ from geometry     import build_unified_mesh
 from materials    import hex_to_5tets, svk_energy, vm_stress_per_tet
 from scene_builder import build_scene, N_STEPS, DT
 
-# ── Material defaults: PLA ─────────────────────────────────────────────────────
-YOUNG_MODULUS  = 3.5e9
-POISSON_RATIO  = 0.36
-YIELD_STRENGTH = 55e6
-DENSITY        = 1250.0
-
-# ── Geometry defaults ──────────────────────────────────────────────────────────
-FACE_SIZE       = 0.100   # m — 100 mm square face
-SHEET_THICKNESS = 0.001   # m — 1 mm sheet
-
 _SOFA_LOCK = threading.Lock()
 
 
@@ -51,11 +41,11 @@ def evaluate_unit_cell(
     rotation_angle_deg:   float = 45.0,
     applied_moment:       float = 0.0,
     loading_mode:         str   = 'rotation',
-    face_size:            float = FACE_SIZE,
-    sheet_thickness:      float = SHEET_THICKNESS,
-    young_modulus:        float = YOUNG_MODULUS,
-    poisson_ratio:        float = POISSON_RATIO,
-    yield_strength:       float = YIELD_STRENGTH,
+    face_size:            float = 0.100,
+    sheet_thickness:      float = 0.001,
+    young_modulus:        float = 3.5e9,
+    poisson_ratio:        float = 0.36,
+    yield_strength:       float = 55e6,
     n_face:               int   = 4,
     n_hinge:              int   = 4,
     n_z:                  int   = 2,
@@ -141,8 +131,11 @@ def evaluate_unit_cell(
     vm       = vm_stress_per_tet(nodes, nodes_cur, tets, young_modulus, poisson_ratio)
     max_vm   = float(np.max(vm))
 
-    # In-plane displacement: XY motion of non-clamped nodes (desired mechanism signal)
-    free_mask = ~bc_masks['f0'] & ~bc_masks['f1']
+    # In-plane displacement: XY motion of non-clamped nodes (desired mechanism signal).
+    # Use 'clamped' mask when available (N-face CS mesh); fall back to 'f0' for
+    # backward compatibility with parametric meshes.
+    _clamped = bc_masks.get('clamped', bc_masks.get('f0', np.zeros(len(nodes), dtype=bool)))
+    free_mask = ~_clamped
     if free_mask.any():
         disp_xy = np.sqrt(
             (nodes_cur[free_mask, 0] - nodes[free_mask, 0])**2 +
@@ -169,42 +162,3 @@ def evaluate_unit_cell(
     }
 
 
-# ── Validation ────────────────────────────────────────────────────────────────
-
-if __name__ == "__main__":
-    print("=" * 72)
-    print("SOFA Unit Cell — Unified Mesh, Kirigami Loading  (PLA, 20 cm)")
-    print("=" * 72)
-    hdr = f"{'Config':<40} {'E [J]':>9} {'σ_vm [MPa]':>11} {'z_max [mm]':>11} {'σ/σ_y':>7}"
-    print(hdr)
-    print("-" * len(hdr))
-
-    cases = [
-        dict(label="canonical  (w=10mm, L=3mm, θ=−45°)",
-             hinge_arm_width=0.010, hinge_fold_length=0.003,
-             rotation_angle_deg=-45.0),
-        dict(label="short hinge (L=1.5mm, θ=−45°)",
-             hinge_arm_width=0.010, hinge_fold_length=0.0015,
-             rotation_angle_deg=-45.0),
-        dict(label="thin sheet  (t=0.5mm, θ=−45°)",
-             hinge_arm_width=0.010, hinge_fold_length=0.003,
-             rotation_angle_deg=-45.0, sheet_thickness=0.0005),
-        dict(label="large angle (θ=−90°)",
-             hinge_arm_width=0.010, hinge_fold_length=0.003,
-             rotation_angle_deg=-90.0),
-    ]
-
-    for case in cases:
-        label = case.pop("label")
-        r = evaluate_unit_cell(**case)
-        print(f"  {label:<40} {r['strain_energy']:>9.4e}"
-              f" {r['max_von_mises_stress']/1e6:>11.2f}"
-              f" {r['max_z_displacement']*1e3:>11.4f}"
-              f" {r['first_yield_fraction']:>7.3f}")
-
-    print("-" * len(hdr))
-    print("\nExpected:")
-    print("  short hinge → higher stress, easier fold (EI ∝ L³)")
-    print("  thin sheet  → energy ↓ ×8 (EI ∝ t³), more z-buckling")
-    print("  large angle → energy ↑, stress ↑, z-buckling ↑")
-    print("=" * 72)
