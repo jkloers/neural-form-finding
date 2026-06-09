@@ -57,6 +57,7 @@ def init_mpnn(
         node_feat_dim: int,
         hidden_dim: int = 32,
         num_layers: int = 2,
+        inner_depth: int = 2,
 ) -> dict:
     """Initialise MPNN parameters.
 
@@ -70,7 +71,8 @@ def init_mpnn(
         Flat dict PyTree compatible with optax / value_and_grad.
     """
     scale = 0.01
-    n_keys = 1 + num_layers * 4 + 2  # emb + (phi_e x2, phi_h x2) per layer + coord + transform
+    keys_per_layer = 2 if inner_depth == 1 else 4   # (phi_e, phi_h) each have 1 or 2 weight matrices
+    n_keys = 1 + num_layers * keys_per_layer + 2
     keys = jax.random.split(key, n_keys)
     ki = iter(keys)
 
@@ -87,14 +89,16 @@ def init_mpnn(
         # phi_e: [h_i | h_j | e_ij] → message
         params[f'l{l}_phi_e_W1'] = jax.random.normal(next(ki), (edge_in_dim, hidden_dim), dtype=jnp.float64) * scale
         params[f'l{l}_phi_e_b1'] = jnp.zeros(hidden_dim, dtype=jnp.float64)
-        params[f'l{l}_phi_e_W2'] = jax.random.normal(next(ki), (hidden_dim, hidden_dim), dtype=jnp.float64) * scale
-        params[f'l{l}_phi_e_b2'] = jnp.zeros(hidden_dim, dtype=jnp.float64)
+        if inner_depth == 2:
+            params[f'l{l}_phi_e_W2'] = jax.random.normal(next(ki), (hidden_dim, hidden_dim), dtype=jnp.float64) * scale
+            params[f'l{l}_phi_e_b2'] = jnp.zeros(hidden_dim, dtype=jnp.float64)
 
         # phi_h: [h_i | agg_i] → h_i next
         params[f'l{l}_phi_h_W1'] = jax.random.normal(next(ki), (2 * hidden_dim, hidden_dim), dtype=jnp.float64) * scale
         params[f'l{l}_phi_h_b1'] = jnp.zeros(hidden_dim, dtype=jnp.float64)
-        params[f'l{l}_phi_h_W2'] = jax.random.normal(next(ki), (hidden_dim, hidden_dim), dtype=jnp.float64) * scale
-        params[f'l{l}_phi_h_b2'] = jnp.zeros(hidden_dim, dtype=jnp.float64)
+        if inner_depth == 2:
+            params[f'l{l}_phi_h_W2'] = jax.random.normal(next(ki), (hidden_dim, hidden_dim), dtype=jnp.float64) * scale
+            params[f'l{l}_phi_h_b2'] = jnp.zeros(hidden_dim, dtype=jnp.float64)
 
     # ── Output heads ─────────────────────────────────────────────────────────────
     # Coordinate: predicts displacement from initial position; bias = 0 → identity at init
@@ -106,6 +110,11 @@ def init_mpnn(
     params['transform_b'] = jnp.array([1.0, 0.0, 0.0, 1.0], dtype=jnp.float64)
 
     return params
+
+
+def _mlp1(x, W1, b1):
+    """Single-layer MLP with tanh activation."""
+    return jnp.tanh(x @ W1 + b1)
 
 
 def _mlp2(x, W1, b1, W2, b2):
@@ -121,6 +130,7 @@ def apply_mpnn(
         receivers_np: Int[np.ndarray, "n_edges"],
         n_faces: int,
         num_layers: int,
+        inner_depth: int = 2,
 ) -> tuple[Float[Array, "n_faces 2"], Float[Array, "n_faces hidden_dim"], Float[Array, "n_faces 2 2"]]:
     """Forward pass MPNN → new centroid positions and tile deformation matrices.
 
@@ -163,11 +173,12 @@ def apply_mpnn(
         # Compute messages from sender/receiver features + edge geometry
         edge_input = jnp.concatenate(
             [h[senders_np], h[receivers_np], edge_feat], axis=-1)  # (n_edges, 2*hid+3)
-        msg = _mlp2(
-            edge_input,
-            params[f'l{l}_phi_e_W1'], params[f'l{l}_phi_e_b1'],
-            params[f'l{l}_phi_e_W2'], params[f'l{l}_phi_e_b2'],
-        )                                                           # (n_edges, hidden_dim)
+        if inner_depth == 1:
+            msg = _mlp1(edge_input, params[f'l{l}_phi_e_W1'], params[f'l{l}_phi_e_b1'])
+        else:
+            msg = _mlp2(edge_input,
+                        params[f'l{l}_phi_e_W1'], params[f'l{l}_phi_e_b1'],
+                        params[f'l{l}_phi_e_W2'], params[f'l{l}_phi_e_b2'])
 
         # Mean-aggregate incoming messages
         msg_agg = (
@@ -176,11 +187,13 @@ def apply_mpnn(
         ) / degree                                                  # (n_faces, hidden_dim)
 
         # Update node features
-        h = _mlp2(
-            jnp.concatenate([h, msg_agg], axis=-1),
-            params[f'l{l}_phi_h_W1'], params[f'l{l}_phi_h_b1'],
-            params[f'l{l}_phi_h_W2'], params[f'l{l}_phi_h_b2'],
-        )                                                           # (n_faces, hidden_dim)
+        node_input = jnp.concatenate([h, msg_agg], axis=-1)
+        if inner_depth == 1:
+            h = _mlp1(node_input, params[f'l{l}_phi_h_W1'], params[f'l{l}_phi_h_b1'])
+        else:
+            h = _mlp2(node_input,
+                      params[f'l{l}_phi_h_W1'], params[f'l{l}_phi_h_b1'],
+                      params[f'l{l}_phi_h_W2'], params[f'l{l}_phi_h_b2'])
 
     # ── Output heads ─────────────────────────────────────────────────────────────
     # Coordinate: predict displacement; near-zero init → x_new ≈ x_init at epoch 0

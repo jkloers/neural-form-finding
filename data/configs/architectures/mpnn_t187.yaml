@@ -1,0 +1,79 @@
+# Canonical config — validated best from Run 3 random search (t187, 2026-06-04)
+#
+# User-confirmed best visual result on c001. Balances chamfer and void closure:
+#   chamfer=0.020, void_delta=2.0 (strong closing), energy=10.4 (valid geometry)
+#
+# Key design decisions:
+#   coverage: 0.5      — allows inward contraction as voids close; key unlock from Run 2
+#   chamfer: 6406      — high enough to enforce proper circular shape
+#   void_closure: 270  — moderate; primary closing signal, always positive
+#   closure_delta: 67  — supplementary reward for closing motion; capped at 100 to
+#                        prevent loss from going negative (root cause of Run 2 issues)
+#   hinge_gap: 227     — keeps centroids connected during chamfer optimisation
+#   inner_depth: 1     — confirmed winner; depth=2 adds tanh saturation with no gain
+#   num_layers: 3      — 3-hop context needed for hub-face closing gradient
+#   force: 15          — validated on c001; suite loads keep their own magnitudes
+
+tessellation:
+  width: 2
+  height: 2
+  pattern: "unit_RDQK_D"
+  total_area: 3.0
+
+target:
+  type: "circle"
+  center: [0.0, 0.0]
+  radius: 1.0
+
+mapping:
+  map_type: gnn_mpnn
+  domain_restriction: 1.0
+  use_shirley_chiu: false
+  strict_boundary_fit: false
+  learn_global_scale: false
+  map_params:
+    hidden_dim: 32
+    num_layers: 3
+    inner_depth: 1
+    seed: 187
+
+optimization_weights:
+  validity_method: alternating_projection
+  n_proj_iters: 100
+
+training:
+  num_epochs: 500
+  learning_rate: 0.005
+  optimizer: "adam"
+  lr_schedule: "cosine"
+  geometric_loss_type: "boundary_vertices"
+  grad_clip: 1.0
+
+loss_weights:
+  chamfer: 6406.0
+  coverage: 0.5
+  material_area: 0.0
+  stretching: 1.0
+  shearing: 10.0
+  bending: 0.0
+  contact: 0.0
+  regularization: 0.0001
+  hinge_gap: 226.8
+  openness: 0.0
+  deformation: 0.0
+  void_closure: 270.3
+  closure_delta: 66.5
+
+visualization:
+  stage0: true
+  stage1: true
+  stage2: true
+  energy_plot: true
+  animation: true
+  show_plots: false
+  save_outputs: true
+  show_hinges: true
+  show_hinge_indices: false
+  show_face_indices: false
+  show_external_forces: true
+  show_kinematic_blocks: true

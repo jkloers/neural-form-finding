@@ -34,6 +34,7 @@ from nff.config.experiment import (
     _parse_full_raw,
 )
 from nff.stages.state import CentroidalState
+from nff.stages.mapping import init_direct_vertices_params, init_direct_transform_params
 from nff.stages.pipeline import forward_pipeline
 from nff.training.trainer import train_pipeline
 from nff.utils.pipeline_viz import visualize_pipeline_results, plot_loss_history
@@ -60,7 +61,12 @@ def _build_initial_state(config):
 
     configure_tessellation(tessellation, topo_obj)
 
-    if config.mapping.type.startswith('gnn_'):
+    _direct_type = config.mapping.type in ('direct_vertices', 'direct_transform')
+    if config.mapping.type.startswith('gnn_') or _direct_type:
+        # Center the flat tessellation on the target before building the state.
+        # For direct_* types the final centering/scaling is done in the
+        # respective init_* function, but coarse pre-centering here keeps the
+        # topology-level coordinates in a sensible range.
         target_center = np.array(
             getattr(config.target, 'center', [0.0, 0.0]), dtype=float)
         tess_centroid = np.mean(tessellation.get_face_centroids(), axis=0)
@@ -78,6 +84,7 @@ def _init_gnn_params(config, initial_state):
     gnn_cfg  = config.mapping.params if isinstance(config.mapping.params, dict) else {}
     hidden_dim  = int(gnn_cfg.get('hidden_dim', 16))
     num_layers  = int(gnn_cfg.get('num_layers', 2))
+    inner_depth = int(gnn_cfg.get('inner_depth', 2))
     seed        = int(gnn_cfg.get('seed', 0))
     key         = jax.random.PRNGKey(seed)
 
@@ -89,19 +96,27 @@ def _init_gnn_params(config, initial_state):
         params = init_egnn(key, node_feat_dim, hidden_dim, num_layers)
     elif map_type == 'gnn_mpnn':
         from nff.models.mpnn import init_mpnn
-        params = init_mpnn(key, node_feat_dim, hidden_dim, num_layers)
+        params = init_mpnn(key, node_feat_dim, hidden_dim, num_layers, inner_depth)
     else:
         from nff.models.dummy import init_dummy_gnn
         params = init_dummy_gnn(key, node_feat_dim, hidden_dim)
 
-    return params, {**static_features, 'num_layers': num_layers}
+    return params, {**static_features, 'num_layers': num_layers, 'inner_depth': inner_depth}
 
 
 def _init_map_params(config, initial_state):
-    """Initialise mapping parameters (GNN or analytical)."""
+    """Initialise mapping parameters (GNN, direct_vertices, or analytical)."""
     if config.mapping.type.startswith('gnn_'):
         params, static_features = _init_gnn_params(config, initial_state)
         return params, static_features
+    elif config.mapping.type == 'direct_vertices':
+        target_params = {'center': config.target.center, 'radius': config.target.radius}
+        params = init_direct_vertices_params(initial_state, target_params)
+        return params, None
+    elif config.mapping.type == 'direct_transform':
+        target_params = {'center': config.target.center, 'radius': config.target.radius}
+        params = init_direct_transform_params(initial_state, target_params)
+        return params, None
     else:
         raw = config.mapping.params
         params = raw if isinstance(raw, dict) else {}
@@ -142,6 +157,7 @@ def _run_one_problem(config, problem_label, run_dir):
         learn_global_scale=config.mapping.learn_global_scale,
         use_jit=_use_jit,
         load_specs=load_specs,
+        static_features=static_features,
     )
 
     prob_dir = None
