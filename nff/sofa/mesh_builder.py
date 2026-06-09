@@ -339,12 +339,24 @@ def _mesh_hinge(hs, fold_length, n_hinge, face_verts,
     nz = len(z_vals)
 
     # Interface node arrays: shape (n_fold+1, nz)
+    # _interface_slice orders nodes by increasing parametric value.
+    # When fold_sign < 0 the corner node (v=0 in the strip) is at the HIGH end
+    # of the parametric range, so the slice is reversed — fix it here so that
+    # i_nodes[0] / k_nodes[0] always corresponds to the hinge corner (v=0).
+    _, fold_sign_i, _, _ = _fold_axis_info(lj, adj_li)
+    _, fold_sign_k, _, _ = _fold_axis_info(ll, adj_lk)
+
     i_nodes = _interface_slice(
         face_node_grids[fi], face_s_nodes[fi], face_t_nodes[fi],
         lj, adj_li, fold_length, face_verts[fi])
     k_nodes = _interface_slice(
         face_node_grids[fk], face_s_nodes[fk], face_t_nodes[fk],
         ll, adj_lk, fold_length, face_verts[fk])
+
+    if fold_sign_i < 0:
+        i_nodes = i_nodes[::-1, :]
+    if fold_sign_k < 0:
+        k_nodes = k_nodes[::-1, :]
 
     nv = i_nodes.shape[0]
     assert nv == n_fold + 1, f"Interface mismatch: got {nv}, expected {n_fold+1}"
