@@ -1,50 +1,45 @@
 name: nff-sofa-oracle
-version: "0.2.0"
+version: "0.3.0"
 description: |
   High-fidelity SOFA physics oracle for the Neural Form-Finding (NFF) pipeline.
 
-  Simulates a 1×1 kirigami unit cell (4 rigid faces + 4 volumetric hinge strips)
-  using SOFA v25.12 HexahedronFEMForceField (corotational large) and returns four
-  mechanical quantities at static equilibrium: SvK strain energy, peak von Mises
-  stress, peak out-of-plane displacement, and first-yield fraction.
-  Gradients are computed via central finite differences (6 SOFA calls per gradient).
-
-  Phase 3a — HexahedronFEM inputs (hinge_arm_width, hinge_fold_length,
-  applied_displacement) + material constants.
-  Phase 4 will connect face_centroids from NFF CentroidalState as differentiable
-  inputs and use strain_energy as a training reward signal.
+  Accepts a CentroidalState (CS) mesh description — face centroids, centroid-node
+  vectors, hinge topology — plus two differentiable hinge design parameters
+  (arm_width_physical, fold_length). Internally builds a conforming hex mesh via
+  build_mesh_from_centroidal_state, runs SOFA v25.12 HexahedronFEMForceField
+  (method=small, PartialFixed z), and returns five scalar quantities at static
+  equilibrium: SvK strain energy, peak von Mises stress, peak in-plane XY
+  displacement, peak out-of-plane z displacement, and first-yield fraction.
+  Gradients are computed via central finite differences (4 SOFA calls per gradient
+  for 2 differentiable hinge design params).
 
 build_config:
   # Ubuntu/Debian base with Python 3.12 — matches local kgnn_sofa SOFA environment.
-  # Python version must match the SOFA Linux binary (v25.12 / Python 3.12 variant).
   base_image: "python:3.12-slim"
 
-  # SOFA Linux binaries are x86_64 only. The Tesseract container always runs
-  # on linux/amd64 regardless of the host machine architecture.
+  # SOFA Linux binaries are x86_64 only.
   target_platform: "linux/amd64"
 
-  # System packages required by SOFA:
-  #   libgomp1  — OpenMP runtime (SOFA uses multi-threaded assembly)
-  #   wget/unzip — for downloading and extracting the SOFA binary in the build step
+  # System packages required by SOFA and scipy:
   extra_packages:
     - wget
     - unzip
     - libgomp1
-    - libgl1            # headless OpenGL stub (some SOFA plugins probe for it)
-    - libglib2.0-0      # glib runtime, pulled in by several SOFA shared libs
+    - libgl1
+    - libglib2.0-0
 
-  # Copy the SOFA physics core into the container root.
-  # tesseract_api.py imports simulate_cell via `import simulate_cell`.
-  # simulate_cell.py is kept in sofa/ for development but copied to tesseract/
-  # so it lands in __tesseract_source__ (the Docker build context).
-  # package_data paths are relative to the tesseract/ directory.
+  # All SOFA physics modules and the CS mesh builder are copied into the container.
+  # simulate_cell.py imports materials, scene_builder (already in tesseract/).
+  # mesh_builder.py requires only numpy + scipy (no JAX).
+  # tesseract_api.py does `import mesh_builder as _mb` and `import simulate_cell as _sofa`.
   package_data:
-    - ["simulate_cell.py", "simulate_cell.py"]
+    - ["simulate_cell.py",  "simulate_cell.py"]
+    - ["mesh_builder.py",   "mesh_builder.py"]
+    - ["materials.py",      "materials.py"]
+    - ["scene_builder.py",  "scene_builder.py"]
 
   custom_build_steps:
     # ── Download and install SOFA v25.12 Linux / Python 3.12 binary ────────────
-    # SOFA does not ship a pip wheel — fetch the pre-compiled archive from
-    # GitHub Releases and extract to /opt/sofa (~300 MB download).
     - |
       RUN wget -q \
             "https://github.com/sofa-framework/sofa/releases/download/v25.12.00/SOFA_v25.12.00_Linux-Python_3.12.zip" \
@@ -54,14 +49,11 @@ build_config:
           && rm /tmp/sofa.zip
 
     # ── Wire SOFA into the Python path ─────────────────────────────────────────
-    # Use explicit values (no variable expansion) to avoid Dockerfile warnings
-    # about undefined $PYTHONPATH / $LD_LIBRARY_PATH at build time.
     - |
       ENV SOFA_ROOT=/opt/sofa
       ENV PYTHONPATH=/opt/sofa/plugins/SofaPython3/lib/python3/site-packages
       ENV LD_LIBRARY_PATH=/opt/sofa/lib:/opt/sofa/plugins/SofaPython3/lib
 
     # ── Verify the SOFA import at build time ───────────────────────────────────
-    # Fails the build immediately if the binary or env wiring is broken.
     - |
       RUN python -c "import Sofa; import Sofa.Core; import Sofa.Simulation; print('SOFA import OK')"

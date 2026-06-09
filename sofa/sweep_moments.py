@@ -94,8 +94,8 @@ def main():
         description='Moment sweep on the 2×2 RDQK CS mesh.')
     ap.add_argument('--config',    required=True,
                     help='Path to sofa YAML config.')
-    ap.add_argument('--mesh-npz',  default=None,
-                    help='Pre-built CS mesh .npz (use cs_mesh_fixed.npz).')
+    ap.add_argument('--mesh-npz',  required=True,
+                    help='Pre-built CS mesh .npz (from build_mesh_from_centroidal_state).')
     ap.add_argument('--moments',   default='0.001,0.002,0.005,0.010,0.020,0.050',
                     help='Comma-separated moment values in N·m.')
     ap.add_argument('--out-dir',   required=True,
@@ -111,30 +111,21 @@ def main():
     os.makedirs(args.out_dir, exist_ok=True)
 
     # ── load fixed mesh ───────────────────────────────────────────────────────
-    mesh_data = None
-    n_faces   = 0
-    if args.mesh_npz:
-        print(f"Loading mesh from {args.mesh_npz} ...")
-        d = np.load(args.mesh_npz)
-        nodes = d['nodes']
-        hexes = d['hexes']
-        n_faces = int(d.get('n_faces', 0))
-        if n_faces == 0:
-            n_faces = sum(1 for k in d.files
-                          if k.startswith('f') and k.endswith('_mask')
-                          and k[1:-5].isdigit())
-        bc_masks = {}
-        for i in range(n_faces):
-            m = d[f'f{i}_mask'].astype(bool)
-            bc_masks[f'f{i}']     = m
-            bc_masks[f'face_{i}'] = m
-        bc_masks['clamped'] = d.get('clamped_mask', d['f0_mask']).astype(bool)
-        bc_masks['loaded']  = d.get('loaded_mask',  d['f1_mask']).astype(bool)
-        mesh_data = (nodes, hexes, bc_masks)
-        face_size = float(d.get('face_size', phys.face_size))
-        print(f"  {len(nodes)} nodes, {len(hexes)} hexes, {n_faces} faces")
-    else:
-        face_size = phys.face_size
+    print(f"Loading mesh from {args.mesh_npz} ...")
+    d = np.load(args.mesh_npz)
+    nodes = d['nodes']
+    hexes = d['hexes']
+    n_faces = int(d['n_faces']) if 'n_faces' in d else sum(
+        1 for k in d.files
+        if k.startswith('f') and k.endswith('_mask') and k[1:-5].isdigit())
+    bc_masks = {}
+    for i in range(n_faces):
+        m = d[f'f{i}_mask'].astype(bool)
+        bc_masks[f'f{i}']     = m
+        bc_masks[f'face_{i}'] = m
+    bc_masks['clamped'] = d.get('clamped_mask', d['f0_mask']).astype(bool)
+    bc_masks['loaded']  = d.get('loaded_mask',  d['f1_mask']).astype(bool)
+    print(f"  {len(nodes)} nodes, {len(hexes)} hexes, {n_faces} faces")
 
     # ── summary table header ──────────────────────────────────────────────────
     clamped_faces_cfg = raw.get('boundary_conditions', {}).get('clamped_faces', [0])
@@ -163,17 +154,14 @@ def main():
 
         print(f"  Running M={M:.4f} N·m ...", flush=True)
         r = evaluate_unit_cell(
-            hinge_arm_width   = phys.arm_width,
-            hinge_fold_length = phys.fold_length,
-            rotation_angle_deg= 0.0,          # unused in moment mode
-            applied_moment    = M,
-            loading_mode      = 'moment',
-            face_size         = face_size,
-            sheet_thickness   = phys.sheet_thickness,
-            young_modulus     = phys.young_modulus,
-            poisson_ratio     = phys.poisson_ratio,
-            yield_strength    = phys.yield_strength,
-            mesh_data         = mesh_data,
+            nodes, hexes, bc_masks,
+            rotation_angle_deg = 0.0,
+            applied_moment     = M,
+            loading_mode       = 'moment',
+            sheet_thickness    = phys.sheet_thickness,
+            young_modulus      = phys.young_modulus,
+            poisson_ratio      = phys.poisson_ratio,
+            yield_strength     = phys.yield_strength,
         )
 
         # Save full result

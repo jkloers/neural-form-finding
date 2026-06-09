@@ -2,6 +2,6 @@
 #
 # tesseract_core is injected automatically by the Tesseract build system.
 # SOFA and SofaPython3 are installed via custom_build_steps in tesseract_config.yaml.
-# Only standard scientific Python packages are listed here.
 
 numpy
+scipy
