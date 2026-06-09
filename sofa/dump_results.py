@@ -201,7 +201,7 @@ if __name__ == '__main__':
         # loads[0].value is JAX-normalized training units — never use for SOFA.
         applied_moment  = float(sofa_raw.get('applied_moment',
                                              loads[0]['value'] if loads else 0.0))
-        rotation_angle  = -45.0   # not used in moment mode
+        rotation_angle  = float(sofa_raw.get('rotation_angle_deg', -45.0))
 
         # --out-dir puts sofa_result.npz in the run directory
         if args.out_dir is not None:

@@ -25,9 +25,34 @@ Loading regime options (controlled by loading_mode):
 """
 
 import numpy as np
+try:
+    import Sofa.Core as _SofaCore
+    _HAVE_SOFA_CORE = True
+except ImportError:
+    _HAVE_SOFA_CORE = False
 
 N_STEPS = 500     # more steps → smoother large-rotation ramp
 DT      = 0.01
+
+
+def _make_moment_ramp(cff, base_forces: np.ndarray, n_steps: int):
+    """Return a SOFA Controller that linearly ramps ConstantForceField forces."""
+    if not _HAVE_SOFA_CORE:
+        return None
+
+    base = base_forces.copy()
+
+    class _Ramp(_SofaCore.Controller):
+        def __init__(self, *args, **kwargs):
+            _SofaCore.Controller.__init__(self, *args, **kwargs)
+            self._step = 0
+
+        def onAnimateBeginEvent(self, _event):
+            self._step += 1
+            alpha = min(self._step / n_steps, 1.0)
+            cff.forces.value = (alpha * base).tolist()
+
+    return _Ramp
 
 
 def build_scene(root, nodes: np.ndarray, hexes: np.ndarray,
@@ -38,7 +63,8 @@ def build_scene(root, nodes: np.ndarray, hexes: np.ndarray,
                 young: float = 3.5e9,
                 nu:    float = 0.36,
                 sheet_thickness: float = 0.001,
-                density: float = 1250.0):
+                density: float = 1250.0,
+                fem_method: str = 'small'):
     """
     Populate a SOFA root node with the unified kirigami mesh.
 
@@ -97,10 +123,12 @@ def build_scene(root, nodes: np.ndarray, hexes: np.ndarray,
 
     cell.addObject("UniformMass", totalMass=float(density * len(hexes) * 1e-8))
 
+    # fem_method='small' (linear FEM) is required for displacement-controlled
+    # loading stability. method='large' diverges under LinearMovementConstraint.
     cell.addObject(
         "HexahedronFEMForceField", template="Vec3d", name="FEM",
         youngModulus=young, poissonRatio=nu,
-        method="large",
+        method=fem_method,
     )
 
     # ── Boundary conditions ────────────────────────────────────────────────────
@@ -112,6 +140,12 @@ def build_scene(root, nodes: np.ndarray, hexes: np.ndarray,
     loaded_nodes = np.where(loaded_mask)[0]
 
     cell.addObject("FixedConstraint", name="clamp_face", indices=clamped_idx.tolist())
+
+    # In-plane mechanism: fix z-DOF on all nodes to suppress out-of-plane buckling.
+    # method='small' + PartialFixed(z) converges cleanly; method='large' diverges.
+    all_idx = list(range(len(nodes)))
+    cell.addObject("PartialFixedConstraint", name="fix_z", indices=all_idx,
+                   fixedDirections=[0, 0, 1])
 
     # In-plane pivot: right edge of clamped face, bottom of structure.
     x_fold = float(nodes[clamped_idx, 0].max())
@@ -164,12 +198,19 @@ def build_scene(root, nodes: np.ndarray, hexes: np.ndarray,
         forces = np.zeros((len(loaded_nodes), 3))
         forces[:, 0] = -scale * dy_nodes   # Fx tangential
         forces[:, 1] =  scale * dx_nodes   # Fy tangential
-        cell.addObject(
+
+        # Start ConstantForceField at zero; a Controller ramps it to full magnitude
+        # over N_STEPS steps.  This avoids the explosive initial residual that causes
+        # SOFA to diverge when the full moment is applied from step 1.
+        cff = cell.addObject(
             "ConstantForceField", name="moment_loaded",
             template="Vec3d",
             indices=loaded_nodes.tolist(),
-            forces=forces.tolist(),
+            forces=np.zeros_like(forces).tolist(),
         )
+        RampClass = _make_moment_ramp(cff, forces, N_STEPS)
+        if RampClass is not None:
+            root.addObject(RampClass(name="moment_ramp"))
 
     else:
         raise ValueError(f"Unknown loading_mode: {loading_mode!r}")
