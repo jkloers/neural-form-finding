@@ -6,14 +6,16 @@ bilinear interpolation of the 4 physical corners.  Hinge strips are
 parallelogram slabs sharing fold-boundary nodes with both adjacent face
 meshes — fully conforming, no staircase, no disconnected components.
 
-Public API (unchanged)
-----------------------
+Public API
+----------
   CLOSED_GAP_TOL  : float constant
   check_face_intersections(face_verts)
-  build_mesh_from_centroidal_state(cs, fold_length, sheet_thickness,
+  build_mesh_from_centroidal_state(cs, fold_top, sheet_thickness,
                                    n_face=4, n_hinge=2, n_z=2,
-                                   arm_width_physical=None)
+                                   arm_width_physical=None,
+                                   fold_bot=0.0, bezier_params=None)
   -> (nodes (N,3), hexes (H,8), bc_masks dict)
+  fold_length kwarg retained as backward-compat alias for fold_top.
 """
 
 from __future__ import annotations
@@ -38,6 +40,20 @@ def _stitch(breaks, nelems):
     for (a, b), n in zip(zip(breaks[:-1], breaks[1:]), nelems):
         pts.extend(np.linspace(a, b, n + 1)[1:].tolist())
     return np.array(pts, dtype=np.float64)
+
+
+def _bezier_eval(ctrl_pts: np.ndarray, t: float) -> np.ndarray:
+    """Evaluate a Bézier curve at t ∈ [0,1] using De Casteljau's algorithm.
+
+    Works for any degree (2 control pts = linear, 3 = quadratic, …).
+    ctrl_pts: (n_ctrl, 2) array of 2-D control points.
+    """
+    pts = np.asarray(ctrl_pts, dtype=np.float64).copy()
+    n = len(pts)
+    for _ in range(1, n):
+        pts[:n-1] = (1.0 - t) * pts[:n-1] + t * pts[1:n]
+        n -= 1
+    return pts[0]
 
 
 # ─── face intersection detection (public) ───────────────────────────────────
@@ -92,14 +108,19 @@ def check_face_intersections(face_verts: np.ndarray, tol: float = 1e-8) -> None:
 
 # ─── geometry extraction ─────────────────────────────────────────────────────
 
-def _extract_geometry(cs, fold_length, arm_width_physical=None):
+def _extract_geometry(cs, fold_top, fold_bot=0.0, arm_width_physical=None):
     """
     Build adjusted face_verts and hinge strip descriptors from CentroidalState.
+
+    Parameters
+    ----------
+    fold_top : float — fold zone depth for the far anchor on each face [m]
+    fold_bot : float — fold zone depth for the near anchor (default 0 = corner)
 
     Returns
     -------
     face_verts : (n_faces, 4, 2) — corner positions after arm_width override
-    hinge_strips : list of dicts per hinge
+    hinge_strips : list of dicts per hinge (each has fold_top, fold_bot fields)
     """
     fc  = np.array(cs.face_centroids)
     cnv = np.array(cs.centroid_node_vectors)
@@ -159,6 +180,8 @@ def _extract_geometry(cs, fold_length, arm_width_physical=None):
             'p1': p1, 'p2': p2,
             'fold_dir_i': fold_dir_i, 'fold_dir_k': fold_dir_k,
             'arm_width': arm_widths[h],
+            'fold_top': float(fold_top),
+            'fold_bot': float(fold_bot),
         })
 
     return face_verts, hinge_strips
@@ -184,28 +207,35 @@ def _fold_axis_info(lj, adj_li):
         return 't', int(np.sign(dt)), 's', float(sc)
 
 
-def _face_grid_breaks(face_verts_i, hinge_corners, fold_length, n_face, n_hinge):
+def _face_grid_breaks(face_verts_i, hinge_corners, n_face, n_hinge):
     """
     Build parametric break points and element counts for one face.
 
-    hinge_corners : list of (lj, adj_li)
+    hinge_corners : list of (lj, adj_li, fold_top, fold_bot)
+      fold_top — far anchor depth [m]; fold_bot — near anchor depth [m] (0 = corner)
 
     Returns s_breaks, t_breaks, s_nelems, t_nelems
     """
     s_set = {0.0, 1.0}
     t_set = {0.0, 1.0}
 
-    for lj, adj_li in hinge_corners:
+    for lj, adj_li, fold_top, fold_bot in hinge_corners:
         fold_axis, fold_sign, _, _ = _fold_axis_info(lj, adj_li)
         c_lj  = face_verts_i[lj]
         c_adj = face_verts_i[adj_li]
         phys  = float(np.linalg.norm(c_adj - c_lj))
-        ff    = min(fold_length / phys if phys > 1e-12 else 0.1, 0.49)
+        ff_top = min(fold_top / phys if phys > 1e-12 else 0.1, 0.49)
         sc, tc = _PC[lj]
         if fold_axis == 's':
-            s_set.add(float(np.clip(sc + fold_sign * ff, 0.0, 1.0)))
+            s_set.add(float(np.clip(sc + fold_sign * ff_top, 0.0, 1.0)))
+            if fold_bot > 1e-9:
+                ff_bot = min(fold_bot / phys if phys > 1e-12 else 0.0, ff_top - 1e-6)
+                s_set.add(float(np.clip(sc + fold_sign * ff_bot, 0.0, 1.0)))
         else:
-            t_set.add(float(np.clip(tc + fold_sign * ff, 0.0, 1.0)))
+            t_set.add(float(np.clip(tc + fold_sign * ff_top, 0.0, 1.0)))
+            if fold_bot > 1e-9:
+                ff_bot = min(fold_bot / phys if phys > 1e-12 else 0.0, ff_top - 1e-6)
+                t_set.add(float(np.clip(tc + fold_sign * ff_bot, 0.0, 1.0)))
 
     def _ne(vals):
         if len(vals) < 2:
@@ -226,16 +256,26 @@ def _find_closest_idx(arr, val, tol=1e-9):
     return idx
 
 
-def _interface_slice(node_grid, s_nodes, t_nodes, lj, adj_li, fold_length, face_verts_i):
+def _interface_slice(node_grid, s_nodes, t_nodes, lj, adj_li,
+                     fold_top, fold_bot, face_verts_i):
     """
-    Return (n_fold+1, nz) array of global node indices at the
-    hinge interface on one face (at the arm edge, fold zone).
+    Return (n_fold+1, nz) array of global node indices at the hinge interface.
+
+    The slice spans from the near anchor (fold_bot from corner) to the far
+    anchor (fold_top from corner).  Result is always ordered so that index 0
+    corresponds to the near anchor (fold_bot side) and index -1 to the far
+    anchor (fold_top side), regardless of fold_sign.
+
+    fold_top : far anchor depth [m] (was fold_length)
+    fold_bot : near anchor depth [m] (0 = hinge corner)
     """
     fold_axis, fold_sign, arm_axis, arm_val = _fold_axis_info(lj, adj_li)
     c_lj  = face_verts_i[lj]
     c_adj = face_verts_i[adj_li]
     phys  = float(np.linalg.norm(c_adj - c_lj))
-    ff    = min(fold_length / phys if phys > 1e-12 else 0.1, 0.49)
+    ff_top = min(fold_top / phys if phys > 1e-12 else 0.1, 0.49)
+    ff_bot = (min(fold_bot / phys if phys > 1e-12 else 0.0, ff_top - 1e-6)
+              if fold_bot > 1e-9 else 0.0)
     sc, tc = _PC[lj]
 
     if arm_axis == 's':
@@ -244,31 +284,39 @@ def _interface_slice(node_grid, s_nodes, t_nodes, lj, adj_li, fold_length, face_
         arm_idx = _find_closest_idx(t_nodes, arm_val)
 
     if fold_axis == 't':
-        fold_start = tc
-        fold_end   = tc + fold_sign * ff
+        near_param = tc + fold_sign * ff_bot   # parametric near-anchor position
+        far_param  = tc + fold_sign * ff_top   # parametric far-anchor position
+        lo = min(near_param, far_param)
+        hi = max(near_param, far_param)
+        fi_lo = _find_closest_idx(t_nodes, lo)
+        fi_hi = _find_closest_idx(t_nodes, hi)
+        result = node_grid[arm_idx, fi_lo:fi_hi+1, :]   # (n_fold+1, nz)
+        # Ensure index-0 = near anchor.  When fold_sign > 0: lo = near, already correct.
+        # When fold_sign < 0: lo = far, so reverse.
         if fold_sign < 0:
-            fold_start, fold_end = fold_end, fold_start
-        fi_start = _find_closest_idx(t_nodes, fold_start)
-        fi_end   = _find_closest_idx(t_nodes, fold_end)
-        # arm_axis == 's': slice [arm_idx, fi_start:fi_end+1, :]
-        return node_grid[arm_idx, fi_start:fi_end+1, :]   # (n_fold+1, nz)
+            result = result[::-1, :]
+        return result
     else:
-        fold_start = sc
-        fold_end   = sc + fold_sign * ff
+        near_param = sc + fold_sign * ff_bot
+        far_param  = sc + fold_sign * ff_top
+        lo = min(near_param, far_param)
+        hi = max(near_param, far_param)
+        fi_lo = _find_closest_idx(s_nodes, lo)
+        fi_hi = _find_closest_idx(s_nodes, hi)
+        result = node_grid[fi_lo:fi_hi+1, arm_idx, :]   # (n_fold+1, nz)
         if fold_sign < 0:
-            fold_start, fold_end = fold_end, fold_start
-        fi_start = _find_closest_idx(s_nodes, fold_start)
-        fi_end   = _find_closest_idx(s_nodes, fold_end)
-        # arm_axis == 't': slice [fi_start:fi_end+1, arm_idx, :]
-        return node_grid[fi_start:fi_end+1, arm_idx, :]   # (n_fold+1, nz)
+            result = result[::-1, :]
+        return result
 
 
 # ─── face mesh builder ───────────────────────────────────────────────────────
 
-def _mesh_face(face_verts_i, hinge_corners, fold_length, sheet_thickness,
+def _mesh_face(face_verts_i, hinge_corners, sheet_thickness,
                n_face, n_hinge, n_z, node_list):
     """
     Build bilinear hex mesh for one face.
+
+    hinge_corners : list of (lj, adj_li, fold_top, fold_bot)
 
     Returns
     -------
@@ -279,7 +327,7 @@ def _mesh_face(face_verts_i, hinge_corners, fold_length, sheet_thickness,
     hexes     : list of [8] int connectivity
     """
     s_breaks, t_breaks, s_ne, t_ne = _face_grid_breaks(
-        face_verts_i, hinge_corners, fold_length, n_face, n_hinge)
+        face_verts_i, hinge_corners, n_face, n_hinge)
 
     s_nodes = _stitch(s_breaks, s_ne)
     t_nodes = _stitch(t_breaks, t_ne)
@@ -317,71 +365,119 @@ def _mesh_face(face_verts_i, hinge_corners, fold_length, sheet_thickness,
 
 # ─── hinge strip builder ─────────────────────────────────────────────────────
 
-def _mesh_hinge(hs, fold_length, n_hinge, face_verts,
+def _mesh_hinge(hs, n_hinge, face_verts,
                 face_node_grids, face_s_nodes, face_t_nodes, face_z_vals,
-                node_list):
+                node_list, bezier_params=None):
     """
     Build hinge strip hexes.
 
-    Shares fold-boundary nodes with both adjacent face meshes.
-    Adds new interior columns (u = 1 .. n_arm-1) only.
+    Shares fold-boundary nodes with both adjacent face meshes (via
+    _interface_slice).  Adds new interior columns (u = 1..n_arm-1) only.
+
+    Parameters
+    ----------
+    bezier_params : None | dict
+        If None: bilinear transfinite interpolation.
+        If dict:  Bézier transfinite interpolation with keys
+          'waist_top' — control-point offset (fold direction) for far Bézier [m]
+          'waist_bot' — control-point offset (fold direction) for near Bézier [m]
+          'n_ctrl'    — number of Bézier control points (default 3 = quadratic)
 
     Returns list of [8] hex connectivity.
     """
     fi, lj, adj_li = hs['fi'], hs['lj'], hs['adj_li']
     fk, ll, adj_lk = hs['fk'], hs['ll'], hs['adj_lk']
-    p1, p2 = hs['p1'], hs['p2']
-    fdi, fdk = hs['fold_dir_i'], hs['fold_dir_k']
+    p1, p2     = hs['p1'], hs['p2']
+    fdi, fdk   = hs['fold_dir_i'], hs['fold_dir_k']
+    fold_top   = hs['fold_top']
+    fold_bot   = hs['fold_bot']
     n_arm  = n_hinge
     n_fold = n_hinge
 
     z_vals = face_z_vals[fi]
     nz = len(z_vals)
 
-    # Interface node arrays: shape (n_fold+1, nz)
-    # _interface_slice orders nodes by increasing parametric value.
-    # When fold_sign < 0 the corner node (v=0 in the strip) is at the HIGH end
-    # of the parametric range, so the slice is reversed — fix it here so that
-    # i_nodes[0] / k_nodes[0] always corresponds to the hinge corner (v=0).
-    _, fold_sign_i, _, _ = _fold_axis_info(lj, adj_li)
-    _, fold_sign_k, _, _ = _fold_axis_info(ll, adj_lk)
-
+    # _interface_slice already orders index-0 = near anchor, index-1 = far anchor.
     i_nodes = _interface_slice(
         face_node_grids[fi], face_s_nodes[fi], face_t_nodes[fi],
-        lj, adj_li, fold_length, face_verts[fi])
+        lj, adj_li, fold_top, fold_bot, face_verts[fi])
     k_nodes = _interface_slice(
         face_node_grids[fk], face_s_nodes[fk], face_t_nodes[fk],
-        ll, adj_lk, fold_length, face_verts[fk])
-
-    if fold_sign_i < 0:
-        i_nodes = i_nodes[::-1, :]
-    if fold_sign_k < 0:
-        k_nodes = k_nodes[::-1, :]
+        ll, adj_lk, fold_top, fold_bot, face_verts[fk])
 
     nv = i_nodes.shape[0]
     assert nv == n_fold + 1, f"Interface mismatch: got {nv}, expected {n_fold+1}"
 
-    # Strip corners (bilinear in u-v plane)
-    hs0 = p1
-    hs1 = p2
-    hs2 = p2 + fdk * fold_length
-    hs3 = p1 + fdi * fold_length
+    # Strip anchor corners (physical XY)
+    P0_bot = p1 + fdi * fold_bot   # face i, near anchor
+    P2_bot = p2 + fdk * fold_bot   # face k, near anchor
+    P0_top = p1 + fdi * fold_top   # face i, far anchor
+    P2_top = p2 + fdk * fold_top   # face k, far anchor
 
-    # Full strip grid: (n_arm+1, n_fold+1, nz)
+    # Full strip grid: (n_arm+1, n_fold+1, nz) — index-0 in v = near side
     strip = np.full((n_arm+1, n_fold+1, nz), -1, dtype=np.int32)
-    strip[0, :, :]      = i_nodes
-    strip[n_arm, :, :]  = k_nodes
+    strip[0, :, :]     = i_nodes
+    strip[n_arm, :, :] = k_nodes
 
-    base = len(node_list)
-    for iu in range(1, n_arm):
-        u = iu / n_arm
-        for iv in range(n_fold + 1):
-            v = iv / n_fold
-            xy = _blerp([hs0, hs1, hs2, hs3], u, v)
-            for iw in range(nz):
-                node_list.append([xy[0], xy[1], z_vals[iw]])
-                strip[iu, iv, iw] = base
-                base += 1
+    if bezier_params is not None:
+        # Bézier transfinite interpolation:
+        #   xy(u,v) = (1-v)*B_bot(u) + v*B_top(u)
+        # where B_bot / B_top are quadratic (n_ctrl=3) Bézier curves.
+        # The waist control point is offset along the average fold direction.
+        waist_top = float(bezier_params.get('waist_top', 0.0))
+        waist_bot = float(bezier_params.get('waist_bot', 0.0))
+        n_ctrl    = int(bezier_params.get('n_ctrl', 3))
+        fold_mid  = (fdi + fdk) * 0.5
+        nm = float(np.linalg.norm(fold_mid))
+        fold_mid_hat = fold_mid / nm if nm > 1e-12 else fdi
+
+        def _build_ctrl(P0, P2, waist, n):
+            """Build n control points between P0 and P2 with waist offset."""
+            if n <= 2:
+                return np.stack([P0, P2])
+            mid = (P0 + P2) * 0.5 + waist * fold_mid_hat
+            if n == 3:
+                return np.stack([P0, mid, P2])
+            # For n > 3: distribute extra interior points linearly,
+            # with the midpoint kept at the waist position.
+            pts = [P0]
+            for k in range(1, n - 1):
+                t = k / (n - 1)
+                base_pt = (1 - t) * P0 + t * P2
+                # gaussian bump centred at t=0.5
+                bump = waist * np.exp(-8.0 * (t - 0.5)**2) * fold_mid_hat
+                pts.append(base_pt + bump)
+            pts.append(P2)
+            return np.stack(pts)
+
+        ctrl_bot = _build_ctrl(P0_bot, P2_bot, waist_bot, n_ctrl)
+        ctrl_top = _build_ctrl(P0_top, P2_top, waist_top, n_ctrl)
+
+        base = len(node_list)
+        for iu in range(1, n_arm):
+            u = iu / n_arm
+            b_bot = _bezier_eval(ctrl_bot, u)
+            b_top = _bezier_eval(ctrl_top, u)
+            for iv in range(n_fold + 1):
+                v = iv / n_fold
+                xy = (1.0 - v) * b_bot + v * b_top
+                for iw in range(nz):
+                    node_list.append([xy[0], xy[1], z_vals[iw]])
+                    strip[iu, iv, iw] = base
+                    base += 1
+    else:
+        # Bilinear transfinite interpolation (original behaviour).
+        hs0, hs1, hs2, hs3 = P0_bot, P2_bot, P2_top, P0_top
+        base = len(node_list)
+        for iu in range(1, n_arm):
+            u = iu / n_arm
+            for iv in range(n_fold + 1):
+                v = iv / n_fold
+                xy = _blerp([hs0, hs1, hs2, hs3], u, v)
+                for iw in range(nz):
+                    node_list.append([xy[0], xy[1], z_vals[iw]])
+                    strip[iu, iv, iw] = base
+                    base += 1
 
     hexes = []
     for iu in range(n_arm):
@@ -448,13 +544,16 @@ def _merge_nodes(node_list, all_hexes, face_node_grids, tol):
 
 def build_mesh_from_centroidal_state(
     cs,
-    fold_length: float,
-    sheet_thickness: float,
+    fold_length: float = None,
+    sheet_thickness: float = 0.001,
     n_face: int = 4,
     n_hinge: int = 2,
     n_z: int = 2,
     arm_width_physical: float = None,
     arm_width_override: float = None,
+    fold_top: float = None,
+    fold_bot: float = 0.0,
+    bezier_params: dict = None,
 ) -> Tuple[np.ndarray, np.ndarray, Dict[str, np.ndarray]]:
     """
     Build a conforming SOFA hex mesh from a CentroidalState.
@@ -465,12 +564,18 @@ def build_mesh_from_centroidal_state(
     Parameters
     ----------
     cs                 : CentroidalState (Stage-1 output, physical units)
-    fold_length        : hinge strip depth along face edge [m]
+    fold_length        : legacy alias for fold_top (backward compat)
     sheet_thickness    : full sheet thickness in z [m]
     n_face             : hex elements per face-panel segment (default 4)
     n_hinge            : hex elements per hinge/fold segment (default 2)
     n_z                : hex layers through thickness (default 2)
     arm_width_physical : required for closed hinges (gap < CLOSED_GAP_TOL)
+    fold_top           : far anchor depth along face edge [m] (replaces fold_length)
+    fold_bot           : near anchor depth along face edge [m] (default 0 = corner)
+    bezier_params      : None for bilinear strip interpolation; or dict with keys:
+                           'waist_top' — fold-dir offset for far Bézier control pt [m]
+                           'waist_bot' — fold-dir offset for near Bézier control pt [m]
+                           'n_ctrl'    — Bézier degree + 1 (default 3 = quadratic)
 
     Returns
     -------
@@ -478,17 +583,27 @@ def build_mesh_from_centroidal_state(
     hexes    : (H, 8) int32
     bc_masks : dict  'f{i}' / 'face_{i}' / 'clamped' / 'loaded'
     """
+    # Backward-compat: fold_length is an alias for fold_top.
+    if fold_top is None:
+        if fold_length is not None:
+            fold_top = fold_length
+        else:
+            raise ValueError("Provide fold_top (or legacy fold_length).")
+
     if arm_width_override is not None and arm_width_physical is None:
         arm_width_physical = arm_width_override
 
-    face_verts, hinge_strips = _extract_geometry(cs, fold_length, arm_width_physical)
+    face_verts, hinge_strips = _extract_geometry(
+        cs, fold_top, fold_bot, arm_width_physical)
     n_faces = len(face_verts)
 
     # ── collect hinge corners per face ───────────────────────────────────────
     face_hinge_corners: List[List] = [[] for _ in range(n_faces)]
     for hs in hinge_strips:
-        face_hinge_corners[hs['fi']].append((hs['lj'], hs['adj_li']))
-        face_hinge_corners[hs['fk']].append((hs['ll'], hs['adj_lk']))
+        face_hinge_corners[hs['fi']].append(
+            (hs['lj'], hs['adj_li'], hs['fold_top'], hs['fold_bot']))
+        face_hinge_corners[hs['fk']].append(
+            (hs['ll'], hs['adj_lk'], hs['fold_top'], hs['fold_bot']))
 
     # ── mesh each face ───────────────────────────────────────────────────────
     node_list: List = []
@@ -500,7 +615,7 @@ def build_mesh_from_centroidal_state(
 
     for i in range(n_faces):
         ng, sn, tn, zv, fh = _mesh_face(
-            face_verts[i], face_hinge_corners[i], fold_length, sheet_thickness,
+            face_verts[i], face_hinge_corners[i], sheet_thickness,
             n_face, n_hinge, n_z, node_list)
         face_node_grids.append(ng)
         face_s_nodes.append(sn)
@@ -511,14 +626,14 @@ def build_mesh_from_centroidal_state(
     # ── mesh each hinge strip ────────────────────────────────────────────────
     for hs in hinge_strips:
         hh = _mesh_hinge(
-            hs, fold_length, n_hinge,
+            hs, n_hinge,
             face_verts, face_node_grids, face_s_nodes, face_t_nodes, face_z_vals_list,
-            node_list)
+            node_list, bezier_params=bezier_params)
         all_hexes.extend(hh)
 
     # ── merge coincident nodes (free corners shared across faces) ────────────
     # Tolerance: 1 ppm of the hinge arm width (much smaller than any intended gap)
-    merge_tol = (arm_width_physical or fold_length) * 1e-6
+    merge_tol = (arm_width_physical or fold_top) * 1e-6
     nodes, hexes, face_node_grids = _merge_nodes(
         node_list, all_hexes, face_node_grids, tol=merge_tol)
     n_nodes = len(nodes)

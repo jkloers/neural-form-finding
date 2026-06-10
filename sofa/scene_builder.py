@@ -31,8 +31,8 @@ try:
 except ImportError:
     _HAVE_SOFA_CORE = False
 
-N_STEPS = 500     # more steps → smoother large-rotation ramp
-DT      = 0.01
+DT            = 0.002   # time-step size [s]
+N_STEPS_DEFAULT = 500   # default number of incremental steps
 
 
 def _make_moment_ramp(cff, base_forces: np.ndarray, n_steps: int):
@@ -60,11 +60,14 @@ def build_scene(root, nodes: np.ndarray, hexes: np.ndarray,
                 rotation_angle_deg: float = 45.0,
                 applied_moment: float = 0.0,
                 loading_mode: str = 'rotation',
+                shear_displacement_m: float = 0.005,
+                tension_displacement_m: float = 0.005,
                 young: float = 3.5e9,
                 nu:    float = 0.36,
                 sheet_thickness: float = 0.001,
                 density: float = 1250.0,
-                fem_method: str = 'small'):
+                fem_method: str = 'polar',
+                n_steps: int = N_STEPS_DEFAULT):
     """
     Populate a SOFA root node with the unified kirigami mesh.
 
@@ -81,6 +84,9 @@ def build_scene(root, nodes: np.ndarray, hexes: np.ndarray,
     loading_mode        : 'rotation' | 'moment'
     young, nu           : material (same for faces and hinges)
     sheet_thickness     : used only to estimate density volume
+    fem_method          : 'polar' (co-rotational, large-rotation stable) |
+                          'small' (linear FEM, valid to ~10°)
+    n_steps             : number of incremental load steps (default 500)
 
     Returns
     -------
@@ -88,7 +94,7 @@ def build_scene(root, nodes: np.ndarray, hexes: np.ndarray,
     """
     root.gravity = [0.0, 0.0, 0.0]
     root.dt = DT
-    T_final = N_STEPS * DT
+    T_final = n_steps * DT
 
     root.addObject("RequiredPlugin", pluginName=" ".join([
         "Sofa.Component.AnimationLoop",
@@ -123,8 +129,9 @@ def build_scene(root, nodes: np.ndarray, hexes: np.ndarray,
 
     cell.addObject("UniformMass", totalMass=float(density * len(hexes) * 1e-8))
 
-    # fem_method='small' (linear FEM) is required for displacement-controlled
-    # loading stability. method='large' diverges under LinearMovementConstraint.
+    # fem_method='polar': co-rotational FEM — handles large rigid-body rotations via
+    # polar decomposition at each element. Stable for ~70–90° with incremental loading.
+    # 'small' (linear FEM) is valid only to ~10°; kept as fallback.
     cell.addObject(
         "HexahedronFEMForceField", template="Vec3d", name="FEM",
         youngModulus=young, poissonRatio=nu,
@@ -142,7 +149,7 @@ def build_scene(root, nodes: np.ndarray, hexes: np.ndarray,
     cell.addObject("FixedConstraint", name="clamp_face", indices=clamped_idx.tolist())
 
     # In-plane mechanism: fix z-DOF on all nodes to suppress out-of-plane buckling.
-    # method='small' + PartialFixed(z) converges cleanly; method='large' diverges.
+    # method='polar' + PartialFixed(z): tested stable (unlike method='large' which diverges).
     all_idx = list(range(len(nodes)))
     cell.addObject("PartialFixedConstraint", name="fix_z", indices=all_idx,
                    fixedDirections=[0, 0, 1])
@@ -197,7 +204,7 @@ def build_scene(root, nodes: np.ndarray, hexes: np.ndarray,
         forces[:, 1] =  scale * dx_nodes   # Fy tangential
 
         # Start ConstantForceField at zero; a Controller ramps it to full magnitude
-        # over N_STEPS steps.  This avoids the explosive initial residual that causes
+        # over n_steps steps.  This avoids the explosive initial residual that causes
         # SOFA to diverge when the full moment is applied from step 1.
         cff = cell.addObject(
             "ConstantForceField", name="moment_loaded",
@@ -205,9 +212,44 @@ def build_scene(root, nodes: np.ndarray, hexes: np.ndarray,
             indices=loaded_nodes.tolist(),
             forces=np.zeros_like(forces).tolist(),
         )
-        RampClass = _make_moment_ramp(cff, forces, N_STEPS)
+        RampClass = _make_moment_ramp(cff, forces, n_steps)
         if RampClass is not None:
             root.addObject(RampClass(name="moment_ramp"))
+
+    elif loading_mode in ('shear', 'tension'):
+        # Derive tension axis from centroid-to-centroid vector (F0 → F1).
+        # shear = perpendicular to tension axis, in-plane.
+        clamped_nodes = np.where(clamped_mask)[0]
+        c0 = nodes[clamped_nodes, :2].mean(axis=0)
+        c1 = nodes[loaded_nodes, :2].mean(axis=0)
+        delta = c1 - c0
+        norm = float(np.linalg.norm(delta))
+        if norm < 1e-12:
+            raise ValueError(
+                "Clamped and loaded face centroids coincide — cannot determine tension axis."
+            )
+        tension_dir = delta / norm
+        shear_dir   = np.array([-tension_dir[1], tension_dir[0]])
+
+        if loading_mode == 'tension':
+            disp_xy = tension_displacement_m * tension_dir
+        else:
+            disp_xy = shear_displacement_m * shear_dir
+
+        xy_load  = nodes[loaded_nodes, :2]
+        xy_round = np.round(xy_load, decimals=9)
+        unique_xy, inverse = np.unique(xy_round, axis=0, return_inverse=True)
+
+        for k in range(len(unique_xy)):
+            group_idx = loaded_nodes[inverse == k].tolist()
+            cell.addObject(
+                "LinearMovementConstraint",
+                name=f"drive_loaded_{k}",
+                template="Vec3d",
+                indices=group_idx,
+                keyTimes=[0.0, T_final],
+                movements=[[0.0, 0.0, 0.0], [float(disp_xy[0]), float(disp_xy[1]), 0.0]],
+            )
 
     else:
         raise ValueError(f"Unknown loading_mode: {loading_mode!r}")

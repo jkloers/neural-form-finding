@@ -23,22 +23,26 @@ except ImportError as e:
     sys.exit(f"Cannot import SOFA: {e}\nRun via ./sofa/run_sofa.sh")
 
 from materials     import hex_to_5tets, svk_energy, vm_stress_per_tet
-from scene_builder import build_scene, N_STEPS, DT
+from scene_builder import build_scene, N_STEPS_DEFAULT, DT
 
 _SOFA_LOCK = threading.Lock()
 
 
 def evaluate_unit_cell(
-    nodes:              np.ndarray,
-    hexes:              np.ndarray,
-    bc_masks:           dict,
-    rotation_angle_deg: float = 45.0,
-    applied_moment:     float = 0.0,
-    loading_mode:       str   = 'rotation',
-    sheet_thickness:    float = 0.001,
-    young_modulus:      float = 3.5e9,
-    poisson_ratio:      float = 0.36,
-    yield_strength:     float = 55e6,
+    nodes:                  np.ndarray,
+    hexes:                  np.ndarray,
+    bc_masks:               dict,
+    rotation_angle_deg:     float = 45.0,
+    applied_moment:         float = 0.0,
+    loading_mode:           str   = 'rotation',
+    shear_displacement_m:   float = 0.005,
+    tension_displacement_m: float = 0.005,
+    sheet_thickness:        float = 0.001,
+    young_modulus:          float = 3.5e9,
+    poisson_ratio:          float = 0.36,
+    yield_strength:         float = 55e6,
+    n_steps:                int   = N_STEPS_DEFAULT,
+    fem_method:             str   = 'polar',
 ) -> dict:
     """
     Simulate a kirigami unit cell and return mechanical quantities.
@@ -74,15 +78,19 @@ def evaluate_unit_cell(
         try:
             mstate = build_scene(
                 root, nodes, hexes, bc_masks,
-                rotation_angle_deg = rotation_angle_deg,
-                applied_moment     = applied_moment,
-                loading_mode       = loading_mode,
-                young              = young_modulus,
-                nu                 = poisson_ratio,
-                sheet_thickness    = sheet_thickness,
+                rotation_angle_deg     = rotation_angle_deg,
+                applied_moment         = applied_moment,
+                loading_mode           = loading_mode,
+                shear_displacement_m   = shear_displacement_m,
+                tension_displacement_m = tension_displacement_m,
+                young                  = young_modulus,
+                nu                     = poisson_ratio,
+                sheet_thickness        = sheet_thickness,
+                fem_method             = fem_method,
+                n_steps                = n_steps,
             )
             Sofa.Simulation.init(root)
-            for _ in range(N_STEPS):
+            for _ in range(n_steps):
                 Sofa.Simulation.animate(root, DT)
             nodes_cur = np.array(mstate.position.value, dtype=np.float64)
         finally:
