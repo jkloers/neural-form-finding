@@ -14,7 +14,7 @@ except ImportError as e:
 # Ensure we can import local modules
 REPO = pathlib.Path(__file__).parent.parent
 sys.path.insert(0, str(REPO))
-from sofa.scene_builder import build_scene, N_STEPS, DT
+from sofa.scene_builder import build_scene, N_STEPS_DEFAULT as N_STEPS, DT
 
 def main():
     parser = argparse.ArgumentParser()
@@ -31,6 +31,10 @@ def main():
     modes = data['modes'] # list of [mode, angle, disp]
     sofa_cfg = data['sofa_cfg'].item()
     
+    n_steps        = int(sofa_cfg.get('n_steps', N_STEPS))
+    rotation_pivot = sofa_cfg.get('rotation_pivot', None)
+    fem_method     = str(sofa_cfg.get('fem_method', 'small'))
+
     for mode, angle, disp in modes:
         print(f"Simulating {mode}...")
         frames = []
@@ -46,14 +50,16 @@ def main():
                 young                  = 3.5e9,
                 nu                     = 0.36,
                 sheet_thickness        = float(sofa_cfg.get('sheet_thickness', 0.001)),
+                rotation_pivot         = tuple(rotation_pivot) if rotation_pivot is not None else None,
+                fem_method             = fem_method,
             )
             Sofa.Simulation.init(root)
             frames.append(np.array(mstate.position.value, dtype=np.float64))
-            
-            record_every = max(1, N_STEPS // 30) 
-            for step in range(1, N_STEPS + 1):
+
+            record_every = max(1, n_steps // 30)
+            for step in range(1, n_steps + 1):
                 Sofa.Simulation.animate(root, DT)
-                if step % record_every == 0 or step == N_STEPS:
+                if step % record_every == 0 or step == n_steps:
                     frames.append(np.array(mstate.position.value, dtype=np.float64))
         finally:
             Sofa.Simulation.unload(root)

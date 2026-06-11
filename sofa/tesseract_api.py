@@ -36,12 +36,17 @@ INPUTS / OUTPUTS
 CS topology (non-differentiable, passed as nested lists):
   face_centroids, centroid_node_vectors, hinge_node_pairs, hinge_adj_info
 
-Differentiable hinge design params (5-param Bézier hinge profile):
+Differentiable hinge design params (11-param corner-hinge cubic Bézier):
   arm_width_physical  — hinge strip gap [m]
   fold_top            — far Bézier anchor depth along face edge [m]
-  fold_bot            — near Bézier anchor depth [m] (0 = corner; must be < fold_top)
-  waist_top           — fold-dir offset of the far Bézier control point [m]
-  waist_bot           — fold-dir offset of the near Bézier control point [m]
+  fold_bot            — near Bézier anchor depth [m] (≈0 for corner; must be < fold_top)
+  bc1_x, bc1_y        — interior Bézier CP 1 for upper wing far boundary [m] (absolute XY)
+  bc2_x, bc2_y        — interior Bézier CP 2 for upper wing far boundary [m] (absolute XY)
+  bc1l_x, bc1l_y      — interior Bézier CP 1 for lower wing far boundary [m] (absolute XY)
+  bc2l_x, bc2l_y      — interior Bézier CP 2 for lower wing far boundary [m] (absolute XY)
+  Lower wing CPs default to the earm-mirrored values of the upper wing (symmetric start).
+
+FD gradient cost: 2 × 11 params × 3 modes = 66 SOFA sims per gradient call.
 
 Outputs (all scalar, all Differentiable[Float64]):
   strain_energy, max_von_mises_stress, max_xy_displacement,
@@ -100,49 +105,76 @@ class InputSchema(BaseModel):
         description="Face indices to drive (rotation/moment applied). If empty, uses CS-derived BCs.",
     )
 
-    # ── Differentiable hinge design params (5-param Bézier) ───────────────────
+    # ── Differentiable hinge design params (7-param corner-hinge cubic Bézier) ─
 
     arm_width_physical: Differentiable[Float64] = Field(
-        default=0.005,
+        default=0.003,
         description=(
             "Physical width of the hinge strip (gap between panel edges) [m]. "
-            "Bending stiffness ∝ 1/arm_width³. Typical range: 0.002–0.020 m."
+            "Bending stiffness ∝ 1/arm_width³. Typical range: 0.002–0.010 m."
         ),
     )
     fold_top: Differentiable[Float64] = Field(
-        default=0.003,
+        default=0.008,
         description=(
             "Far Bézier anchor depth along the face edge [m]. "
             "Depth of the hinge strip at the far end (away from the panel corner). "
-            "Must be > fold_bot. Typical range: 0.002–0.010 m."
+            "Must be > fold_bot. Typical range: 0.004–0.012 m."
         ),
     )
     fold_bot: Differentiable[Float64] = Field(
-        default=0.0,
+        default=0.00005,
         description=(
             "Near Bézier anchor depth [m]. "
-            "Depth at the panel-corner end of the hinge strip (0 = corner exactly). "
+            "Near-zero for corner hinge (≈50 μm closes the corner void). "
             "Must be < fold_top."
         ),
     )
-    waist_top: Differentiable[Float64] = Field(
-        default=0.0,
+    bc1_x: Differentiable[Float64] = Field(
+        default=0.198,
         description=(
-            "Bézier control-point fold-dir offset for the far curve [m]. "
-            "Positive = pinched (dogbone); negative = bulging. 0 = bilinear hinge."
+            "Interior Bézier CP 1 x-coordinate for upper wing far boundary [m]. "
+            "Absolute world coordinate. Optimizer moves this freely."
         ),
     )
-    waist_bot: Differentiable[Float64] = Field(
-        default=0.0,
-        description="Bézier control-point fold-dir offset for the near curve [m].",
+    bc1_y: Differentiable[Float64] = Field(
+        default=0.10283,
+        description=(
+            "Interior Bézier CP 1 y-coordinate for upper wing far boundary [m]. "
+            "Default ≈ corner_y + fold_top/2 * sin(45°)."
+        ),
+    )
+    bc2_x: Differentiable[Float64] = Field(
+        default=0.13859,
+        description="Interior Bézier CP 2 x-coordinate for upper wing far boundary [m].",
+    )
+    bc2_y: Differentiable[Float64] = Field(
+        default=0.07937,
+        description="Interior Bézier CP 2 y-coordinate for upper wing far boundary [m].",
+    )
+    bc1l_x: Differentiable[Float64] = Field(
+        default=0.14159,
+        description=(
+            "Interior Bézier CP 1 x-coordinate for lower wing far boundary [m]. "
+            "Defaults to the earm-mirror of bc1 (symmetric start). "
+            "Set independently for asymmetric hinge shapes."
+        ),
+    )
+    bc1l_y: Differentiable[Float64] = Field(
+        default=0.07937,
+        description="Interior Bézier CP 1 y-coordinate for lower wing far boundary [m].",
+    )
+    bc2l_x: Differentiable[Float64] = Field(
+        default=0.14725,
+        description="Interior Bézier CP 2 x-coordinate for lower wing far boundary [m].",
+    )
+    bc2l_y: Differentiable[Float64] = Field(
+        default=0.07937,
+        description="Interior Bézier CP 2 y-coordinate for lower wing far boundary [m].",
     )
 
     # ── Mesh resolution (non-differentiable) ──────────────────────────────────
 
-    n_ctrl: int = Field(
-        default=3,
-        description="Bézier control points per hinge curve. 3 = quadratic.",
-    )
     sheet_thickness: float = Field(
         default=0.001,
         description="Material thickness in z [m]. Default: 1 mm PLA sheet.",
@@ -179,7 +211,7 @@ class InputSchema(BaseModel):
         description=(
             "Primary load mode: 'rotation' (displacement-controlled) | "
             "'moment' (force-controlled torque). "
-            "Shear and tension modes always run alongside the primary mode."
+            "Shear and tension modes run alongside unless skip_secondary_modes=True."
         ),
     )
     shear_displacement_m: float = Field(
@@ -189,6 +221,34 @@ class InputSchema(BaseModel):
     tension_displacement_m: float = Field(
         default=0.005,
         description="Tension loading: normal pull-apart displacement of loaded face [m].",
+    )
+    skip_secondary_modes: bool = Field(
+        default=False,
+        description=(
+            "When True, skip shear and tension simulations. "
+            "Reduces apply() cost from 3 to 1 SOFA sim → 3× fewer FD Jacobian sims. "
+            "energy_shear and energy_tension are returned as 0.0."
+        ),
+    )
+    n_steps: int = Field(
+        default=500,
+        description=(
+            "Incremental load steps for SOFA AnimationLoop. "
+            "Reduce to 100 for fast optimizer runs; increase to 500 for accurate large-rotation results."
+        ),
+    )
+    fem_method: str = Field(
+        default='polar',
+        description="HexahedronFEMForceField method: 'polar' (co-rotational, large rotation) or 'small' (linear, valid to ~10°).",
+    )
+    rotation_pivot_auto: bool = Field(
+        default=True,
+        description=(
+            "When True, automatically use the hinge corner vertex as rotation pivot "
+            "(computed from hinge_node_pairs[0]). "
+            "Required for 2-face corner-hinge experiments. "
+            "Set False to use loaded face centroid (standard multi-face behavior)."
+        ),
     )
 
     # ── Material ──────────────────────────────────────────────────────────────
@@ -250,11 +310,11 @@ class OutputSchema(BaseModel):
 
 def apply(inputs: InputSchema) -> OutputSchema:
     """
-    Build the hex mesh from CS topology + 5-param Bézier hinge design, then run
-    SOFA under three load cases: rotation (primary mode), shear, and tension.
+    Build the hex mesh from CS topology + 7-param corner-hinge cubic Bézier design,
+    then run SOFA under three load cases: rotation (primary mode), shear, and tension.
 
     The mesh is fully rebuilt on every call — including ±ε FD perturbations —
-    because all five hinge design variables directly affect the hex geometry.
+    because all seven hinge design variables directly affect the hex geometry.
     """
     # Reconstruct CS as a plain namespace (no JAX dependency in container).
     # constrained/loaded_face_DOF_pairs are left empty; BCs come from clamped/loaded_faces.
@@ -267,21 +327,17 @@ def apply(inputs: InputSchema) -> OutputSchema:
         loaded_face_DOF_pairs      = np.empty((0, 2), dtype=np.int32),
     )
 
-    fold_top  = float(inputs.fold_top)
-    fold_bot  = float(inputs.fold_bot)
-    waist_top = float(inputs.waist_top)
-    waist_bot = float(inputs.waist_bot)
-
-    use_bezier = fold_bot > 1e-9 or abs(waist_top) > 1e-9 or abs(waist_bot) > 1e-9
-    bezier_params = (
-        {'waist_top': waist_top, 'waist_bot': waist_bot, 'n_ctrl': int(inputs.n_ctrl)}
-        if use_bezier else None
-    )
+    bezier_params = {
+        'bc1_upper_xy': [float(inputs.bc1_x),  float(inputs.bc1_y)],
+        'bc2_upper_xy': [float(inputs.bc2_x),  float(inputs.bc2_y)],
+        'bc1_lower_xy': [float(inputs.bc1l_x), float(inputs.bc1l_y)],
+        'bc2_lower_xy': [float(inputs.bc2l_x), float(inputs.bc2l_y)],
+    }
 
     nodes, hexes, bc_masks = _mb.build_mesh_from_centroidal_state(
         cs,
-        fold_top           = fold_top,
-        fold_bot           = fold_bot,
+        fold_top           = float(inputs.fold_top),
+        fold_bot           = float(inputs.fold_bot),
         bezier_params      = bezier_params,
         sheet_thickness    = float(inputs.sheet_thickness),
         n_face             = int(inputs.n_face),
@@ -307,11 +363,23 @@ def apply(inputs: InputSchema) -> OutputSchema:
                 mask |= bc_masks[key]
         bc_masks['loaded'] = mask
 
+    # Compute rotation pivot: use corner vertex from hinge_node_pairs[0] when requested.
+    rotation_pivot = None
+    if inputs.rotation_pivot_auto and len(cs.hinge_node_pairs) > 0:
+        fi = int(cs.hinge_node_pairs[0, 0, 0])
+        lj = int(cs.hinge_node_pairs[0, 0, 1])
+        corner_xy = cs.face_centroids[fi] + cs.centroid_node_vectors[fi, lj]
+        rotation_pivot = (float(corner_xy[0]), float(corner_xy[1]))
+
     mat_kw = dict(
         sheet_thickness = float(inputs.sheet_thickness),
         young_modulus   = float(inputs.young_modulus),
         poisson_ratio   = float(inputs.poisson_ratio),
         yield_strength  = float(inputs.yield_strength),
+    )
+    sim_kw = dict(
+        n_steps    = int(inputs.n_steps),
+        fem_method = str(inputs.fem_method),
     )
 
     # ── Rotation / moment (primary load) ──────────────────────────────────────
@@ -320,24 +388,29 @@ def apply(inputs: InputSchema) -> OutputSchema:
         rotation_angle_deg = float(inputs.rotation_angle_deg),
         applied_moment     = float(inputs.applied_moment),
         loading_mode       = str(inputs.loading_mode),
-        **mat_kw,
+        rotation_pivot     = rotation_pivot,
+        **mat_kw, **sim_kw,
     )
 
-    # ── Shear ─────────────────────────────────────────────────────────────────
-    res_shear = _sofa.evaluate_unit_cell(
-        nodes, hexes, bc_masks,
-        loading_mode         = 'shear',
-        shear_displacement_m = float(inputs.shear_displacement_m),
-        **mat_kw,
-    )
-
-    # ── Tension ───────────────────────────────────────────────────────────────
-    res_tension = _sofa.evaluate_unit_cell(
-        nodes, hexes, bc_masks,
-        loading_mode           = 'tension',
-        tension_displacement_m = float(inputs.tension_displacement_m),
-        **mat_kw,
-    )
+    # ── Shear and tension (skipped when skip_secondary_modes=True) ────────────
+    if inputs.skip_secondary_modes:
+        e_shear   = 0.0
+        e_tension = 0.0
+    else:
+        res_shear = _sofa.evaluate_unit_cell(
+            nodes, hexes, bc_masks,
+            loading_mode         = 'shear',
+            shear_displacement_m = float(inputs.shear_displacement_m),
+            **mat_kw, **sim_kw,
+        )
+        res_tension = _sofa.evaluate_unit_cell(
+            nodes, hexes, bc_masks,
+            loading_mode           = 'tension',
+            tension_displacement_m = float(inputs.tension_displacement_m),
+            **mat_kw, **sim_kw,
+        )
+        e_shear   = float(res_shear['strain_energy'])
+        e_tension = float(res_tension['strain_energy'])
 
     return OutputSchema(
         strain_energy        = float(res_rot['strain_energy']),
@@ -345,8 +418,8 @@ def apply(inputs: InputSchema) -> OutputSchema:
         max_xy_displacement  = float(res_rot['max_xy_displacement']),
         max_z_displacement   = float(res_rot['max_z_displacement']),
         first_yield_fraction = float(res_rot['first_yield_fraction']),
-        energy_shear         = float(res_shear['strain_energy']),
-        energy_tension       = float(res_tension['strain_energy']),
+        energy_shear         = e_shear,
+        energy_tension       = e_tension,
     )
 
 

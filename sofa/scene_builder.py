@@ -67,7 +67,9 @@ def build_scene(root, nodes: np.ndarray, hexes: np.ndarray,
                 sheet_thickness: float = 0.001,
                 density: float = 1250.0,
                 fem_method: str = 'polar',
-                n_steps: int = N_STEPS_DEFAULT):
+                n_steps: int = N_STEPS_DEFAULT,
+                rotation_pivot: tuple | None = None,
+                clamp_mode: str = 'full'):
     """
     Populate a SOFA root node with the unified kirigami mesh.
 
@@ -87,6 +89,14 @@ def build_scene(root, nodes: np.ndarray, hexes: np.ndarray,
     fem_method          : 'polar' (co-rotational, large-rotation stable) |
                           'small' (linear FEM, valid to ~10°)
     n_steps             : number of incremental load steps (default 500)
+    rotation_pivot      : (xp, yp) override for the rotation pivot [m].
+                          Default None → loaded-face centroid.  Set to the hinge
+                          corner position when the loaded face is directly adjacent
+                          to the clamped face (avoids over-prescribing the hinge strain).
+    clamp_mode          : 'full' (default) — fix ALL clamped-mask nodes (FixedConstraint).
+                          'outer' — fix only the ~20% of clamped nodes farthest from the
+                          loaded-face centroid (far corner of F0); fold-zone nodes of F0
+                          are left free so elastic stress can propagate into the face.
 
     Returns
     -------
@@ -146,7 +156,17 @@ def build_scene(root, nodes: np.ndarray, hexes: np.ndarray,
     clamped_idx  = np.where(clamped_mask)[0]
     loaded_nodes = np.where(loaded_mask)[0]
 
-    cell.addObject("FixedConstraint", name="clamp_face", indices=clamped_idx.tolist())
+    if clamp_mode == 'outer':
+        # Clamp only the outermost ~20% of face-0 nodes (farthest from the loaded face).
+        # The fold-zone nodes near the hinge corner are left free to deform elastically,
+        # so stress propagates from the hinge into the face body.
+        load_cent_xy = nodes[loaded_nodes, :2].mean(axis=0)
+        dist         = np.linalg.norm(nodes[clamped_idx, :2] - load_cent_xy, axis=1)
+        n_outer      = max(6, len(clamped_idx) // 5)
+        outer_idx    = clamped_idx[np.argsort(-dist)[:n_outer]]
+        cell.addObject("FixedConstraint", name="clamp_face", indices=outer_idx.tolist())
+    else:
+        cell.addObject("FixedConstraint", name="clamp_face", indices=clamped_idx.tolist())
 
     # In-plane mechanism: fix z-DOF on all nodes to suppress out-of-plane buckling.
     # method='polar' + PartialFixed(z): tested stable (unlike method='large' which diverges).
@@ -154,11 +174,12 @@ def build_scene(root, nodes: np.ndarray, hexes: np.ndarray,
     cell.addObject("PartialFixedConstraint", name="fix_z", indices=all_idx,
                    fixedDirections=[0, 0, 1])
 
-    # Pivot: centroid of the LOADED face.  Used for both rotation mode (rigid-body
-    # spin of the loaded face about its own centroid) and moment mode (pure torque
-    # with net force = 0 about the same point).
-    xp = float(nodes[loaded_nodes, 0].mean())
-    yp = float(nodes[loaded_nodes, 1].mean())
+    # Pivot: loaded-face centroid by default; caller may override with rotation_pivot=(x,y).
+    if rotation_pivot is not None:
+        xp, yp = float(rotation_pivot[0]), float(rotation_pivot[1])
+    else:
+        xp = float(nodes[loaded_nodes, 0].mean())
+        yp = float(nodes[loaded_nodes, 1].mean())
 
     if loading_mode == 'rotation':
         # In-plane rotation of the loaded face about z-axis through pivot (xp, yp).

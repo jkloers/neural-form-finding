@@ -1,23 +1,26 @@
 """
-sofa/hinge_optimizer.py — Bézier hinge shape optimizer via Tesseract HTTP.
+sofa/hinge_optimizer.py — Corner-hinge cubic Bézier optimizer via Tesseract HTTP.
 
-Optimizes 5 hinge parameters using the Tesseract physics oracle (SOFA FEM
+Optimizes 7 hinge parameters using the Tesseract physics oracle (SOFA FEM
 running in Docker). The /apply endpoint returns all three load-case outputs;
 the /jacobian endpoint returns server-side central-FD gradients. Client-side
 chain rule propagates gradients through the softplus latent reparameterization
 to a numpy Adam update — no JAX tracing or subprocess calls required.
 
 Parameters (physical)
-  arm_width  — gap between panel edges [m]
-  fold_top   — far anchor depth along face edge [m]
-  fold_bot   — near anchor depth [m] (0 = corner; must be < fold_top)
-  waist_top  — Bézier control-point fold-dir offset for far curve [m]
-  waist_bot  — Bézier control-point fold-dir offset for near curve [m]
+  arm_width  — gap between panel edges [m]                       (softplus, positive)
+  fold_top   — far anchor depth along face edge [m]              (softplus, positive)
+  fold_bot   — near anchor depth [m] (≈0 for corner)            (softplus, positive)
+  bc1_x, bc1_y   — interior Bézier CP 1, upper wing [m]         (free in ℝ)
+  bc2_x, bc2_y   — interior Bézier CP 2, upper wing [m]         (free in ℝ)
+  bc1l_x, bc1l_y — interior Bézier CP 1, lower wing [m]         (free in ℝ)
+  bc2l_x, bc2l_y — interior Bézier CP 2, lower wing [m]         (free in ℝ)
+  Lower wing CPs initialised as the earm-mirror of upper wing (symmetric start).
 
 Gradient cost per epoch:
-  POST /apply    →  1 forward pass (3 SOFA sims: rotation + shear + tension)
-  POST /jacobian →  10 central-FD perturbations × 3 modes = 30 SOFA sims
-  Total: ~33 SOFA simulations per optimizer step.
+  POST /apply    →  1 forward pass (1–3 SOFA sims depending on skip_secondary_modes)
+  POST /jacobian →  22 central-FD perturbations × 1 mode = 22 SOFA sims (rotation-only)
+  Total: ~23 SOFA simulations per optimizer step (rotation-only mode).
 
 Usage
 -----
@@ -30,8 +33,8 @@ Usage
 
 Outputs  data/outputs/hinge_opt/<timestamp>_<config>/
     config.yaml         — copy of driving config
-    convergence.npz     — per-epoch arrays for all 5 params + losses
-    convergence.png     — 6-panel convergence figure
+    convergence.npz     — per-epoch arrays for all 7 params + losses
+    convergence.png     — convergence figure
 """
 
 from __future__ import annotations
@@ -67,10 +70,18 @@ OUTPUTS_DIR   = REPO / 'data' / 'outputs' / 'hinge_opt'
 TESSERACT_DEFAULT_URL = 'http://localhost:8000'
 
 # Differentiable outputs requested from Tesseract /jacobian.
-_JAC_INPUTS  = ['arm_width_physical', 'fold_top', 'fold_bot', 'waist_top', 'waist_bot']
+_JAC_INPUTS  = [
+    'arm_width_physical', 'fold_top', 'fold_bot',
+    'bc1_x', 'bc1_y', 'bc2_x', 'bc2_y',
+    'bc1l_x', 'bc1l_y', 'bc2l_x', 'bc2l_y',
+]
 _JAC_OUTPUTS = ['strain_energy', 'energy_shear', 'energy_tension', 'max_von_mises_stress']
 # Physical param ordering must match _JAC_INPUTS.
-_PHYS_ORDER  = ['arm_width', 'fold_top', 'fold_bot', 'waist_top', 'waist_bot']
+_PHYS_ORDER  = [
+    'arm_width', 'fold_top', 'fold_bot',
+    'bc1_x', 'bc1_y', 'bc2_x', 'bc2_y',
+    'bc1l_x', 'bc1l_y', 'bc2l_x', 'bc2l_y',
+]
 
 
 # ── Numerics ──────────────────────────────────────────────────────────────────
@@ -235,14 +246,19 @@ def _build_tesseract_payload(
         "hinge_adj_info":        cs.hinge_adj_info.tolist(),
         "clamped_faces":         clamped_faces,
         "loaded_faces":          loaded_faces,
-        # Differentiable hinge params
+        # Differentiable hinge params (11-param corner-hinge cubic Bézier)
         "arm_width_physical":   float(phys['arm_width']),
         "fold_top":             float(phys['fold_top']),
         "fold_bot":             float(phys['fold_bot']),
-        "waist_top":            float(phys['waist_top']),
-        "waist_bot":            float(phys['waist_bot']),
+        "bc1_x":                float(phys['bc1_x']),
+        "bc1_y":                float(phys['bc1_y']),
+        "bc2_x":                float(phys['bc2_x']),
+        "bc2_y":                float(phys['bc2_y']),
+        "bc1l_x":               float(phys['bc1l_x']),
+        "bc1l_y":               float(phys['bc1l_y']),
+        "bc2l_x":               float(phys['bc2l_x']),
+        "bc2l_y":               float(phys['bc2l_y']),
         # Mesh resolution
-        "n_ctrl":               int(sofa_cfg.get('n_ctrl', 3)),
         "sheet_thickness":      float(sofa_cfg.get('sheet_thickness', 0.001)),
         "n_face":               int(sofa_cfg.get('n_face', 4)),
         "n_hinge":              int(sofa_cfg.get('n_hinge', 2)),
@@ -253,6 +269,10 @@ def _build_tesseract_payload(
         "loading_mode":           'rotation',
         "shear_displacement_m":   float(sofa_cfg.get('shear_displacement_m', 0.005)),
         "tension_displacement_m": float(sofa_cfg.get('tension_displacement_m', 0.005)),
+        "skip_secondary_modes":   bool(sofa_cfg.get('skip_secondary_modes', False)),
+        "n_steps":                int(sofa_cfg.get('n_steps', 500)),
+        "fem_method":             str(sofa_cfg.get('fem_method', 'polar')),
+        "rotation_pivot_auto":    bool(sofa_cfg.get('rotation_pivot_auto', True)),
         # Material
         "young_modulus":  float(mat_cfg.get('young_modulus', 3.5e9)),
         "poisson_ratio":  float(mat_cfg.get('poisson_ratio', 0.36)),
@@ -267,25 +287,30 @@ def _build_tesseract_payload(
 def _lat_to_phys_jacobian(
     latent: np.ndarray,
     arm_scale: float, delta_scale: float, fold_bot_scale: float,
-    waist_top_scale: float, waist_bot_scale: float,
 ) -> np.ndarray:
-    """5×5 Jacobian: d(physical) / d(latent).
+    """11×11 Jacobian: d(physical) / d(latent).
 
-    physical = [arm_width, fold_top, fold_bot, waist_top, waist_bot]
-    latent   = [lat0,      lat1,     lat2,     lat3,      lat4     ]
+    physical = [arm_width, fold_top, fold_bot,
+                bc1_x, bc1_y, bc2_x, bc2_y,
+                bc1l_x, bc1l_y, bc2l_x, bc2l_y]
+    latent   = [lat0,    lat1,    lat2,
+                lat3,  lat4,  lat5,  lat6,
+                lat7,   lat8,   lat9,   lat10 ]
 
-    lat[1] → delta = fold_top - fold_bot  (via delta_scale)
-    lat[2] → fold_bot                     (via fold_bot_scale)
-    fold_top = fold_bot + delta  → both lat[1] and lat[2] affect fold_top.
+    lat[0] → arm_width         (softplus, positive)
+    lat[1] → delta = fold_top - fold_bot  (softplus, positive)
+    lat[2] → fold_bot          (softplus, positive)
+    fold_top = fold_bot + delta → both lat[1] and lat[2] affect fold_top.
+    lat[3..10] → bc coords (upper + lower)  (identity, free in ℝ)
     """
-    sig = _sigmoid(latent)
-    J = np.zeros((5, 5), dtype=np.float64)
-    J[0, 0] = sig[0] * arm_scale           # d(arm_width)/d(lat0)
-    J[1, 1] = sig[1] * delta_scale         # d(fold_top)/d(lat1)  via delta
-    J[1, 2] = sig[2] * fold_bot_scale      # d(fold_top)/d(lat2)  via fold_bot
-    J[2, 2] = sig[2] * fold_bot_scale      # d(fold_bot)/d(lat2)
-    J[3, 3] = sig[3] * waist_top_scale     # d(waist_top)/d(lat3)
-    J[4, 4] = sig[4] * waist_bot_scale     # d(waist_bot)/d(lat4)
+    sig = _sigmoid(latent[:3])
+    J = np.zeros((11, 11), dtype=np.float64)
+    J[0, 0] = sig[0] * arm_scale       # d(arm_width)/d(lat0)
+    J[1, 1] = sig[1] * delta_scale     # d(fold_top)/d(lat1)  via delta
+    J[1, 2] = sig[2] * fold_bot_scale  # d(fold_top)/d(lat2)  via fold_bot
+    J[2, 2] = sig[2] * fold_bot_scale  # d(fold_bot)/d(lat2)
+    for i in range(3, 11):             # bc coords: identity
+        J[i, i] = 1.0
     return J
 
 
@@ -302,12 +327,19 @@ def run_optimization(
     loss_cfg = cfg.get('loss', {})
     mat_cfg  = cfg.get('material', {})
 
-    arm_init       = float(sofa_cfg.get('arm_width_initial',   0.010))
-    fold_top_init  = float(sofa_cfg.get('fold_top_initial',
-                           sofa_cfg.get('fold_length_initial', 0.003)))
-    fold_bot_init  = float(sofa_cfg.get('fold_bot_initial',   0.000))
-    waist_top_init = float(sofa_cfg.get('waist_top_initial',  0.000))
-    waist_bot_init = float(sofa_cfg.get('waist_bot_initial',  0.000))
+    arm_init      = float(sofa_cfg.get('arm_width_initial',   0.003))
+    fold_top_init = float(sofa_cfg.get('fold_top_initial',
+                          sofa_cfg.get('fold_length_initial', 0.008)))
+    fold_bot_init = float(sofa_cfg.get('fold_bot_initial',   0.00005))
+    bc1_x_init    = float(sofa_cfg.get('bc1_x_initial',      0.14425))
+    bc1_y_init    = float(sofa_cfg.get('bc1_y_initial',      0.07937))
+    bc2_x_init    = float(sofa_cfg.get('bc2_x_initial',      0.13859))
+    bc2_y_init    = float(sofa_cfg.get('bc2_y_initial',      0.07937))
+    # Lower wing: default to earm-mirror of upper wing (symmetric start).
+    bc1l_x_init   = float(sofa_cfg.get('bc1l_x_initial',     0.14159))
+    bc1l_y_init   = float(sofa_cfg.get('bc1l_y_initial',     0.07937))
+    bc2l_x_init   = float(sofa_cfg.get('bc2l_x_initial',     0.14725))
+    bc2l_y_init   = float(sofa_cfg.get('bc2l_y_initial',     0.07937))
 
     alpha    = float(loss_cfg.get('alpha',    1.0))
     beta     = float(loss_cfg.get('beta',     1.0))
@@ -324,30 +356,34 @@ def run_optimization(
     # ── Latent-space scales ───────────────────────────────────────────────────
     # softplus(0) = log(2) ≈ 0.6931  →  scale = init / softplus(0)
     sp0 = np.log(2.0)
-    delta_fold_init  = max(fold_top_init - fold_bot_init, fold_top_init * 0.1)
-    waist_scale_dflt = fold_top_init * 0.5   # fallback scale for zero inits
+    delta_fold_init = max(fold_top_init - fold_bot_init, fold_top_init * 0.1)
+    fold_bot_scale_dflt = fold_top_init * 0.1
 
-    arm_scale       = arm_init       / sp0
-    delta_scale     = delta_fold_init / sp0
-    fold_bot_scale  = fold_bot_init  / sp0 if fold_bot_init  > 0 else waist_scale_dflt
-    waist_top_scale = waist_top_init / sp0 if waist_top_init > 0 else waist_scale_dflt
-    waist_bot_scale = waist_bot_init / sp0 if waist_bot_init > 0 else waist_scale_dflt
+    arm_scale      = arm_init       / sp0
+    delta_scale    = delta_fold_init / sp0
+    fold_bot_scale = fold_bot_init   / sp0 if fold_bot_init > 0 else fold_bot_scale_dflt
 
-    # Initial latent values: lat=0 → physical=init for positive inits;
-    # lat=-5 → softplus(-5)*scale ≈ 0 for zero inits.
-    def _lat0(init: float) -> float:
+    # Initial latent values: lat=0 → physical=init via softplus for positive dims;
+    # bc coords: latent IS physical (identity).
+    def _lat0_positive(init: float) -> float:
         return 0.0 if init > 0 else -5.0
 
     latent = np.array([
-        _lat0(arm_init),
-        _lat0(delta_fold_init),
-        _lat0(fold_bot_init),
-        _lat0(waist_top_init),
-        _lat0(waist_bot_init),
+        _lat0_positive(arm_init),
+        _lat0_positive(delta_fold_init),
+        _lat0_positive(fold_bot_init),
+        bc1_x_init,    # identity mapping — latent = physical
+        bc1_y_init,
+        bc2_x_init,
+        bc2_y_init,
+        bc1l_x_init,
+        bc1l_y_init,
+        bc2l_x_init,
+        bc2l_y_init,
     ], dtype=np.float64)
 
     def to_physical(lat: np.ndarray) -> dict:
-        """5-element latent → physical param dict (all positive by construction)."""
+        """11-element latent → physical param dict."""
         arm_w    = _softplus(lat[0]) * arm_scale
         delta    = _softplus(lat[1]) * delta_scale
         fold_bot = _softplus(lat[2]) * fold_bot_scale
@@ -356,22 +392,33 @@ def run_optimization(
             'arm_width': arm_w,
             'fold_top':  fold_top,
             'fold_bot':  fold_bot,
-            'waist_top': _softplus(lat[3]) * waist_top_scale,
-            'waist_bot': _softplus(lat[4]) * waist_bot_scale,
+            'bc1_x':     lat[3],
+            'bc1_y':     lat[4],
+            'bc2_x':     lat[5],
+            'bc2_y':     lat[6],
+            'bc1l_x':    lat[7],
+            'bc1l_y':    lat[8],
+            'bc2l_x':    lat[9],
+            'bc2l_y':    lat[10],
         }
 
     optimizer = _NumpyAdam(lr)
     history: dict = {k: [] for k in [
-        'arm_width', 'fold_top', 'fold_bot', 'waist_top', 'waist_bot',
+        'arm_width', 'fold_top', 'fold_bot',
+        'bc1_x', 'bc1_y', 'bc2_x', 'bc2_y',
+        'bc1l_x', 'bc1l_y', 'bc2l_x', 'bc2l_y',
         'total_loss', 'energy_rot', 'max_vm_rot', 'energy_shear', 'energy_tension',
     ]}
 
-    print(f"\nHinge optimization (Bézier 5-param): {n_epochs} epochs, lr={lr}")
+    print(f"\nHinge optimization (corner-hinge cubic Bézier, 11-param): {n_epochs} epochs, lr={lr}")
     print(f"  Tesseract URL: {tesseract_url}")
     print(f"  loss = {alpha}*E_rot - {beta}*E_shear - {gamma}*E_tens + {lambda_p}*yield_penalty")
     print(f"  Initial: arm={arm_init*1e3:.2f} mm  fold_top={fold_top_init*1e3:.2f} mm  "
-          f"fold_bot={fold_bot_init*1e3:.2f} mm  "
-          f"waist=({waist_top_init*1e3:.2f},{waist_bot_init*1e3:.2f}) mm\n")
+          f"fold_bot={fold_bot_init*1e3:.3f} mm")
+    print(f"           bc1_up=({bc1_x_init*1e3:.1f}, {bc1_y_init*1e3:.1f}) mm  "
+          f"bc2_up=({bc2_x_init*1e3:.1f}, {bc2_y_init*1e3:.1f}) mm")
+    print(f"           bc1_lo=({bc1l_x_init*1e3:.1f}, {bc1l_y_init*1e3:.1f}) mm  "
+          f"bc2_lo=({bc2l_x_init*1e3:.1f}, {bc2l_y_init*1e3:.1f}) mm\n")
 
     for epoch in range(n_epochs):
         phys    = to_physical(latent)
@@ -393,25 +440,31 @@ def run_optimization(
         loss     = alpha * e_rot - beta * e_shear - gamma * e_tens + lambda_p * yield_ex
 
         # ── Backward pass: Jacobian from Tesseract ────────────────────────────
-        jac = _call_tesseract_jacobian(tesseract_url, payload, _JAC_INPUTS, _JAC_OUTPUTS)
+        # When rotation-only, only request strain_energy gradient (no shear/tension sims).
+        skip_secondary = payload.get('skip_secondary_modes', False)
+        jac_outputs_req = ['strain_energy', 'max_von_mises_stress']
+        if not skip_secondary:
+            jac_outputs_req += ['energy_shear', 'energy_tension']
+        jac = _call_tesseract_jacobian(tesseract_url, payload, _JAC_INPUTS, jac_outputs_req)
 
-        # d(loss)/d(physical_param) for each of the 5 differentiable params.
-        # _JAC_INPUTS order: arm_width_physical, fold_top, fold_bot, waist_top, waist_bot
-        # _PHYS_ORDER order: arm_width,          fold_top, fold_bot, waist_top, waist_bot
+        # d(loss)/d(physical_param) for each of the 7 differentiable params.
+        # _JAC_INPUTS order: arm_width_physical, fold_top, fold_bot, bc1_x, bc1_y, bc2_x, bc2_y
         yield_active = 1.0 if max_vm > yield_str else 0.0
+        def _jac_val(output_key, inp_key):
+            if output_key not in jac:
+                return 0.0
+            return _get_val(jac[output_key][inp_key])
+
         dloss_dphys = np.array([
-            (alpha    * _get_val(jac['strain_energy'][ki])
-             - beta   * _get_val(jac['energy_shear'][ki])
-             - gamma  * _get_val(jac['energy_tension'][ki])
-             + lambda_p * yield_active * _get_val(jac['max_von_mises_stress'][ki]))
+            (alpha    * _jac_val('strain_energy', ki)
+             - beta   * _jac_val('energy_shear', ki)
+             - gamma  * _jac_val('energy_tension', ki)
+             + lambda_p * yield_active * _jac_val('max_von_mises_stress', ki))
             for ki in _JAC_INPUTS
         ], dtype=np.float64)
 
         # Chain through latent space: d(loss)/d(lat) = J_phys_lat.T @ d(loss)/d(phys)
-        J_phys_lat = _lat_to_phys_jacobian(
-            latent, arm_scale, delta_scale,
-            fold_bot_scale, waist_top_scale, waist_bot_scale,
-        )
+        J_phys_lat = _lat_to_phys_jacobian(latent, arm_scale, delta_scale, fold_bot_scale)
         dloss_dlat = J_phys_lat.T @ dloss_dphys
 
         latent = optimizer.update(latent, dloss_dlat)
@@ -420,8 +473,14 @@ def run_optimization(
         history['arm_width'].append(phys['arm_width'])
         history['fold_top'].append(phys['fold_top'])
         history['fold_bot'].append(phys['fold_bot'])
-        history['waist_top'].append(phys['waist_top'])
-        history['waist_bot'].append(phys['waist_bot'])
+        history['bc1_x'].append(phys['bc1_x'])
+        history['bc1_y'].append(phys['bc1_y'])
+        history['bc2_x'].append(phys['bc2_x'])
+        history['bc2_y'].append(phys['bc2_y'])
+        history['bc1l_x'].append(phys['bc1l_x'])
+        history['bc1l_y'].append(phys['bc1l_y'])
+        history['bc2l_x'].append(phys['bc2l_x'])
+        history['bc2l_y'].append(phys['bc2l_y'])
         history['total_loss'].append(loss)
         history['energy_rot'].append(e_rot)
         history['max_vm_rot'].append(max_vm)
@@ -429,29 +488,34 @@ def run_optimization(
         history['energy_tension'].append(e_tens)
 
         print(f"  epoch {epoch+1:3d}/{n_epochs}  "
-              f"loss={loss:.4e}  "
-              f"E_rot={e_rot:.3e} J  "
-              f"σ_max={max_vm/1e6:.1f} MPa  "
-              f"arm={phys['arm_width']*1e3:.3f} mm  "
-              f"fold_top={phys['fold_top']*1e3:.3f} mm  "
-              f"fold_bot={phys['fold_bot']*1e3:.3f} mm  "
-              f"waist=({phys['waist_top']*1e3:.2f},{phys['waist_bot']*1e3:.2f}) mm")
+              f"loss={loss:.4e}  E_rot={e_rot:.3e} J  σ_max={max_vm/1e6:.1f} MPa  "
+              f"arm={phys['arm_width']*1e3:.3f} mm  fold_top={phys['fold_top']*1e3:.3f} mm  "
+              f"fold_bot={phys['fold_bot']*1e3:.4f} mm  "
+              f"bc1_up=({phys['bc1_x']*1e3:.2f},{phys['bc1_y']*1e3:.2f})  "
+              f"bc2_up=({phys['bc2_x']*1e3:.2f},{phys['bc2_y']*1e3:.2f})  "
+              f"bc1_lo=({phys['bc1l_x']*1e3:.2f},{phys['bc1l_y']*1e3:.2f})  "
+              f"bc2_lo=({phys['bc2l_x']*1e3:.2f},{phys['bc2l_y']*1e3:.2f}) mm")
 
     np.savez(
         str(out_dir / 'convergence.npz'),
         arm_width      = np.array(history['arm_width']),
         fold_top       = np.array(history['fold_top']),
         fold_bot       = np.array(history['fold_bot']),
-        waist_top      = np.array(history['waist_top']),
-        waist_bot      = np.array(history['waist_bot']),
+        bc1_x          = np.array(history['bc1_x']),
+        bc1_y          = np.array(history['bc1_y']),
+        bc2_x          = np.array(history['bc2_x']),
+        bc2_y          = np.array(history['bc2_y']),
+        bc1l_x         = np.array(history['bc1l_x']),
+        bc1l_y         = np.array(history['bc1l_y']),
+        bc2l_x         = np.array(history['bc2l_x']),
+        bc2l_y         = np.array(history['bc2l_y']),
         total_loss     = np.array(history['total_loss']),
         energy_rot     = np.array(history['energy_rot']),
         max_vm_rot     = np.array(history['max_vm_rot']),
         energy_shear   = np.array(history['energy_shear']),
         energy_tension = np.array(history['energy_tension']),
-        # backward-compat aliases
-        fold_length    = np.array(history['fold_top']),
-        stress         = np.array(history['max_vm_rot']),
+        fold_length    = np.array(history['fold_top']),   # backward-compat alias
+        stress         = np.array(history['max_vm_rot']), # backward-compat alias
     )
     return history
 
@@ -483,10 +547,10 @@ def main() -> None:
 
     # Verify server is reachable before committing to a long run.
     try:
-        requests.get(url, timeout=5)
-    except requests.exceptions.ConnectionError:
+        requests.get(f"{url}/health", timeout=30)
+    except (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout):
         print(f"ERROR: cannot reach Tesseract server at {url}")
-        print("Start the server:  docker run -p 8000:8000 nff-sofa-oracle")
+        print("Start the server:  docker run -p 8000:8000 -e TESSERACT_RUNTIME_SERVE_HOST=0.0.0.0 nff-sofa-oracle:latest serve")
         raise SystemExit(1)
 
     config_name = pathlib.Path(args.config).stem
@@ -503,9 +567,11 @@ def main() -> None:
           f'σ_max={history["max_vm_rot"][best_idx]:.4e} Pa  '
           f'arm={history["arm_width"][best_idx]*1e3:.3f} mm  '
           f'fold_top={history["fold_top"][best_idx]*1e3:.3f} mm  '
-          f'fold_bot={history["fold_bot"][best_idx]*1e3:.3f} mm  '
-          f'waist=({history["waist_top"][best_idx]*1e3:.3f},'
-          f'{history["waist_bot"][best_idx]*1e3:.3f}) mm')
+          f'fold_bot={history["fold_bot"][best_idx]*1e3:.4f} mm  '
+          f'bc1_up=({history["bc1_x"][best_idx]*1e3:.2f},{history["bc1_y"][best_idx]*1e3:.2f}) mm  '
+          f'bc2_up=({history["bc2_x"][best_idx]*1e3:.2f},{history["bc2_y"][best_idx]*1e3:.2f}) mm  '
+          f'bc1_lo=({history["bc1l_x"][best_idx]*1e3:.2f},{history["bc1l_y"][best_idx]*1e3:.2f}) mm  '
+          f'bc2_lo=({history["bc2l_x"][best_idx]*1e3:.2f},{history["bc2l_y"][best_idx]*1e3:.2f}) mm')
     print(f'Results saved → {out_dir}')
 
 

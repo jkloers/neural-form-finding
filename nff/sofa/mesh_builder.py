@@ -16,6 +16,8 @@ Public API
                                    fold_bot=0.0, bezier_params=None)
   -> (nodes (N,3), hexes (H,8), bc_masks dict)
   fold_length kwarg retained as backward-compat alias for fold_top.
+  For corner hinges with new Bézier parametrisation, pass
+  bezier_params={'bc1_upper_xy': ..., 'bc2_upper_xy': ..., ...}.
 
 Corner-hinge Bézier parametrisation (bezier_params keys)
 ---------------------------------------------------------
@@ -42,6 +44,28 @@ CLOSED_GAP_TOL = 1e-6
 
 # Parametric corners: _PC[lj] = (s, t)
 _PC = np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])
+
+
+# ─── small geometry helpers ──────────────────────────────────────────────────
+
+def _cross2d(a, b) -> float:
+    """Signed z-component of 2-D cross product:  a × b = ax*by − ay*bx."""
+    return float(a[0] * b[1] - a[1] * b[0])
+
+
+def _find_other_adj(lj: int, adj_li: int) -> int:
+    """Return the OTHER node adjacent to lj in a 4-vertex quad polygon."""
+    candidates = [(lj - 1) % 4, (lj + 1) % 4]
+    return next(c for c in candidates if c != adj_li)
+
+
+def _mirror_cp(cp, axis_origin, axis_dir) -> np.ndarray:
+    """Mirror 2-D point cp through the line (axis_origin, axis_dir)."""
+    d    = np.asarray(cp, float) - np.asarray(axis_origin, float)
+    ax   = np.asarray(axis_dir, float)
+    proj = np.dot(d, ax) * ax          # component along axis (unchanged)
+    perp = d - proj                    # component perpendicular (flip sign)
+    return np.asarray(axis_origin, float) + proj - perp
 
 
 # ─── bilinear helpers ────────────────────────────────────────────────────────
@@ -150,12 +174,14 @@ def _extract_geometry(cs, fold_top, fold_bot=0.0, arm_width_physical=None):
 
     updates = []
     arm_widths = []
+    orig_gaps  = []   # pre-adjustment gap, used to detect corner hinges
     for h in range(n_hinges):
         fi, lj = int(hnp[h,0,0]), int(hnp[h,0,1])
         fk, ll = int(hnp[h,1,0]), int(hnp[h,1,1])
         p1o = face_verts[fi, lj].copy()
         p2o = face_verts[fk, ll].copy()
         gap = float(np.linalg.norm(p2o - p1o))
+        orig_gaps.append(gap)
         if gap < CLOSED_GAP_TOL:
             if not arm_width_physical or arm_width_physical <= 0:
                 raise ValueError(
@@ -190,7 +216,7 @@ def _extract_geometry(cs, fold_top, fold_bot=0.0, arm_width_physical=None):
         raw_k = face_verts[fk, adj_lk] - p2
         nk = float(np.linalg.norm(raw_k))
         fold_dir_k = raw_k / nk if nk > 1e-12 else np.array([1.0, 0.0])
-        hinge_strips.append({
+        hs: dict = {
             'h': h, 'fi': fi, 'lj': lj, 'fk': fk, 'll': ll,
             'adj_li': adj_li, 'adj_lk': adj_lk,
             'p1': p1, 'p2': p2,
@@ -198,7 +224,58 @@ def _extract_geometry(cs, fold_top, fold_bot=0.0, arm_width_physical=None):
             'arm_width': arm_widths[h],
             'fold_top': float(fold_top),
             'fold_bot': float(fold_bot),
-        })
+            'is_corner': False,
+        }
+
+        # Corner hinge: original gap ≈ 0 means both faces share the same vertex.
+        # (After arm_width adjustment p1 ≠ p2, so use orig_gaps not the current norm.)
+        # Classify each face's two fold-edge directions as upper / lower
+        # w.r.t. the centroid-to-centroid axis (ê_arm).
+        if orig_gaps[h] < CLOSED_GAP_TOL:
+            dcentroid = fc[fk] - fc[fi]
+            nd = float(np.linalg.norm(dcentroid))
+            earm = dcentroid / nd if nd > 1e-12 else np.array([1.0, 0.0])
+            # Canonicalise: ensure earm points in the positive-dominant direction so
+            # that cross2d(earm, fold_dir) > 0 consistently means "above the axis"
+            # regardless of which face is fi vs fk.
+            if earm[0] < -1e-9 or (abs(earm[0]) < 1e-9 and earm[1] < 0):
+                earm = -earm
+
+            adj_li_other = _find_other_adj(lj, adj_li)
+            raw_io = face_verts[fi, adj_li_other] - p1
+            nio = float(np.linalg.norm(raw_io))
+            fold_dir_i_other = raw_io / nio if nio > 1e-12 else np.array([0.0, 1.0])
+
+            adj_lk_other = _find_other_adj(ll, adj_lk)
+            raw_ko = face_verts[fk, adj_lk_other] - p2
+            nko = float(np.linalg.norm(raw_ko))
+            fold_dir_k_other = raw_ko / nko if nko > 1e-12 else np.array([0.0, -1.0])
+
+            # Upper = positive cross product with ê_arm (i.e., above axis)
+            if _cross2d(earm, fold_dir_i) > 0:
+                fdi_up, ali_up = fold_dir_i,       adj_li
+                fdi_lo, ali_lo = fold_dir_i_other, adj_li_other
+            else:
+                fdi_up, ali_up = fold_dir_i_other, adj_li_other
+                fdi_lo, ali_lo = fold_dir_i,       adj_li
+
+            if _cross2d(earm, fold_dir_k) > 0:
+                fdk_up, alk_up = fold_dir_k,       adj_lk
+                fdk_lo, alk_lo = fold_dir_k_other, adj_lk_other
+            else:
+                fdk_up, alk_up = fold_dir_k_other, adj_lk_other
+                fdk_lo, alk_lo = fold_dir_k,       adj_lk
+
+            hs.update({
+                'is_corner': True,
+                'earm': earm,
+                'fold_dir_i_upper': fdi_up, 'adj_li_upper': ali_up,
+                'fold_dir_i_lower': fdi_lo, 'adj_li_lower': ali_lo,
+                'fold_dir_k_upper': fdk_up, 'adj_lk_upper': alk_up,
+                'fold_dir_k_lower': fdk_lo, 'adj_lk_lower': alk_lo,
+            })
+
+        hinge_strips.append(hs)
 
     return face_verts, hinge_strips
 
@@ -438,36 +515,48 @@ def _mesh_hinge(hs, n_hinge, face_verts,
     if bezier_params is not None:
         # Bézier transfinite interpolation:
         #   xy(u,v) = (1-v)*B_bot(u) + v*B_top(u)
-        # where B_bot / B_top are quadratic (n_ctrl=3) Bézier curves.
-        # The waist control point is offset along the average fold direction.
-        waist_top = float(bezier_params.get('waist_top', 0.0))
-        waist_bot = float(bezier_params.get('waist_bot', 0.0))
-        n_ctrl    = int(bezier_params.get('n_ctrl', 3))
-        fold_mid  = (fdi + fdk) * 0.5
-        nm = float(np.linalg.norm(fold_mid))
-        fold_mid_hat = fold_mid / nm if nm > 1e-12 else fdi
+        # where B_bot / B_top are Bézier curves.
+        #
+        # Two modes:
+        #  (A) Absolute CPs — bc1_xy / bc2_xy in bezier_params:
+        #      B_top = cubic Bézier(P0_top, bc1, bc2, P2_top)
+        #      B_bot = linear(P0_bot, P2_bot)  (near boundary stays straight)
+        #  (B) Waist mode — existing waist_top / waist_bot offset along fold_mid_hat:
+        #      B_top = quadratic Bézier with midpoint offset by waist_top
+        #      B_bot = quadratic Bézier with midpoint offset by waist_bot
 
-        def _build_ctrl(P0, P2, waist, n):
-            """Build n control points between P0 and P2 with waist offset."""
-            if n <= 2:
-                return np.stack([P0, P2])
-            mid = (P0 + P2) * 0.5 + waist * fold_mid_hat
-            if n == 3:
-                return np.stack([P0, mid, P2])
-            # For n > 3: distribute extra interior points linearly,
-            # with the midpoint kept at the waist position.
-            pts = [P0]
-            for k in range(1, n - 1):
-                t = k / (n - 1)
-                base_pt = (1 - t) * P0 + t * P2
-                # gaussian bump centred at t=0.5
-                bump = waist * np.exp(-8.0 * (t - 0.5)**2) * fold_mid_hat
-                pts.append(base_pt + bump)
-            pts.append(P2)
-            return np.stack(pts)
+        if bezier_params.get('bc1_xy') is not None:
+            # Mode A: absolute 2-D interior control points.
+            bc1 = np.asarray(bezier_params['bc1_xy'], float)
+            bc2 = np.asarray(bezier_params['bc2_xy'], float)
+            ctrl_top = np.array([P0_top, bc1, bc2, P2_top])   # cubic
+            ctrl_bot = np.array([P0_bot, P2_bot])              # linear
+        else:
+            # Mode B: waist-offset parametrisation (backward-compatible).
+            waist_top = float(bezier_params.get('waist_top', 0.0))
+            waist_bot = float(bezier_params.get('waist_bot', 0.0))
+            n_ctrl    = int(bezier_params.get('n_ctrl', 3))
+            fold_mid  = (fdi + fdk) * 0.5
+            nm = float(np.linalg.norm(fold_mid))
+            fold_mid_hat = fold_mid / nm if nm > 1e-12 else fdi
 
-        ctrl_bot = _build_ctrl(P0_bot, P2_bot, waist_bot, n_ctrl)
-        ctrl_top = _build_ctrl(P0_top, P2_top, waist_top, n_ctrl)
+            def _build_ctrl(P0, P2, waist, n):
+                if n <= 2:
+                    return np.stack([P0, P2])
+                mid = (P0 + P2) * 0.5 + waist * fold_mid_hat
+                if n == 3:
+                    return np.stack([P0, mid, P2])
+                pts = [P0]
+                for k in range(1, n - 1):
+                    t = k / (n - 1)
+                    base_pt = (1 - t) * P0 + t * P2
+                    bump = waist * np.exp(-8.0 * (t - 0.5)**2) * fold_mid_hat
+                    pts.append(base_pt + bump)
+                pts.append(P2)
+                return np.stack(pts)
+
+            ctrl_bot = _build_ctrl(P0_bot, P2_bot, waist_bot, n_ctrl)
+            ctrl_top = _build_ctrl(P0_top, P2_top, waist_top, n_ctrl)
 
         base = len(node_list)
         for iu in range(1, n_arm):
@@ -589,9 +678,16 @@ def build_mesh_from_centroidal_state(
     fold_top           : far anchor depth along face edge [m] (replaces fold_length)
     fold_bot           : near anchor depth along face edge [m] (default 0 = corner)
     bezier_params      : None for bilinear strip interpolation; or dict with keys:
-                           'waist_top' — fold-dir offset for far Bézier control pt [m]
-                           'waist_bot' — fold-dir offset for near Bézier control pt [m]
+                         Side-hinge (waist mode):
+                           'waist_top' — fold-dir offset for far Bézier CP [m]
+                           'waist_bot' — fold-dir offset for near Bézier CP [m]
                            'n_ctrl'    — Bézier degree + 1 (default 3 = quadratic)
+                         Corner-hinge (absolute CP mode — new):
+                           'bc1_upper_xy' — [x,y] 1st interior CP, upper wing far boundary
+                           'bc2_upper_xy' — [x,y] 2nd interior CP, upper wing far boundary
+                           'bc1_lower_xy' — [x,y] 1st interior CP, lower wing (None→mirror)
+                           'bc2_lower_xy' — [x,y] 2nd interior CP, lower wing (None→mirror)
+                         All coordinates in physical metres.
 
     Returns
     -------
@@ -614,12 +710,26 @@ def build_mesh_from_centroidal_state(
     n_faces = len(face_verts)
 
     # ── collect hinge corners per face ───────────────────────────────────────
+    # Corner hinges: register BOTH fold edges so the face mesh has fine zones
+    # in both the upper and lower fold directions from the corner.
     face_hinge_corners: List[List] = [[] for _ in range(n_faces)]
     for hs in hinge_strips:
-        face_hinge_corners[hs['fi']].append(
-            (hs['lj'], hs['adj_li'], hs['fold_top'], hs['fold_bot']))
-        face_hinge_corners[hs['fk']].append(
-            (hs['ll'], hs['adj_lk'], hs['fold_top'], hs['fold_bot']))
+        if hs['is_corner']:
+            # Upper fold edge
+            face_hinge_corners[hs['fi']].append(
+                (hs['lj'], hs['adj_li_upper'], hs['fold_top'], hs['fold_bot']))
+            face_hinge_corners[hs['fk']].append(
+                (hs['ll'], hs['adj_lk_upper'], hs['fold_top'], hs['fold_bot']))
+            # Lower fold edge (second direction from the same corner vertex)
+            face_hinge_corners[hs['fi']].append(
+                (hs['lj'], hs['adj_li_lower'], hs['fold_top'], hs['fold_bot']))
+            face_hinge_corners[hs['fk']].append(
+                (hs['ll'], hs['adj_lk_lower'], hs['fold_top'], hs['fold_bot']))
+        else:
+            face_hinge_corners[hs['fi']].append(
+                (hs['lj'], hs['adj_li'], hs['fold_top'], hs['fold_bot']))
+            face_hinge_corners[hs['fk']].append(
+                (hs['ll'], hs['adj_lk'], hs['fold_top'], hs['fold_bot']))
 
     # ── mesh each face ───────────────────────────────────────────────────────
     node_list: List = []
@@ -641,11 +751,52 @@ def build_mesh_from_centroidal_state(
 
     # ── mesh each hinge strip ────────────────────────────────────────────────
     for hs in hinge_strips:
-        hh = _mesh_hinge(
-            hs, n_hinge,
-            face_verts, face_node_grids, face_s_nodes, face_t_nodes, face_z_vals_list,
-            node_list, bezier_params=bezier_params)
-        all_hexes.extend(hh)
+        if hs['is_corner'] and bezier_params is not None and (
+                bezier_params.get('bc1_upper_xy') is not None):
+            # Corner hinge + new Bézier parametrisation → two wing strips.
+            # Upper wing: uses upper fold directions and bc1/bc2_upper.
+            hs_up = {**hs,
+                'adj_li': hs['adj_li_upper'], 'fold_dir_i': hs['fold_dir_i_upper'],
+                'adj_lk': hs['adj_lk_upper'], 'fold_dir_k': hs['fold_dir_k_upper'],
+            }
+            bp_up = {**bezier_params,
+                'bc1_xy': bezier_params['bc1_upper_xy'],
+                'bc2_xy': bezier_params['bc2_upper_xy'],
+            }
+
+            # Lower wing: uses lower fold directions and bc1/bc2_lower.
+            # Default: mirror upper CPs through the hinge axis.
+            corner_pt = hs['p1']   # p1 == p2 for corner hinges
+            earm      = hs['earm']
+            bc1_lo = (bezier_params['bc1_lower_xy']
+                      if bezier_params.get('bc1_lower_xy') is not None
+                      else _mirror_cp(bezier_params['bc1_upper_xy'], corner_pt, earm))
+            bc2_lo = (bezier_params['bc2_lower_xy']
+                      if bezier_params.get('bc2_lower_xy') is not None
+                      else _mirror_cp(bezier_params['bc2_upper_xy'], corner_pt, earm))
+            hs_lo = {**hs,
+                'adj_li': hs['adj_li_lower'], 'fold_dir_i': hs['fold_dir_i_lower'],
+                'adj_lk': hs['adj_lk_lower'], 'fold_dir_k': hs['fold_dir_k_lower'],
+            }
+            bp_lo = {**bezier_params,
+                'bc1_xy': list(bc1_lo),
+                'bc2_xy': list(bc2_lo),
+            }
+
+            all_hexes.extend(_mesh_hinge(
+                hs_up, n_hinge,
+                face_verts, face_node_grids, face_s_nodes, face_t_nodes, face_z_vals_list,
+                node_list, bezier_params=bp_up))
+            all_hexes.extend(_mesh_hinge(
+                hs_lo, n_hinge,
+                face_verts, face_node_grids, face_s_nodes, face_t_nodes, face_z_vals_list,
+                node_list, bezier_params=bp_lo))
+        else:
+            # Side hinge or corner hinge with legacy parametrisation.
+            all_hexes.extend(_mesh_hinge(
+                hs, n_hinge,
+                face_verts, face_node_grids, face_s_nodes, face_t_nodes, face_z_vals_list,
+                node_list, bezier_params=bezier_params))
 
     # ── merge coincident nodes (free corners shared across faces) ────────────
     # Tolerance: 1 ppm of the hinge arm width (much smaller than any intended gap)

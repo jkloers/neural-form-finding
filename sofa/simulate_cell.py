@@ -43,6 +43,8 @@ def evaluate_unit_cell(
     yield_strength:         float = 55e6,
     n_steps:                int   = N_STEPS_DEFAULT,
     fem_method:             str   = 'polar',
+    rotation_pivot:         tuple | None = None,
+    clamp_mode:             str   = 'full',
 ) -> dict:
     """
     Simulate a kirigami unit cell and return mechanical quantities.
@@ -88,6 +90,8 @@ def evaluate_unit_cell(
                 sheet_thickness        = sheet_thickness,
                 fem_method             = fem_method,
                 n_steps                = n_steps,
+                rotation_pivot         = rotation_pivot,
+                clamp_mode             = clamp_mode,
             )
             Sofa.Simulation.init(root)
             for _ in range(n_steps):
