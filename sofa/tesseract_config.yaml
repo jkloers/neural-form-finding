@@ -1,17 +1,18 @@
 name: nff-sofa-oracle
-version: "0.3.0"
+version: "0.4.1"
 description: |
   High-fidelity SOFA physics oracle for the Neural Form-Finding (NFF) pipeline.
 
   Accepts a CentroidalState (CS) mesh description — face centroids, centroid-node
-  vectors, hinge topology — plus two differentiable hinge design parameters
-  (arm_width_physical, fold_length). Internally builds a conforming hex mesh via
-  build_mesh_from_centroidal_state, runs SOFA v25.12 HexahedronFEMForceField
-  (method=small, PartialFixed z), and returns five scalar quantities at static
+  vectors, hinge topology — plus 13 differentiable corner-hinge cubic-Bézier
+  design parameters (gap, four edge reaches s0/s1, eight Bézier control-point
+  coordinates). Internally builds a conforming gmsh tetrahedral mesh via
+  build_mesh_gmsh (faces translated apart by gap), runs SOFA v25.12
+  TetrahedronFEMForceField, and returns seven scalar quantities at static
   equilibrium: SvK strain energy, peak von Mises stress, peak in-plane XY
-  displacement, peak out-of-plane z displacement, and first-yield fraction.
-  Gradients are computed via central finite differences (4 SOFA calls per gradient
-  for 2 differentiable hinge design params).
+  displacement, peak out-of-plane z displacement, first-yield fraction, and the
+  shear / tension strain energies. Gradients are computed via central finite
+  differences (2 × 13 SOFA calls per gradient per load mode).
 
 build_config:
   # Ubuntu/Debian base with Python 3.12 — matches local kgnn_sofa SOFA environment.
@@ -20,23 +21,32 @@ build_config:
   # SOFA Linux binaries are x86_64 only.
   target_platform: "linux/amd64"
 
-  # System packages required by SOFA and scipy:
+  # System packages required by SOFA, scipy and gmsh:
   extra_packages:
     - wget
     - unzip
     - libgomp1
     - libgl1
+    - libglu1-mesa     # gmsh headless API runtime
     - libglib2.0-0
+    # X11 shared libs gmsh's libgmsh.so links against even when used headless:
+    - libxrender1
+    - libxcursor1
+    - libxinerama1
+    - libxft2
+    - libxfixes3
+    - libx11-6
+    - libxext6
 
   # All SOFA physics modules and the CS mesh builder are copied into the container.
-  # simulate_cell.py imports materials, scene_builder (already in tesseract/).
-  # mesh_builder.py requires only numpy + scipy (no JAX).
-  # tesseract_api.py does `import mesh_builder as _mb` and `import simulate_cell as _sofa`.
+  # tesseract_api.py imports mesh_builder_gmsh (build_mesh_gmsh) and simulate_cell.
+  # mesh_builder_gmsh.py is self-contained and needs gmsh + matplotlib
+  # (see tesseract_requirements.txt).
   package_data:
-    - ["simulate_cell.py",  "simulate_cell.py"]
-    - ["mesh_builder.py",   "mesh_builder.py"]
-    - ["materials.py",      "materials.py"]
-    - ["scene_builder.py",  "scene_builder.py"]
+    - ["simulate_cell.py",      "simulate_cell.py"]
+    - ["mesh_builder_gmsh.py",  "mesh_builder_gmsh.py"]
+    - ["materials.py",          "materials.py"]
+    - ["scene_builder.py",      "scene_builder.py"]
 
   custom_build_steps:
     # ── Download and install SOFA v25.12 Linux / Python 3.12 binary ────────────

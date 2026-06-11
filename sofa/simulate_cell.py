@@ -1,9 +1,9 @@
 """
 simulate_cell.py — SOFA unit-cell simulation from a pre-built CS mesh.
 
-The mesh (nodes, hexes, bc_masks) must be built upstream by
-nff.sofa.mesh_builder.build_mesh_from_centroidal_state with the desired
-arm_width_physical and fold_length values.
+The mesh (nodes, tets, bc_masks) must be built upstream by
+nff.sofa.mesh_builder_gmsh.build_mesh_gmsh with the desired gap and
+Bézier hinge-shape parameters.
 
 Pipeline:
   scene_builder.py : build_scene  — SOFA scene + BCs
@@ -22,7 +22,7 @@ try:
 except ImportError as e:
     sys.exit(f"Cannot import SOFA: {e}\nRun via ./sofa/run_sofa.sh")
 
-from materials     import hex_to_5tets, svk_energy, vm_stress_per_tet
+from materials     import svk_energy, vm_stress_per_tet
 from scene_builder import build_scene, N_STEPS_DEFAULT, DT
 
 _SOFA_LOCK = threading.Lock()
@@ -30,7 +30,7 @@ _SOFA_LOCK = threading.Lock()
 
 def evaluate_unit_cell(
     nodes:                  np.ndarray,
-    hexes:                  np.ndarray,
+    elements:               np.ndarray,
     bc_masks:               dict,
     rotation_angle_deg:     float = 45.0,
     applied_moment:         float = 0.0,
@@ -52,8 +52,8 @@ def evaluate_unit_cell(
     Parameters
     ----------
     nodes           : (N, 3) float64 — stress-free node positions [m]
-    hexes           : (H, 8) int32   — hex connectivity
-    bc_masks        : dict — 'clamped'/'loaded'/'f{i}' bool masks
+    elements        : (M, 4) int32   — tetrahedron connectivity
+    bc_masks        : dict — 'clamped'/'loaded' bool masks
     rotation_angle_deg : in-plane rotation of loaded face [deg].
                          Negative = CW = correct RDQK opening direction.
                          Used when loading_mode='rotation'.
@@ -72,14 +72,15 @@ def evaluate_unit_cell(
       first_yield_fraction  []     — max_vm / yield_strength
       nodes_nat             (N,3)  — natural node positions (= input nodes)
       nodes_cur             (N,3)  — equilibrium node positions
-      hexes                 (H,8)  — hex connectivity
+      tets                  (M,4)  — tetrahedron connectivity
+      vm                    (M,)   — per-tet von Mises stress [Pa]
       bc_masks              dict   — as provided
     """
     with _SOFA_LOCK:
         root = Sofa.Core.Node("root")
         try:
             mstate = build_scene(
-                root, nodes, hexes, bc_masks,
+                root, nodes, elements, bc_masks,
                 rotation_angle_deg     = rotation_angle_deg,
                 applied_moment         = applied_moment,
                 loading_mode           = loading_mode,
@@ -100,7 +101,7 @@ def evaluate_unit_cell(
         finally:
             Sofa.Simulation.unload(root)
 
-    tets     = hex_to_5tets(hexes)
+    tets = np.asarray(elements)
     strain_e = svk_energy(nodes, nodes_cur, tets, young_modulus, poisson_ratio)
     vm       = vm_stress_per_tet(nodes, nodes_cur, tets, young_modulus, poisson_ratio)
     max_vm   = float(np.max(vm))
@@ -126,6 +127,7 @@ def evaluate_unit_cell(
         "first_yield_fraction": max_vm / yield_strength,
         "nodes_nat":  nodes,
         "nodes_cur":  nodes_cur,
-        "hexes":      hexes,
+        "tets":       tets,
+        "vm":         vm,
         "bc_masks":   bc_masks,
     }

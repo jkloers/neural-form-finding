@@ -5,3 +5,5 @@
 
 numpy
 scipy
+gmsh          # tetrahedral mesh generation in mesh_builder_gmsh.build_mesh_gmsh
+matplotlib    # matplotlib.path.Path for point-in-polygon BC classification

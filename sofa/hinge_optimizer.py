@@ -1,26 +1,26 @@
 """
 sofa/hinge_optimizer.py — Corner-hinge cubic Bézier optimizer via Tesseract HTTP.
 
-Optimizes 7 hinge parameters using the Tesseract physics oracle (SOFA FEM
+Optimizes 13 hinge parameters using the Tesseract physics oracle (SOFA FEM
 running in Docker). The /apply endpoint returns all three load-case outputs;
 the /jacobian endpoint returns server-side central-FD gradients. Client-side
 chain rule propagates gradients through the softplus latent reparameterization
 to a numpy Adam update — no JAX tracing or subprocess calls required.
 
-Parameters (physical)
-  arm_width  — gap between panel edges [m]                       (softplus, positive)
-  fold_top   — far anchor depth along face edge [m]              (softplus, positive)
-  fold_bot   — near anchor depth [m] (≈0 for corner)            (softplus, positive)
-  bc1_x, bc1_y   — interior Bézier CP 1, upper wing [m]         (free in ℝ)
-  bc2_x, bc2_y   — interior Bézier CP 2, upper wing [m]         (free in ℝ)
-  bc1l_x, bc1l_y — interior Bézier CP 1, lower wing [m]         (free in ℝ)
-  bc2l_x, bc2l_y — interior Bézier CP 2, lower wing [m]         (free in ℝ)
-  Lower wing CPs initialised as the earm-mirror of upper wing (symmetric start).
+Parameters (physical) — 5 positive (softplus) + 8 free (ℝ)
+  gap                     — rigid face separation along ê_arm [m]   (softplus, positive)
+  s0_top, s0_bot          — upper/lower endpoint reach on face 0 [m] (softplus, positive)
+  s1_top, s1_bot          — upper/lower endpoint reach on face 1 [m] (softplus, positive)
+  bc1u_x, bc1u_y          — interior Bézier CP 1, UPPER arc [m]       (free in ℝ)
+  bc2u_x, bc2u_y          — interior Bézier CP 2, UPPER arc [m]       (free in ℝ)
+  bc1l_x, bc1l_y          — interior Bézier CP 1, LOWER arc [m]       (free in ℝ)
+  bc2l_x, bc2l_y          — interior Bézier CP 2, LOWER arc [m]       (free in ℝ)
+  CP defaults come from the symmetric mesh geometry at the initial gap.
 
 Gradient cost per epoch:
   POST /apply    →  1 forward pass (1–3 SOFA sims depending on skip_secondary_modes)
-  POST /jacobian →  22 central-FD perturbations × 1 mode = 22 SOFA sims (rotation-only)
-  Total: ~23 SOFA simulations per optimizer step (rotation-only mode).
+  POST /jacobian →  26 central-FD perturbations × 1 mode = 26 SOFA sims (rotation-only)
+  Total: ~27 SOFA simulations per optimizer step (rotation-only mode).
 
 Usage
 -----
@@ -33,7 +33,7 @@ Usage
 
 Outputs  data/outputs/hinge_opt/<timestamp>_<config>/
     config.yaml         — copy of driving config
-    convergence.npz     — per-epoch arrays for all 7 params + losses
+    convergence.npz     — per-epoch arrays for all 13 params + losses
     convergence.png     — convergence figure
 """
 
@@ -69,19 +69,16 @@ OUTPUTS_DIR   = REPO / 'data' / 'outputs' / 'hinge_opt'
 
 TESSERACT_DEFAULT_URL = 'http://localhost:8000'
 
-# Differentiable outputs requested from Tesseract /jacobian.
-_JAC_INPUTS  = [
-    'arm_width_physical', 'fold_top', 'fold_bot',
-    'bc1_x', 'bc1_y', 'bc2_x', 'bc2_y',
-    'bc1l_x', 'bc1l_y', 'bc2l_x', 'bc2l_y',
-]
+# Parameter layout: 5 positive (softplus) followed by 8 free CP coords.
+# Names match the Tesseract InputSchema field names exactly.
+_POS_NAMES   = ['gap', 's0_top', 's0_bot', 's1_top', 's1_bot']
+_FREE_NAMES  = ['bc1u_x', 'bc1u_y', 'bc2u_x', 'bc2u_y',
+                'bc1l_x', 'bc1l_y', 'bc2l_x', 'bc2l_y']
+_PARAM_NAMES = _POS_NAMES + _FREE_NAMES            # 13, == _JAC_INPUTS order
+_N_POS       = len(_POS_NAMES)
+
+_JAC_INPUTS  = list(_PARAM_NAMES)
 _JAC_OUTPUTS = ['strain_energy', 'energy_shear', 'energy_tension', 'max_von_mises_stress']
-# Physical param ordering must match _JAC_INPUTS.
-_PHYS_ORDER  = [
-    'arm_width', 'fold_top', 'fold_bot',
-    'bc1_x', 'bc1_y', 'bc2_x', 'bc2_y',
-    'bc1l_x', 'bc1l_y', 'bc2l_x', 'bc2l_y',
-]
 
 
 # ── Numerics ──────────────────────────────────────────────────────────────────
@@ -94,6 +91,18 @@ def _softplus(x: np.ndarray) -> np.ndarray:
 def _sigmoid(x: np.ndarray) -> np.ndarray:
     """Numerically stable 1 / (1 + exp(-x))."""
     return 1.0 / (1.0 + np.exp(-np.clip(x, -500.0, 500.0)))
+
+
+def _decode_array(v) -> np.ndarray:
+    """Decode a Tesseract array-output JSON value into a numpy array."""
+    import base64
+    if isinstance(v, dict) and v.get('object_type') == 'array':
+        shape, dtype, data = tuple(v['shape']), v['dtype'], v['data']
+        if data.get('encoding') == 'base64':
+            buf = base64.b64decode(data['buffer'])
+            return np.frombuffer(buf, dtype=dtype).reshape(shape).copy()
+        return np.asarray(data['buffer'], dtype=dtype).reshape(shape)
+    return np.asarray(v)
 
 
 class _NumpyAdam:
@@ -246,22 +255,10 @@ def _build_tesseract_payload(
         "hinge_adj_info":        cs.hinge_adj_info.tolist(),
         "clamped_faces":         clamped_faces,
         "loaded_faces":          loaded_faces,
-        # Differentiable hinge params (11-param corner-hinge cubic Bézier)
-        "arm_width_physical":   float(phys['arm_width']),
-        "fold_top":             float(phys['fold_top']),
-        "fold_bot":             float(phys['fold_bot']),
-        "bc1_x":                float(phys['bc1_x']),
-        "bc1_y":                float(phys['bc1_y']),
-        "bc2_x":                float(phys['bc2_x']),
-        "bc2_y":                float(phys['bc2_y']),
-        "bc1l_x":               float(phys['bc1l_x']),
-        "bc1l_y":               float(phys['bc1l_y']),
-        "bc2l_x":               float(phys['bc2l_x']),
-        "bc2l_y":               float(phys['bc2l_y']),
+        # Differentiable hinge params (13-param corner-hinge cubic Bézier)
+        **{name: float(phys[name]) for name in _PARAM_NAMES},
         # Mesh resolution
         "sheet_thickness":      float(sofa_cfg.get('sheet_thickness', 0.001)),
-        "n_face":               int(sofa_cfg.get('n_face', 4)),
-        "n_hinge":              int(sofa_cfg.get('n_hinge', 2)),
         "n_z":                  int(sofa_cfg.get('n_z', 2)),
         # Loading
         "rotation_angle_deg":     float(sofa_cfg.get('rotation_angle_deg', -5.0)),
@@ -284,32 +281,17 @@ def _build_tesseract_payload(
 
 # ── Latent-to-physical Jacobian ───────────────────────────────────────────────
 
-def _lat_to_phys_jacobian(
-    latent: np.ndarray,
-    arm_scale: float, delta_scale: float, fold_bot_scale: float,
-) -> np.ndarray:
-    """11×11 Jacobian: d(physical) / d(latent).
+def _lat_to_phys_jacobian(latent: np.ndarray, pos_scale: np.ndarray) -> np.ndarray:
+    """13×13 diagonal Jacobian: d(physical) / d(latent).
 
-    physical = [arm_width, fold_top, fold_bot,
-                bc1_x, bc1_y, bc2_x, bc2_y,
-                bc1l_x, bc1l_y, bc2l_x, bc2l_y]
-    latent   = [lat0,    lat1,    lat2,
-                lat3,  lat4,  lat5,  lat6,
-                lat7,   lat8,   lat9,   lat10 ]
-
-    lat[0] → arm_width         (softplus, positive)
-    lat[1] → delta = fold_top - fold_bot  (softplus, positive)
-    lat[2] → fold_bot          (softplus, positive)
-    fold_top = fold_bot + delta → both lat[1] and lat[2] affect fold_top.
-    lat[3..10] → bc coords (upper + lower)  (identity, free in ℝ)
+    The first 5 params (gap, s0_top, s0_bot, s1_top, s1_bot) are positive via
+    softplus: phys = softplus(lat) * scale → d(phys)/d(lat) = sigmoid(lat)*scale.
+    The remaining 8 CP coordinates map identically (latent == physical).
     """
-    sig = _sigmoid(latent[:3])
-    J = np.zeros((11, 11), dtype=np.float64)
-    J[0, 0] = sig[0] * arm_scale       # d(arm_width)/d(lat0)
-    J[1, 1] = sig[1] * delta_scale     # d(fold_top)/d(lat1)  via delta
-    J[1, 2] = sig[2] * fold_bot_scale  # d(fold_top)/d(lat2)  via fold_bot
-    J[2, 2] = sig[2] * fold_bot_scale  # d(fold_bot)/d(lat2)
-    for i in range(3, 11):             # bc coords: identity
+    J = np.zeros((13, 13), dtype=np.float64)
+    diag_pos = _sigmoid(latent[:_N_POS]) * pos_scale
+    J[np.arange(_N_POS), np.arange(_N_POS)] = diag_pos
+    for i in range(_N_POS, 13):
         J[i, i] = 1.0
     return J
 
@@ -327,20 +309,6 @@ def run_optimization(
     loss_cfg = cfg.get('loss', {})
     mat_cfg  = cfg.get('material', {})
 
-    arm_init      = float(sofa_cfg.get('arm_width_initial',   0.003))
-    fold_top_init = float(sofa_cfg.get('fold_top_initial',
-                          sofa_cfg.get('fold_length_initial', 0.008)))
-    fold_bot_init = float(sofa_cfg.get('fold_bot_initial',   0.00005))
-    bc1_x_init    = float(sofa_cfg.get('bc1_x_initial',      0.14425))
-    bc1_y_init    = float(sofa_cfg.get('bc1_y_initial',      0.07937))
-    bc2_x_init    = float(sofa_cfg.get('bc2_x_initial',      0.13859))
-    bc2_y_init    = float(sofa_cfg.get('bc2_y_initial',      0.07937))
-    # Lower wing: default to earm-mirror of upper wing (symmetric start).
-    bc1l_x_init   = float(sofa_cfg.get('bc1l_x_initial',     0.14159))
-    bc1l_y_init   = float(sofa_cfg.get('bc1l_y_initial',     0.07937))
-    bc2l_x_init   = float(sofa_cfg.get('bc2l_x_initial',     0.14725))
-    bc2l_y_init   = float(sofa_cfg.get('bc2l_y_initial',     0.07937))
-
     alpha    = float(loss_cfg.get('alpha',    1.0))
     beta     = float(loss_cfg.get('beta',     1.0))
     gamma    = float(loss_cfg.get('gamma',    1.0))
@@ -349,76 +317,66 @@ def run_optimization(
 
     cs_static = build_physical_cs(cfg)
 
+    # ── Positive-param initial values (gap + 4 reaches) ───────────────────────
+    gap_init   = float(sofa_cfg.get('gap_initial',   0.003))
+    reach_init = float(sofa_cfg.get('reach_initial', gap_init))
+    pos_init = np.array([
+        gap_init,
+        float(sofa_cfg.get('s0_top_initial', reach_init)),
+        float(sofa_cfg.get('s0_bot_initial', reach_init)),
+        float(sofa_cfg.get('s1_top_initial', reach_init)),
+        float(sofa_cfg.get('s1_bot_initial', reach_init)),
+    ], dtype=np.float64)
+
+    # ── Free CP initial values — symmetric mesh geometry at the initial gap ───
+    from nff.sofa.mesh_builder_gmsh import compute_hinge_geometry
+    _hd0 = compute_hinge_geometry(cs_static, gap=gap_init)['hinge_data'][0]
+    _cp_default = {
+        'bc1u_x': _hd0['bc1_up'][0], 'bc1u_y': _hd0['bc1_up'][1],
+        'bc2u_x': _hd0['bc2_up'][0], 'bc2u_y': _hd0['bc2_up'][1],
+        'bc1l_x': _hd0['bc1_lo'][0], 'bc1l_y': _hd0['bc1_lo'][1],
+        'bc2l_x': _hd0['bc2_lo'][0], 'bc2l_y': _hd0['bc2_lo'][1],
+    }
+    free_init = np.array([
+        float(sofa_cfg.get(f'{name}_initial', _cp_default[name])) for name in _FREE_NAMES
+    ], dtype=np.float64)
+
     # Extract clamped/loaded face indices from CS DOF arrays.
     clamped_faces = sorted({int(f) for f in cs_static.constrained_face_DOF_pairs[:, 0]})
     loaded_faces  = sorted({int(f) for f in cs_static.loaded_face_DOF_pairs[:, 0]})
 
-    # ── Latent-space scales ───────────────────────────────────────────────────
-    # softplus(0) = log(2) ≈ 0.6931  →  scale = init / softplus(0)
+    # ── Latent space ──────────────────────────────────────────────────────────
+    # softplus(0) = log(2) → scale = init / softplus(0) so that lat=0 → init.
     sp0 = np.log(2.0)
-    delta_fold_init = max(fold_top_init - fold_bot_init, fold_top_init * 0.1)
-    fold_bot_scale_dflt = fold_top_init * 0.1
-
-    arm_scale      = arm_init       / sp0
-    delta_scale    = delta_fold_init / sp0
-    fold_bot_scale = fold_bot_init   / sp0 if fold_bot_init > 0 else fold_bot_scale_dflt
-
-    # Initial latent values: lat=0 → physical=init via softplus for positive dims;
-    # bc coords: latent IS physical (identity).
-    def _lat0_positive(init: float) -> float:
-        return 0.0 if init > 0 else -5.0
-
-    latent = np.array([
-        _lat0_positive(arm_init),
-        _lat0_positive(delta_fold_init),
-        _lat0_positive(fold_bot_init),
-        bc1_x_init,    # identity mapping — latent = physical
-        bc1_y_init,
-        bc2_x_init,
-        bc2_y_init,
-        bc1l_x_init,
-        bc1l_y_init,
-        bc2l_x_init,
-        bc2l_y_init,
-    ], dtype=np.float64)
+    pos_scale = np.where(pos_init > 0, pos_init / sp0, 1.0)
+    # lat0 for positive dims: 0 if init>0 (→ softplus(0)*scale=init), else -5.
+    latent = np.concatenate([
+        np.where(pos_init > 0, 0.0, -5.0),
+        free_init,                       # identity mapping — latent = physical
+    ]).astype(np.float64)
 
     def to_physical(lat: np.ndarray) -> dict:
-        """11-element latent → physical param dict."""
-        arm_w    = _softplus(lat[0]) * arm_scale
-        delta    = _softplus(lat[1]) * delta_scale
-        fold_bot = _softplus(lat[2]) * fold_bot_scale
-        fold_top = fold_bot + delta
-        return {
-            'arm_width': arm_w,
-            'fold_top':  fold_top,
-            'fold_bot':  fold_bot,
-            'bc1_x':     lat[3],
-            'bc1_y':     lat[4],
-            'bc2_x':     lat[5],
-            'bc2_y':     lat[6],
-            'bc1l_x':    lat[7],
-            'bc1l_y':    lat[8],
-            'bc2l_x':    lat[9],
-            'bc2l_y':    lat[10],
-        }
+        """13-element latent → physical param dict (keys == schema names)."""
+        pos  = _softplus(lat[:_N_POS]) * pos_scale
+        free = lat[_N_POS:]
+        return {name: float(v) for name, v in
+                zip(_PARAM_NAMES, np.concatenate([pos, free]))}
 
     optimizer = _NumpyAdam(lr)
-    history: dict = {k: [] for k in [
-        'arm_width', 'fold_top', 'fold_bot',
-        'bc1_x', 'bc1_y', 'bc2_x', 'bc2_y',
-        'bc1l_x', 'bc1l_y', 'bc2l_x', 'bc2l_y',
-        'total_loss', 'energy_rot', 'max_vm_rot', 'energy_shear', 'energy_tension',
-    ]}
+    history: dict = {k: [] for k in _PARAM_NAMES + [
+        'total_loss', 'energy_rot', 'max_vm_rot', 'energy_shear', 'energy_tension']}
 
-    print(f"\nHinge optimization (corner-hinge cubic Bézier, 11-param): {n_epochs} epochs, lr={lr}")
+    _p0 = to_physical(latent)
+    print(f"\nHinge optimization (corner-hinge cubic Bézier, 13-param): {n_epochs} epochs, lr={lr}")
     print(f"  Tesseract URL: {tesseract_url}")
     print(f"  loss = {alpha}*E_rot - {beta}*E_shear - {gamma}*E_tens + {lambda_p}*yield_penalty")
-    print(f"  Initial: arm={arm_init*1e3:.2f} mm  fold_top={fold_top_init*1e3:.2f} mm  "
-          f"fold_bot={fold_bot_init*1e3:.3f} mm")
-    print(f"           bc1_up=({bc1_x_init*1e3:.1f}, {bc1_y_init*1e3:.1f}) mm  "
-          f"bc2_up=({bc2_x_init*1e3:.1f}, {bc2_y_init*1e3:.1f}) mm")
-    print(f"           bc1_lo=({bc1l_x_init*1e3:.1f}, {bc1l_y_init*1e3:.1f}) mm  "
-          f"bc2_lo=({bc2l_x_init*1e3:.1f}, {bc2l_y_init*1e3:.1f}) mm\n")
+    print(f"  Initial: gap={_p0['gap']*1e3:.2f} mm  "
+          f"reach s0=({_p0['s0_top']*1e3:.2f},{_p0['s0_bot']*1e3:.2f}) "
+          f"s1=({_p0['s1_top']*1e3:.2f},{_p0['s1_bot']*1e3:.2f}) mm")
+    print(f"           bc1_up=({_p0['bc1u_x']*1e3:.1f}, {_p0['bc1u_y']*1e3:.1f}) mm  "
+          f"bc2_up=({_p0['bc2u_x']*1e3:.1f}, {_p0['bc2u_y']*1e3:.1f}) mm")
+    print(f"           bc1_lo=({_p0['bc1l_x']*1e3:.1f}, {_p0['bc1l_y']*1e3:.1f}) mm  "
+          f"bc2_lo=({_p0['bc2l_x']*1e3:.1f}, {_p0['bc2l_y']*1e3:.1f}) mm\n")
 
     for epoch in range(n_epochs):
         phys    = to_physical(latent)
@@ -447,8 +405,8 @@ def run_optimization(
             jac_outputs_req += ['energy_shear', 'energy_tension']
         jac = _call_tesseract_jacobian(tesseract_url, payload, _JAC_INPUTS, jac_outputs_req)
 
-        # d(loss)/d(physical_param) for each of the 7 differentiable params.
-        # _JAC_INPUTS order: arm_width_physical, fold_top, fold_bot, bc1_x, bc1_y, bc2_x, bc2_y
+        # d(loss)/d(physical_param) for each of the 13 differentiable params,
+        # ordered as _JAC_INPUTS (== _PARAM_NAMES).
         yield_active = 1.0 if max_vm > yield_str else 0.0
         def _jac_val(output_key, inp_key):
             if output_key not in jac:
@@ -464,23 +422,14 @@ def run_optimization(
         ], dtype=np.float64)
 
         # Chain through latent space: d(loss)/d(lat) = J_phys_lat.T @ d(loss)/d(phys)
-        J_phys_lat = _lat_to_phys_jacobian(latent, arm_scale, delta_scale, fold_bot_scale)
+        J_phys_lat = _lat_to_phys_jacobian(latent, pos_scale)
         dloss_dlat = J_phys_lat.T @ dloss_dphys
 
         latent = optimizer.update(latent, dloss_dlat)
 
         # ── Record ────────────────────────────────────────────────────────────
-        history['arm_width'].append(phys['arm_width'])
-        history['fold_top'].append(phys['fold_top'])
-        history['fold_bot'].append(phys['fold_bot'])
-        history['bc1_x'].append(phys['bc1_x'])
-        history['bc1_y'].append(phys['bc1_y'])
-        history['bc2_x'].append(phys['bc2_x'])
-        history['bc2_y'].append(phys['bc2_y'])
-        history['bc1l_x'].append(phys['bc1l_x'])
-        history['bc1l_y'].append(phys['bc1l_y'])
-        history['bc2l_x'].append(phys['bc2l_x'])
-        history['bc2l_y'].append(phys['bc2l_y'])
+        for name in _PARAM_NAMES:
+            history[name].append(phys[name])
         history['total_loss'].append(loss)
         history['energy_rot'].append(e_rot)
         history['max_vm_rot'].append(max_vm)
@@ -489,34 +438,54 @@ def run_optimization(
 
         print(f"  epoch {epoch+1:3d}/{n_epochs}  "
               f"loss={loss:.4e}  E_rot={e_rot:.3e} J  σ_max={max_vm/1e6:.1f} MPa  "
-              f"arm={phys['arm_width']*1e3:.3f} mm  fold_top={phys['fold_top']*1e3:.3f} mm  "
-              f"fold_bot={phys['fold_bot']*1e3:.4f} mm  "
-              f"bc1_up=({phys['bc1_x']*1e3:.2f},{phys['bc1_y']*1e3:.2f})  "
-              f"bc2_up=({phys['bc2_x']*1e3:.2f},{phys['bc2_y']*1e3:.2f})  "
+              f"gap={phys['gap']*1e3:.3f} mm  "
+              f"s0=({phys['s0_top']*1e3:.2f},{phys['s0_bot']*1e3:.2f}) "
+              f"s1=({phys['s1_top']*1e3:.2f},{phys['s1_bot']*1e3:.2f}) mm  "
+              f"bc1_up=({phys['bc1u_x']*1e3:.2f},{phys['bc1u_y']*1e3:.2f})  "
+              f"bc2_up=({phys['bc2u_x']*1e3:.2f},{phys['bc2u_y']*1e3:.2f})  "
               f"bc1_lo=({phys['bc1l_x']*1e3:.2f},{phys['bc1l_y']*1e3:.2f})  "
               f"bc2_lo=({phys['bc2l_x']*1e3:.2f},{phys['bc2l_y']*1e3:.2f}) mm")
 
     np.savez(
         str(out_dir / 'convergence.npz'),
-        arm_width      = np.array(history['arm_width']),
-        fold_top       = np.array(history['fold_top']),
-        fold_bot       = np.array(history['fold_bot']),
-        bc1_x          = np.array(history['bc1_x']),
-        bc1_y          = np.array(history['bc1_y']),
-        bc2_x          = np.array(history['bc2_x']),
-        bc2_y          = np.array(history['bc2_y']),
-        bc1l_x         = np.array(history['bc1l_x']),
-        bc1l_y         = np.array(history['bc1l_y']),
-        bc2l_x         = np.array(history['bc2l_x']),
-        bc2l_y         = np.array(history['bc2l_y']),
+        **{name: np.array(history[name]) for name in _PARAM_NAMES},
         total_loss     = np.array(history['total_loss']),
         energy_rot     = np.array(history['energy_rot']),
         max_vm_rot     = np.array(history['max_vm_rot']),
         energy_shear   = np.array(history['energy_shear']),
         energy_tension = np.array(history['energy_tension']),
-        fold_length    = np.array(history['fold_top']),   # backward-compat alias
         stress         = np.array(history['max_vm_rot']), # backward-compat alias
     )
+
+    # ── Final state at the best design — capture the von Mises field for viz ──
+    best_idx  = int(np.argmin(history['max_vm_rot']))
+    best_phys = {name: float(history[name][best_idx]) for name in _PARAM_NAMES}
+    print(f"\nCapturing final-state field at best design (epoch {best_idx + 1}) ...")
+    payload = _build_tesseract_payload(cs_static, best_phys, cfg, clamped_faces, loaded_faces)
+    payload['return_fields']        = True
+    payload['skip_secondary_modes'] = True   # rotation field only
+    try:
+        fwd = _call_tesseract_apply(tesseract_url, payload)
+        np.savez(
+            str(out_dir / 'final_state.npz'),
+            von_mises_field = _decode_array(fwd['von_mises_field']),
+            deformed_nodes  = _decode_array(fwd['deformed_nodes']),
+            mesh_tets       = _decode_array(fwd['mesh_tets']),
+            best_idx        = np.array(best_idx),
+            # CS topology so the visualizer can rebuild the initial/optimal meshes.
+            face_centroids             = cs_static.face_centroids,
+            centroid_node_vectors      = cs_static.centroid_node_vectors,
+            hinge_node_pairs           = cs_static.hinge_node_pairs,
+            hinge_adj_info             = cs_static.hinge_adj_info,
+            constrained_face_DOF_pairs = cs_static.constrained_face_DOF_pairs,
+            loaded_face_DOF_pairs      = cs_static.loaded_face_DOF_pairs,
+        )
+        print(f"  final_state.npz saved ({len(history['max_vm_rot'])} epochs, "
+              f"σ_max={history['max_vm_rot'][best_idx]/1e6:.1f} MPa).")
+    except Exception as ex:
+        print(f"  WARNING: final-state field capture failed ({ex}); "
+              "visualizer will skip the von Mises panel.")
+
     return history
 
 
@@ -563,15 +532,13 @@ def main() -> None:
     history = run_optimization(cfg, n_epochs, lr, url, out_dir)
 
     best_idx = int(np.argmin(history['max_vm_rot']))
+    b = lambda k: history[k][best_idx] * 1e3
     print(f'\nBest (epoch {best_idx + 1}): '
           f'σ_max={history["max_vm_rot"][best_idx]:.4e} Pa  '
-          f'arm={history["arm_width"][best_idx]*1e3:.3f} mm  '
-          f'fold_top={history["fold_top"][best_idx]*1e3:.3f} mm  '
-          f'fold_bot={history["fold_bot"][best_idx]*1e3:.4f} mm  '
-          f'bc1_up=({history["bc1_x"][best_idx]*1e3:.2f},{history["bc1_y"][best_idx]*1e3:.2f}) mm  '
-          f'bc2_up=({history["bc2_x"][best_idx]*1e3:.2f},{history["bc2_y"][best_idx]*1e3:.2f}) mm  '
-          f'bc1_lo=({history["bc1l_x"][best_idx]*1e3:.2f},{history["bc1l_y"][best_idx]*1e3:.2f}) mm  '
-          f'bc2_lo=({history["bc2l_x"][best_idx]*1e3:.2f},{history["bc2l_y"][best_idx]*1e3:.2f}) mm')
+          f'gap={b("gap"):.3f} mm  '
+          f's0=({b("s0_top"):.2f},{b("s0_bot"):.2f}) s1=({b("s1_top"):.2f},{b("s1_bot"):.2f}) mm  '
+          f'bc1_up=({b("bc1u_x"):.2f},{b("bc1u_y"):.2f}) bc2_up=({b("bc2u_x"):.2f},{b("bc2u_y"):.2f}) mm  '
+          f'bc1_lo=({b("bc1l_x"):.2f},{b("bc1l_y"):.2f}) bc2_lo=({b("bc2l_x"):.2f},{b("bc2l_y"):.2f}) mm')
     print(f'Results saved → {out_dir}')
 
 

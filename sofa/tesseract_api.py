@@ -11,7 +11,7 @@ ARCHITECTURE
        ▼
   THIS FILE — Tesseract API layer (Python 3.12, Docker/linux/amd64)
        │  imports
-       ├── mesh_builder.py — build_mesh_from_centroidal_state (CS → hex mesh)
+       ├── mesh_builder_gmsh.py — build_mesh_gmsh (CS → gmsh tet mesh)
        └── simulate_cell.py — evaluate_unit_cell (SOFA FEM)
               │  calls
               ▼
@@ -24,9 +24,9 @@ GRADIENT STRATEGY
 SOFA is a black-box simulator — no adjoint or AD is available. Gradients are
 computed by Tesseract calling apply() with central finite differences:
   cost = 2 × n_diff_inputs × n_modes SOFA sims per gradient call
-       = 10 perturbations × 3 modes = 30 simulations for 5 Bézier params.
+       = 26 perturbations × 3 modes = 78 simulations for 13 Bézier params.
 
-Each ±ε call fully rebuilds the hex mesh then re-runs all three loading modes.
+Each ±ε call fully rebuilds the tet mesh then re-runs all three loading modes.
 This is necessary because the hinge design variables directly affect mesh geometry.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -36,23 +36,26 @@ INPUTS / OUTPUTS
 CS topology (non-differentiable, passed as nested lists):
   face_centroids, centroid_node_vectors, hinge_node_pairs, hinge_adj_info
 
-Differentiable hinge design params (11-param corner-hinge cubic Bézier):
-  arm_width_physical  — hinge strip gap [m]
-  fold_top            — far Bézier anchor depth along face edge [m]
-  fold_bot            — near Bézier anchor depth [m] (≈0 for corner; must be < fold_top)
-  bc1_x, bc1_y        — interior Bézier CP 1 for upper wing far boundary [m] (absolute XY)
-  bc2_x, bc2_y        — interior Bézier CP 2 for upper wing far boundary [m] (absolute XY)
-  bc1l_x, bc1l_y      — interior Bézier CP 1 for lower wing far boundary [m] (absolute XY)
-  bc2l_x, bc2l_y      — interior Bézier CP 2 for lower wing far boundary [m] (absolute XY)
-  Lower wing CPs default to the earm-mirrored values of the upper wing (symmetric start).
+Differentiable hinge design params (13-param corner-hinge cubic Bézier):
+  gap                  — rigid separation of the two faces along ê_arm [m]
+  s0_top, s0_bot       — reach of the upper/lower endpoint along face-0 edges [m]
+  s1_top, s1_bot       — reach of the upper/lower endpoint along face-1 edges [m]
+  bc1u_x, bc1u_y       — interior Bézier CP 1 for the UPPER arc [m] (absolute XY)
+  bc2u_x, bc2u_y       — interior Bézier CP 2 for the UPPER arc [m] (absolute XY)
+  bc1l_x, bc1l_y       — interior Bézier CP 1 for the LOWER arc [m] (absolute XY)
+  bc2l_x, bc2l_y       — interior Bézier CP 2 for the LOWER arc [m] (absolute XY)
+  The upper and lower arcs have DISTINCT endpoints that slide on the face edges.
 
-FD gradient cost: 2 × 11 params × 3 modes = 66 SOFA sims per gradient call.
+FD gradient cost: 2 × 13 params × 3 modes = 78 SOFA sims per gradient call.
 
-Outputs (all scalar, all Differentiable[Float64]):
+Scalar outputs (Differentiable[Float64]):
   strain_energy, max_von_mises_stress, max_xy_displacement,
   max_z_displacement, first_yield_fraction  — from rotation mode
   energy_shear                               — from shear loading mode
   energy_tension                             — from tension loading mode
+
+Visualization outputs (non-differentiable arrays, populated iff return_fields):
+  von_mises_field (M,), deformed_nodes (N,3), mesh_tets (M,4)  — rotation mode
 """
 
 import types
@@ -61,22 +64,22 @@ from typing import Any
 import numpy as np
 from pydantic import BaseModel, Field
 
-from tesseract_core.runtime import Differentiable, Float64, ShapeDType
+from tesseract_core.runtime import Array, Differentiable, Float64, Int32, ShapeDType
 from tesseract_core.runtime.experimental import (
     finite_difference_jacobian,
     finite_difference_jvp,
     finite_difference_vjp,
 )
 
-# mesh_builder.py and simulate_cell.py live alongside this file in sofa/.
-import mesh_builder  as _mb
-import simulate_cell as _sofa
+# mesh_builder_gmsh.py and simulate_cell.py live alongside this file in sofa/.
+import mesh_builder_gmsh  as _mb_gmsh
+import simulate_cell      as _sofa
 
 
 # ── Schemas ────────────────────────────────────────────────────────────────────
 
 class InputSchema(BaseModel):
-    """Inputs to the SOFA unit-cell simulation (CS-mesh, 5-param Bézier hinge)."""
+    """Inputs to the SOFA unit-cell simulation (CS-mesh, 13-param Bézier hinge)."""
 
     # ── CS topology (non-differentiable) ──────────────────────────────────────
 
@@ -105,72 +108,63 @@ class InputSchema(BaseModel):
         description="Face indices to drive (rotation/moment applied). If empty, uses CS-derived BCs.",
     )
 
-    # ── Differentiable hinge design params (7-param corner-hinge cubic Bézier) ─
+    # ── Differentiable hinge design params (13-param corner-hinge cubic Bézier) ─
 
-    arm_width_physical: Differentiable[Float64] = Field(
+    gap: Differentiable[Float64] = Field(
         default=0.003,
         description=(
-            "Physical width of the hinge strip (gap between panel edges) [m]. "
-            "Bending stiffness ∝ 1/arm_width³. Typical range: 0.002–0.010 m."
+            "Rigid separation of the two faces along ê_arm [m]. "
+            "Translates whole faces apart, opening the hinge void. "
+            "Must be > 0. Typical range: 0.002–0.015 m."
         ),
     )
-    fold_top: Differentiable[Float64] = Field(
-        default=0.008,
-        description=(
-            "Far Bézier anchor depth along the face edge [m]. "
-            "Depth of the hinge strip at the far end (away from the panel corner). "
-            "Must be > fold_bot. Typical range: 0.004–0.012 m."
-        ),
+    s0_top: Differentiable[Float64] = Field(
+        default=0.003,
+        description="Reach of the UPPER endpoint along face-0's upper edge [m] (> 0).",
     )
-    fold_bot: Differentiable[Float64] = Field(
-        default=0.00005,
-        description=(
-            "Near Bézier anchor depth [m]. "
-            "Near-zero for corner hinge (≈50 μm closes the corner void). "
-            "Must be < fold_top."
-        ),
+    s0_bot: Differentiable[Float64] = Field(
+        default=0.003,
+        description="Reach of the LOWER endpoint along face-0's lower edge [m] (> 0).",
     )
-    bc1_x: Differentiable[Float64] = Field(
-        default=0.198,
-        description=(
-            "Interior Bézier CP 1 x-coordinate for upper wing far boundary [m]. "
-            "Absolute world coordinate. Optimizer moves this freely."
-        ),
+    s1_top: Differentiable[Float64] = Field(
+        default=0.003,
+        description="Reach of the UPPER endpoint along face-1's upper edge [m] (> 0).",
     )
-    bc1_y: Differentiable[Float64] = Field(
-        default=0.10283,
-        description=(
-            "Interior Bézier CP 1 y-coordinate for upper wing far boundary [m]. "
-            "Default ≈ corner_y + fold_top/2 * sin(45°)."
-        ),
+    s1_bot: Differentiable[Float64] = Field(
+        default=0.003,
+        description="Reach of the LOWER endpoint along face-1's lower edge [m] (> 0).",
     )
-    bc2_x: Differentiable[Float64] = Field(
-        default=0.13859,
-        description="Interior Bézier CP 2 x-coordinate for upper wing far boundary [m].",
+    bc1u_x: Differentiable[Float64] = Field(
+        default=0.14021,
+        description="Interior Bézier CP 1 x-coordinate for the UPPER arc [m] (absolute XY).",
     )
-    bc2_y: Differentiable[Float64] = Field(
-        default=0.07937,
-        description="Interior Bézier CP 2 y-coordinate for upper wing far boundary [m].",
+    bc1u_y: Differentiable[Float64] = Field(
+        default=0.07583,
+        description="Interior Bézier CP 1 y-coordinate for the UPPER arc [m].",
+    )
+    bc2u_x: Differentiable[Float64] = Field(
+        default=0.14263,
+        description="Interior Bézier CP 2 x-coordinate for the UPPER arc [m].",
+    )
+    bc2u_y: Differentiable[Float64] = Field(
+        default=0.07583,
+        description="Interior Bézier CP 2 y-coordinate for the UPPER arc [m].",
     )
     bc1l_x: Differentiable[Float64] = Field(
-        default=0.14159,
-        description=(
-            "Interior Bézier CP 1 x-coordinate for lower wing far boundary [m]. "
-            "Defaults to the earm-mirror of bc1 (symmetric start). "
-            "Set independently for asymmetric hinge shapes."
-        ),
+        default=0.14021,
+        description="Interior Bézier CP 1 x-coordinate for the LOWER arc [m] (absolute XY).",
     )
     bc1l_y: Differentiable[Float64] = Field(
-        default=0.07937,
-        description="Interior Bézier CP 1 y-coordinate for lower wing far boundary [m].",
+        default=0.06559,
+        description="Interior Bézier CP 1 y-coordinate for the LOWER arc [m].",
     )
     bc2l_x: Differentiable[Float64] = Field(
-        default=0.14725,
-        description="Interior Bézier CP 2 x-coordinate for lower wing far boundary [m].",
+        default=0.14263,
+        description="Interior Bézier CP 2 x-coordinate for the LOWER arc [m].",
     )
     bc2l_y: Differentiable[Float64] = Field(
-        default=0.07937,
-        description="Interior Bézier CP 2 y-coordinate for lower wing far boundary [m].",
+        default=0.06559,
+        description="Interior Bézier CP 2 y-coordinate for the LOWER arc [m].",
     )
 
     # ── Mesh resolution (non-differentiable) ──────────────────────────────────
@@ -179,17 +173,10 @@ class InputSchema(BaseModel):
         default=0.001,
         description="Material thickness in z [m]. Default: 1 mm PLA sheet.",
     )
-    n_face: int = Field(
-        default=4,
-        description="Hex elements per face edge (in-plane). 4 = qualitative; 6–8 = calibration.",
-    )
-    n_hinge: int = Field(
-        default=2,
-        description="Hex elements across hinge width. 2 = qualitative; 4–6 = calibration.",
-    )
     n_z: int = Field(
         default=2,
-        description="Hex layers through thickness. 2 is sufficient with PartialFixed(z).",
+        description="Tet prism layers through thickness. 2 is sufficient with PartialFixed(z). "
+                    "In-plane element sizing is handled automatically by gmsh.",
     )
 
     # ── Loading ───────────────────────────────────────────────────────────────
@@ -239,7 +226,8 @@ class InputSchema(BaseModel):
     )
     fem_method: str = Field(
         default='polar',
-        description="HexahedronFEMForceField method: 'polar' (co-rotational, large rotation) or 'small' (linear, valid to ~10°).",
+        description="TetrahedronFEMForceField method: 'polar'/'large' (co-rotational, large "
+                    "rotation) or 'small' (linear, valid to ~10°).",
     )
     rotation_pivot_auto: bool = Field(
         default=True,
@@ -248,6 +236,15 @@ class InputSchema(BaseModel):
             "(computed from hinge_node_pairs[0]). "
             "Required for 2-face corner-hinge experiments. "
             "Set False to use loaded face centroid (standard multi-face behavior)."
+        ),
+    )
+    return_fields: bool = Field(
+        default=False,
+        description=(
+            "When True, also return the per-element von Mises field, deformed node "
+            "positions and tet connectivity (rotation mode) for visualization. "
+            "Off by default so FD Jacobian perturbation calls stay light — the "
+            "optimizer sets it True only for a single final call at the best design."
         ),
     )
 
@@ -304,64 +301,66 @@ class OutputSchema(BaseModel):
     energy_tension: Differentiable[Float64] = Field(
         description="Total SvK elastic energy under tension loading [J].",
     )
+    # ── Visualization fields (non-differentiable; populated iff return_fields) ──
+    von_mises_field: Array[(None,), Float64] = Field(
+        description="Per-tet von Mises stress under rotation loading [Pa]. "
+                    "Empty (shape (0,)) unless return_fields=True.",
+    )
+    deformed_nodes: Array[(None, 3), Float64] = Field(
+        description="Deformed node positions at rotation equilibrium [m]. "
+                    "Empty (shape (0, 3)) unless return_fields=True.",
+    )
+    mesh_tets: Array[(None, 4), Int32] = Field(
+        description="Tet connectivity (0-indexed) matching von_mises_field/deformed_nodes. "
+                    "Empty (shape (0, 4)) unless return_fields=True.",
+    )
 
 
 # ── Required endpoint ──────────────────────────────────────────────────────────
 
 def apply(inputs: InputSchema) -> OutputSchema:
     """
-    Build the hex mesh from CS topology + 7-param corner-hinge cubic Bézier design,
-    then run SOFA under three load cases: rotation (primary mode), shear, and tension.
+    Build the gmsh tet mesh from CS topology + 13-param corner-hinge cubic Bézier
+    design, then run SOFA under three load cases: rotation (primary), shear, tension.
 
     The mesh is fully rebuilt on every call — including ±ε FD perturbations —
-    because all seven hinge design variables directly affect the hex geometry.
+    because all 13 hinge design variables directly affect the tet geometry.
     """
     # Reconstruct CS as a plain namespace (no JAX dependency in container).
-    # constrained/loaded_face_DOF_pairs are left empty; BCs come from clamped/loaded_faces.
+    # Fill constrained/loaded_face_DOF_pairs from the explicit face lists so the
+    # gmsh builder can classify nodes via point-in-polygon without a separate override.
+    clamped_face_list = list(inputs.clamped_faces) if inputs.clamped_faces else [0]
+    loaded_face_list  = list(inputs.loaded_faces)  if inputs.loaded_faces  else [1]
+
     cs = types.SimpleNamespace(
         face_centroids             = np.array(inputs.face_centroids,        dtype=np.float64),
         centroid_node_vectors      = np.array(inputs.centroid_node_vectors, dtype=np.float64),
         hinge_node_pairs           = np.array(inputs.hinge_node_pairs,      dtype=np.int32),
         hinge_adj_info             = np.array(inputs.hinge_adj_info,        dtype=np.int32),
-        constrained_face_DOF_pairs = np.empty((0, 2), dtype=np.int32),
-        loaded_face_DOF_pairs      = np.empty((0, 2), dtype=np.int32),
+        constrained_face_DOF_pairs = np.array([[fi, 0] for fi in clamped_face_list],
+                                               dtype=np.int32),
+        loaded_face_DOF_pairs      = np.array([[fi, 0] for fi in loaded_face_list],
+                                               dtype=np.int32),
     )
 
     bezier_params = {
-        'bc1_upper_xy': [float(inputs.bc1_x),  float(inputs.bc1_y)],
-        'bc2_upper_xy': [float(inputs.bc2_x),  float(inputs.bc2_y)],
-        'bc1_lower_xy': [float(inputs.bc1l_x), float(inputs.bc1l_y)],
-        'bc2_lower_xy': [float(inputs.bc2l_x), float(inputs.bc2l_y)],
+        's0_top':    float(inputs.s0_top),
+        's0_bot':    float(inputs.s0_bot),
+        's1_top':    float(inputs.s1_top),
+        's1_bot':    float(inputs.s1_bot),
+        'bc1_up_xy': [float(inputs.bc1u_x), float(inputs.bc1u_y)],
+        'bc2_up_xy': [float(inputs.bc2u_x), float(inputs.bc2u_y)],
+        'bc1_lo_xy': [float(inputs.bc1l_x), float(inputs.bc1l_y)],
+        'bc2_lo_xy': [float(inputs.bc2l_x), float(inputs.bc2l_y)],
     }
 
-    nodes, hexes, bc_masks = _mb.build_mesh_from_centroidal_state(
+    nodes, tets, bc_masks = _mb_gmsh.build_mesh_gmsh(
         cs,
-        fold_top           = float(inputs.fold_top),
-        fold_bot           = float(inputs.fold_bot),
-        bezier_params      = bezier_params,
-        sheet_thickness    = float(inputs.sheet_thickness),
-        n_face             = int(inputs.n_face),
-        n_hinge            = int(inputs.n_hinge),
-        n_z                = int(inputs.n_z),
-        arm_width_physical = float(inputs.arm_width_physical),
+        gap             = float(inputs.gap),
+        bezier_params   = bezier_params,
+        sheet_thickness = float(inputs.sheet_thickness),
+        n_z_layers      = int(inputs.n_z),
     )
-
-    # Override clamped/loaded masks from explicit face index lists.
-    if inputs.clamped_faces:
-        mask = np.zeros(len(nodes), dtype=bool)
-        for fi in inputs.clamped_faces:
-            key = f'f{fi}'
-            if key in bc_masks:
-                mask |= bc_masks[key]
-        bc_masks['clamped'] = mask
-
-    if inputs.loaded_faces:
-        mask = np.zeros(len(nodes), dtype=bool)
-        for fi in inputs.loaded_faces:
-            key = f'f{fi}'
-            if key in bc_masks:
-                mask |= bc_masks[key]
-        bc_masks['loaded'] = mask
 
     # Compute rotation pivot: use corner vertex from hinge_node_pairs[0] when requested.
     rotation_pivot = None
@@ -384,7 +383,7 @@ def apply(inputs: InputSchema) -> OutputSchema:
 
     # ── Rotation / moment (primary load) ──────────────────────────────────────
     res_rot = _sofa.evaluate_unit_cell(
-        nodes, hexes, bc_masks,
+        nodes, tets, bc_masks,
         rotation_angle_deg = float(inputs.rotation_angle_deg),
         applied_moment     = float(inputs.applied_moment),
         loading_mode       = str(inputs.loading_mode),
@@ -398,19 +397,30 @@ def apply(inputs: InputSchema) -> OutputSchema:
         e_tension = 0.0
     else:
         res_shear = _sofa.evaluate_unit_cell(
-            nodes, hexes, bc_masks,
+            nodes, tets, bc_masks,
             loading_mode         = 'shear',
             shear_displacement_m = float(inputs.shear_displacement_m),
             **mat_kw, **sim_kw,
         )
         res_tension = _sofa.evaluate_unit_cell(
-            nodes, hexes, bc_masks,
+            nodes, tets, bc_masks,
             loading_mode           = 'tension',
             tension_displacement_m = float(inputs.tension_displacement_m),
             **mat_kw, **sim_kw,
         )
         e_shear   = float(res_shear['strain_energy'])
         e_tension = float(res_tension['strain_energy'])
+
+    # Visualization fields — only materialised on explicit request to keep the
+    # FD Jacobian perturbation calls cheap.
+    if inputs.return_fields:
+        vm_field  = np.asarray(res_rot['vm'],        dtype=np.float64).reshape(-1)
+        def_nodes = np.asarray(res_rot['nodes_cur'], dtype=np.float64).reshape(-1, 3)
+        out_tets  = np.asarray(res_rot['tets'],      dtype=np.int32).reshape(-1, 4)
+    else:
+        vm_field  = np.zeros((0,),   dtype=np.float64)
+        def_nodes = np.zeros((0, 3), dtype=np.float64)
+        out_tets  = np.zeros((0, 4), dtype=np.int32)
 
     return OutputSchema(
         strain_energy        = float(res_rot['strain_energy']),
@@ -420,6 +430,9 @@ def apply(inputs: InputSchema) -> OutputSchema:
         first_yield_fraction = float(res_rot['first_yield_fraction']),
         energy_shear         = e_shear,
         energy_tension       = e_tension,
+        von_mises_field      = vm_field,
+        deformed_nodes       = def_nodes,
+        mesh_tets            = out_tets,
     )
 
 
@@ -477,4 +490,7 @@ def abstract_eval(abstract_inputs: InputSchema) -> dict[str, Any]:
         "first_yield_fraction": scalar,
         "energy_shear":         scalar,
         "energy_tension":       scalar,
+        "von_mises_field":      ShapeDType(shape=(None,),    dtype="Float64"),
+        "deformed_nodes":       ShapeDType(shape=(None, 3),  dtype="Float64"),
+        "mesh_tets":            ShapeDType(shape=(None, 4),  dtype="Int32"),
     }

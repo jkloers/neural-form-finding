@@ -55,7 +55,7 @@ def _make_moment_ramp(cff, base_forces: np.ndarray, n_steps: int):
     return _Ramp
 
 
-def build_scene(root, nodes: np.ndarray, hexes: np.ndarray,
+def build_scene(root, nodes: np.ndarray, elements: np.ndarray,
                 bc_masks: dict,
                 rotation_angle_deg: float = 45.0,
                 applied_moment: float = 0.0,
@@ -77,8 +77,8 @@ def build_scene(root, nodes: np.ndarray, hexes: np.ndarray,
     ----------
     root                : Sofa.Core.Node
     nodes               : (N, 3) float64 — natural node positions
-    hexes               : (H, 8) int32   — hex connectivity
-    bc_masks            : dict 'f0'..'f3' → (N,) bool
+    elements            : (M, 4) int32   — tetrahedron connectivity
+    bc_masks            : dict 'clamped'/'loaded' → (N,) bool
     rotation_angle_deg  : float — fold angle for F1 about the H0 axis [degrees]
                           0° = flat, 90° = F1 stands vertical.
                           Used when loading_mode='rotation'.
@@ -132,20 +132,17 @@ def build_scene(root, nodes: np.ndarray, hexes: np.ndarray,
         position=nodes.tolist(),
     )
 
-    cell.addObject("HexahedronSetTopologyContainer", name="topo",
-                   hexahedra=hexes.tolist())
-    cell.addObject("HexahedronSetTopologyModifier")
-    cell.addObject("HexahedronSetGeometryAlgorithms", template="Vec3d")
-
-    cell.addObject("UniformMass", totalMass=float(density * len(hexes) * 1e-8))
-
-    # fem_method='polar': co-rotational FEM — handles large rigid-body rotations via
-    # polar decomposition at each element. Stable for ~70–90° with incremental loading.
-    # 'small' (linear FEM) is valid only to ~10°; kept as fallback.
+    elements = np.array(elements)
+    cell.addObject("TetrahedronSetTopologyContainer", name="topo",
+                   tetrahedra=elements.tolist())
+    cell.addObject("TetrahedronSetTopologyModifier")
+    cell.addObject("TetrahedronSetGeometryAlgorithms", template="Vec3d")
+    cell.addObject("UniformMass", totalMass=float(density * len(elements) * 1e-11))
+    # TetrahedronFEMForceField method: 'small' (linear) | 'large' (co-rotational).
     cell.addObject(
-        "HexahedronFEMForceField", template="Vec3d", name="FEM",
+        "TetrahedronFEMForceField", template="Vec3d", name="FEM",
         youngModulus=young, poissonRatio=nu,
-        method=fem_method,
+        method='small' if fem_method == 'small' else 'large',
     )
 
     # ── Boundary conditions ────────────────────────────────────────────────────
