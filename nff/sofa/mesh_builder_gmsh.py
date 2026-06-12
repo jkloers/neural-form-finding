@@ -15,8 +15,8 @@ Parametrisation per hinge
   gap             — rigid separation of the two faces along ê_arm [m]
   s0_top, s0_bot  — reach from face-i corner along its upper/lower edges [m]
   s1_top, s1_bot  — reach from face-k corner along its upper/lower edges [m]
-  bc1_up_xy, bc2_up_xy — interior CPs for upper arc, absolute XY [m]
-  bc1_lo_xy, bc2_lo_xy — interior CPs for lower arc, absolute XY [m]
+  bc_up_xy — single interior CP for the upper (quadratic) arc, absolute XY [m]
+  bc_lo_xy — single interior CP for the lower (quadratic) arc, absolute XY [m]
 
 Workflow
 --------
@@ -118,12 +118,15 @@ def _unit(v: np.ndarray) -> np.ndarray:
     return v / n if n > 1e-14 else np.zeros_like(v)
 
 
-def _bezier_sample(p0: np.ndarray, c1: np.ndarray,
-                   c2: np.ndarray, p3: np.ndarray,
+def _bezier_sample(p0: np.ndarray, c: np.ndarray, p2: np.ndarray,
                    n_segs: int) -> np.ndarray:
-    """Return n_segs+1 uniformly-parameterised points along cubic Bézier p0,c1,c2,p3."""
+    """Return n_segs+1 uniformly-parameterised points along quadratic Bézier p0,c,p2.
+
+    One interior control point → a single convex arc (no inflections), which gives
+    more regular hinge boundaries than a cubic and fewer design parameters.
+    """
     t = np.linspace(0.0, 1.0, n_segs + 1)[:, None]
-    return (1-t)**3 * p0 + 3*(1-t)**2*t * c1 + 3*(1-t)*t**2 * c2 + t**3 * p3
+    return (1-t)**2 * p0 + 2*(1-t)*t * c + t**2 * p2
 
 
 # ── hinge geometry (shared by builder and visualizer) ─────────────────────────
@@ -242,18 +245,16 @@ def compute_hinge_geometry(
         p1_top = corner_k + s1_top * _unit(adj_up_fk - corner_k)
         p1_bot = corner_k + s1_bot * _unit(adj_dn_fk - corner_k)
 
-        # Interior CPs — default: 1/3 & 2/3 along the chord, bowed by gap.
+        # Single interior CP per arc (quadratic Bézier) — default: chord midpoint
+        # bowed outward by 2·gap (arc apex ≈ gap from the chord).
         def _default_cp(pa, pb, sign):
-            return pa + (pb - pa) / 3.0 + sign * perp * gap, \
-                   pa + 2.0 * (pb - pa) / 3.0 + sign * perp * gap
+            return 0.5 * (pa + pb) + sign * perp * 2.0 * gap
 
-        bc1_up_def, bc2_up_def = _default_cp(p0_top, p1_top, +1.0)
-        bc1_lo_def, bc2_lo_def = _default_cp(p0_bot, p1_bot, -1.0)
+        bc_up_def = _default_cp(p0_top, p1_top, +1.0)
+        bc_lo_def = _default_cp(p0_bot, p1_bot, -1.0)
 
-        bc1_up = np.asarray(bp['bc1_up_xy'], float) if 'bc1_up_xy' in bp else bc1_up_def
-        bc2_up = np.asarray(bp['bc2_up_xy'], float) if 'bc2_up_xy' in bp else bc2_up_def
-        bc1_lo = np.asarray(bp['bc1_lo_xy'], float) if 'bc1_lo_xy' in bp else bc1_lo_def
-        bc2_lo = np.asarray(bp['bc2_lo_xy'], float) if 'bc2_lo_xy' in bp else bc2_lo_def
+        bc_up = np.asarray(bp['bc_up_xy'], float) if 'bc_up_xy' in bp else bc_up_def
+        bc_lo = np.asarray(bp['bc_lo_xy'], float) if 'bc_lo_xy' in bp else bc_lo_def
 
         hinge_data.append({
             'fi': fi, 'lj': lj,
@@ -261,8 +262,7 @@ def compute_hinge_geometry(
             'corner': 0.5 * (corner_i + corner_k), 'earm': earm, 'perp': perp, 'gap': gap,
             'p0_top': p0_top, 'p0_bot': p0_bot,
             'p1_top': p1_top, 'p1_bot': p1_bot,
-            'bc1_up': bc1_up, 'bc2_up': bc2_up,
-            'bc1_lo': bc1_lo, 'bc2_lo': bc2_lo,
+            'bc_up': bc_up, 'bc_lo': bc_lo,
             'up_is_prev_fi': up_is_prev_fi,
             'up_is_prev_fk': up_is_prev_fk,
         })
@@ -300,8 +300,8 @@ def build_mesh_gmsh(
     bezier_params       : dict controlling hinge shape (all keys optional):
                             's0_top', 's0_bot' — reach along face-i edges [m]
                             's1_top', 's1_bot' — reach along face-k edges [m]
-                            'bc1_up_xy', 'bc2_up_xy' — upper arc CPs, absolute XY [m]
-                            'bc1_lo_xy', 'bc2_lo_xy' — lower arc CPs, absolute XY [m]
+                            'bc_up_xy' — single upper-arc CP, absolute XY [m]
+                            'bc_lo_xy' — single lower-arc CP, absolute XY [m]
                           Missing reach keys default to gap; missing CPs default to
                           symmetrically bowed arcs (gap away from the chord axis).
     mesh_size_face      : target element size in face bodies [m]
@@ -370,23 +370,23 @@ def build_mesh_gmsh(
         pt_p1_bot = _add_point(hd['p1_bot'], lc_h)
 
         # Segment counts proportional to arc length
-        def _n_segs(pa, c1, c2, pb):
-            bow = float(np.linalg.norm(0.5*(c1+c2) - 0.5*(pa+pb)))
+        def _n_segs(pa, c, pb):
+            bow = float(np.linalg.norm(c - 0.5*(pa+pb)))
             arc = float(np.linalg.norm(pb - pa)) + 2.0 * bow
             return max(8, int(np.ceil(arc / lc_h)))
 
-        n_up = _n_segs(hd['p0_top'], hd['bc1_up'], hd['bc2_up'], hd['p1_top'])
-        n_lo = _n_segs(hd['p0_bot'], hd['bc1_lo'], hd['bc2_lo'], hd['p1_bot'])
+        n_up = _n_segs(hd['p0_top'], hd['bc_up'], hd['p1_top'])
+        n_lo = _n_segs(hd['p0_bot'], hd['bc_lo'], hd['p1_bot'])
 
         # Upper arc: p0_top → p1_top
-        pts_up = _bezier_sample(hd['p0_top'], hd['bc1_up'], hd['bc2_up'], hd['p1_top'], n_up)
+        pts_up = _bezier_sample(hd['p0_top'], hd['bc_up'], hd['p1_top'], n_up)
         tags_up = ([pt_p0_top]
                    + [_add_point(pts_up[k], lc_h) for k in range(1, n_up)]
                    + [pt_p1_top])
         bez_up = [gmsh.model.geo.addLine(tags_up[k], tags_up[k+1]) for k in range(n_up)]
 
         # Lower arc: p0_bot → p1_bot
-        pts_lo = _bezier_sample(hd['p0_bot'], hd['bc1_lo'], hd['bc2_lo'], hd['p1_bot'], n_lo)
+        pts_lo = _bezier_sample(hd['p0_bot'], hd['bc_lo'], hd['p1_bot'], n_lo)
         tags_lo = ([pt_p0_bot]
                    + [_add_point(pts_lo[k], lc_h) for k in range(1, n_lo)]
                    + [pt_p1_bot])

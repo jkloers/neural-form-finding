@@ -1,27 +1,28 @@
 """
 sofa/hinge_optimizer.py — Corner-hinge cubic Bézier optimizer via Tesseract HTTP.
 
-Optimizes 13 hinge parameters using the Tesseract physics oracle (SOFA FEM
+Optimizes 9 hinge parameters using the Tesseract physics oracle (SOFA FEM
 running in Docker). All 13 parameters live directly in physical space (metres)
 and are updated by a numpy Adam step; gap + the four edge reaches are kept
 positive by projecting (clipping) to a small floor after each step. No softplus
 reparametrisation — that froze gap/reaches ~500× slower than the control points.
 
-Objective — a lean hinge that closes with low peak strain (low stress = more
-failure margin), keeping the face gap small:
-  loss = w_strain · (ε_max / ε_fracture)    (minimise peak strain CONTINUOUSLY)
-       + w_mat    · hinge_area / area₀       (lean hinge — minimise material)
-       + w_gap    · (gap / gap₀)²            (keep the face gap small/controlled —
-                                              widening a gap eats adjacent face area)
-The strain term uses the oracle's max principal strain (FD Jacobian). The material
-+ gap terms are analytic / cheap client-side FD (no SOFA call). Strain is minimised
-continuously (not just held under fracture), which also yields a safety margin.
+Objective — a lean hinge that survives MANY closing cycles (low-cycle fatigue),
+keeping the face gap small:
+  loss = w_fatigue · ε_plastic / ε_yield    (minimise plastic strain → maximise N_f)
+       + w_mat     · hinge_area / area₀      (lean hinge — minimise material)
+       + w_gap     · (gap / gap₀)²           (keep the face gap small/controlled)
+ε_plastic = max(0, ε_max − ε_yield) is the per-fold plastic strain (only strain
+above yield fatigues). Cycles-to-failure via Coffin-Manson N_f = ½·(ε_p/ε_f')^(1/c)
+(reported; PLA constants uncertain). Minimising ε_p pushes toward an elastic design
+(ε < yield → ~unlimited cycles). The strain comes from the oracle's max principal
+strain (FD Jacobian); material + gap are analytic client-side FD (no SOFA call).
 
 Parameters (physical, metres) — gap + 4 reaches (positive, floored) + 8 free CPs:
   gap                — rigid face separation along ê_arm [m]
   s0_top, s0_bot     — upper/lower endpoint reach on face 0 [m]
   s1_top, s1_bot     — upper/lower endpoint reach on face 1 [m]
-  bc1u/bc2u, bc1l/bc2l — interior Bézier CPs for the upper/lower arcs [m] (absolute XY)
+  bcu, bcl             — single interior CP for the upper/lower (quadratic) arcs [m]
   CP defaults come from the symmetric mesh geometry at the initial gap.
 
 Gradient cost per epoch:
@@ -79,9 +80,8 @@ TESSERACT_DEFAULT_URL = 'http://localhost:8000'
 # Parameter layout: 5 positive (softplus) followed by 8 free CP coords.
 # Names match the Tesseract InputSchema field names exactly.
 _POS_NAMES   = ['gap', 's0_top', 's0_bot', 's1_top', 's1_bot']
-_FREE_NAMES  = ['bc1u_x', 'bc1u_y', 'bc2u_x', 'bc2u_y',
-                'bc1l_x', 'bc1l_y', 'bc2l_x', 'bc2l_y']
-_PARAM_NAMES = _POS_NAMES + _FREE_NAMES            # 13, == _JAC_INPUTS order
+_FREE_NAMES  = ['bcu_x', 'bcu_y', 'bcl_x', 'bcl_y']   # one CP per (quadratic) arc
+_PARAM_NAMES = _POS_NAMES + _FREE_NAMES            # 9, == _JAC_INPUTS order
 
 _JAC_INPUTS  = list(_PARAM_NAMES)
 
@@ -98,10 +98,8 @@ def _bezier_from_phys(phys: dict) -> dict:
     return {
         's0_top': phys['s0_top'], 's0_bot': phys['s0_bot'],
         's1_top': phys['s1_top'], 's1_bot': phys['s1_bot'],
-        'bc1_up_xy': [phys['bc1u_x'], phys['bc1u_y']],
-        'bc2_up_xy': [phys['bc2u_x'], phys['bc2u_y']],
-        'bc1_lo_xy': [phys['bc1l_x'], phys['bc1l_y']],
-        'bc2_lo_xy': [phys['bc2l_x'], phys['bc2l_y']],
+        'bc_up_xy': [phys['bcu_x'], phys['bcu_y']],
+        'bc_lo_xy': [phys['bcl_x'], phys['bcl_y']],
     }
 
 
@@ -114,14 +112,14 @@ def _hinge_area(phys: dict, cs) -> float:
     from nff.sofa.mesh_builder_gmsh import compute_hinge_geometry
     geo = compute_hinge_geometry(cs, gap=phys['gap'], bezier_params=_bezier_from_phys(phys))
 
-    def _bez(p0, c1, c2, p3, n=40):
+    def _bez(p0, c, p2, n=40):
         t = np.linspace(0.0, 1.0, n)[:, None]
-        return (1-t)**3*p0 + 3*(1-t)**2*t*c1 + 3*(1-t)*t**2*c2 + t**3*p3
+        return (1-t)**2*p0 + 2*(1-t)*t*c + t**2*p2
 
     total = 0.0
     for hd in geo['hinge_data']:
-        up = _bez(hd['p0_top'], hd['bc1_up'], hd['bc2_up'], hd['p1_top'])
-        lo = _bez(hd['p0_bot'], hd['bc1_lo'], hd['bc2_lo'], hd['p1_bot'])
+        up = _bez(hd['p0_top'], hd['bc_up'], hd['p1_top'])
+        lo = _bez(hd['p0_bot'], hd['bc_lo'], hd['p1_bot'])
         poly = np.vstack([up, lo[::-1]])
         x, y = poly[:, 0], poly[:, 1]
         total += 0.5 * abs(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))
@@ -300,7 +298,7 @@ def _build_tesseract_payload(
         "hinge_adj_info":        cs.hinge_adj_info.tolist(),
         "clamped_faces":         clamped_faces,
         "loaded_faces":          loaded_faces,
-        # Differentiable hinge params (13-param corner-hinge cubic Bézier)
+        # Differentiable hinge params (9-param corner-hinge quadratic Bézier)
         **{name: float(phys[name]) for name in _PARAM_NAMES},
         # Mesh resolution
         "sheet_thickness":      float(sofa_cfg.get('sheet_thickness', 0.001)),
@@ -353,11 +351,21 @@ def run_optimization(
     from nff.sofa.mesh_builder_gmsh import compute_hinge_geometry
     _hd0 = compute_hinge_geometry(cs_static, gap=gap_init)['hinge_data'][0]
     _cp_default = {
-        'bc1u_x': _hd0['bc1_up'][0], 'bc1u_y': _hd0['bc1_up'][1],
-        'bc2u_x': _hd0['bc2_up'][0], 'bc2u_y': _hd0['bc2_up'][1],
-        'bc1l_x': _hd0['bc1_lo'][0], 'bc1l_y': _hd0['bc1_lo'][1],
-        'bc2l_x': _hd0['bc2_lo'][0], 'bc2l_y': _hd0['bc2_lo'][1],
+        'bcu_x': _hd0['bc_up'][0], 'bcu_y': _hd0['bc_up'][1],
+        'bcl_x': _hd0['bc_lo'][0], 'bcl_y': _hd0['bc_lo'][1],
     }
+    # Optional concave start: bow each arc's CP INWARD (toward the hinge axis) by
+    # initial_concave_bow_m instead of the default outward bulge — a stretched,
+    # concave starting shape to steer the optimizer out of the thick-bulb basin.
+    _bow = float(sofa_cfg.get('initial_concave_bow_m', 0.0))
+    if _bow > 0:
+        for (kx, ky), pa, pb in [(('bcu_x', 'bcu_y'), 'p0_top', 'p1_top'),
+                                 (('bcl_x', 'bcl_y'), 'p0_bot', 'p1_bot')]:
+            mid = 0.5 * (np.asarray(_hd0[pa]) + np.asarray(_hd0[pb]))
+            out = np.array([_cp_default[kx], _cp_default[ky]]) - mid     # default = outward
+            inward = mid - _bow * out / (np.linalg.norm(out) + 1e-12)    # flip → inward
+            _cp_default[kx], _cp_default[ky] = float(inward[0]), float(inward[1])
+
     free_init = np.array([
         float(sofa_cfg.get(f'{name}_initial', _cp_default[name])) for name in _FREE_NAMES
     ], dtype=np.float64)
@@ -374,12 +382,27 @@ def run_optimization(
     pos_mask = np.array([n in _POS_NAMES for n in _PARAM_NAMES])  # gap + 4 reaches
     floor    = float(sofa_cfg.get('param_floor', 0.0005))         # 0.5 mm min
 
-    # ── Loss weights + the strain-fracture reference ──────────────────────────
+    # ── Loss weights + the plasticity / low-cycle-fatigue criterion ───────────
     loss_cfg = cfg.get('loss', {})
-    w_strain = float(loss_cfg.get('w_strain', 5.0))   # minimise peak strain (durability)
-    w_mat    = float(loss_cfg.get('w_mat',    2.0))   # material (lean hinge)
-    w_gap    = float(loss_cfg.get('w_gap',    0.5))   # keep the face gap small/controlled
-    eps_frac = float(mat_cfg.get('fracture_strain', 0.045))
+    w_fatigue = float(loss_cfg.get('w_fatigue', loss_cfg.get('w_strain', 5.0)))  # min plastic strain
+    w_mat     = float(loss_cfg.get('w_mat', 2.0))   # material (lean hinge)
+    w_gap     = float(loss_cfg.get('w_gap', 0.5))   # keep the face gap small/controlled
+    eps_frac  = float(mat_cfg.get('fracture_strain', 0.045))
+    # Plasticity: strain above yield is plastic; only the plastic part fatigues.
+    eps_yield = float(mat_cfg.get('yield_strain',
+                      float(mat_cfg.get('yield_strength', 50e6)) /
+                      float(mat_cfg.get('young_modulus', 3.5e9))))
+    # Coffin-Manson low-cycle fatigue: ε_p = ε_f'·(2N)^c  →  N_f = ½·(ε_p/ε_f')^(1/c).
+    # PLA constants are uncertain (scattered literature) — treat N_f as ballpark.
+    fat_ef = float(mat_cfg.get('fatigue_ductility_coeff', 0.05))   # ε_f'
+    fat_c  = float(mat_cfg.get('fatigue_ductility_exp', -0.6))     # c (< 0)
+    n_target = float(loss_cfg.get('target_cycles', 100.0))         # reporting reference
+
+    def _cycles_to_failure(eps_p: float) -> float:
+        if eps_p <= 1e-9:
+            return float('inf')   # stays elastic → effectively unlimited cycles
+        return 0.5 * (eps_p / fat_ef) ** (1.0 / fat_c)
+
     gap_ref  = max(gap_init, 1e-6)
     area_ref = max(_hinge_area(_phys(params), cs_static), 1e-12)
     # Degeneracy guard: stop rewarding material reduction below this floor — a
@@ -388,13 +411,15 @@ def run_optimization(
 
     optimizer = _NumpyAdam(lr)
     history: dict = {k: [] for k in _PARAM_NAMES + [
-        'total_loss', 'loss_strain', 'loss_mat', 'loss_gap',
-        'max_strain', 'max_vm_rot', 'hinge_area']}
+        'total_loss', 'loss_fatigue', 'loss_mat', 'loss_gap',
+        'max_strain', 'plastic_strain', 'cycles_Nf', 'max_vm_rot', 'hinge_area']}
 
     _p0 = _phys(params)
-    print(f"\nHinge optimization (13-param, physical space): {n_epochs} epochs, lr={lr}")
+    print(f"\nHinge optimization (9-param quadratic Bézier, physical space): {n_epochs} epochs, lr={lr}")
     print(f"  Tesseract URL: {tesseract_url}")
-    print(f"  loss = {w_strain}·(ε_max/{eps_frac}) + {w_mat}·area/area₀ + {w_gap}·(gap/gap₀)²")
+    print(f"  loss = {w_fatigue}·ε_plastic/ε_y + {w_mat}·area/area₀ + {w_gap}·(gap/gap₀)²")
+    print(f"  PLA: ε_yield={eps_yield*100:.2f}%  ε_fracture={eps_frac*100:.1f}%  "
+          f"Coffin-Manson(ε_f'={fat_ef}, c={fat_c}); target ≥ {n_target:.0f} cycles")
     print(f"  Initial: gap={_p0['gap']*1e3:.2f} mm  "
           f"reach s0=({_p0['s0_top']*1e3:.2f},{_p0['s0_bot']*1e3:.2f}) "
           f"s1=({_p0['s1_top']*1e3:.2f},{_p0['s1_bot']*1e3:.2f}) mm  "
@@ -411,13 +436,17 @@ def run_optimization(
             str(out_dir / 'convergence.npz'),
             **{name: np.array(history[name]) for name in _PARAM_NAMES},
             total_loss      = np.array(history['total_loss']),
-            loss_strain     = np.array(history['loss_strain']),
+            loss_fatigue    = np.array(history['loss_fatigue']),
             loss_mat        = np.array(history['loss_mat']),
             loss_gap        = np.array(history['loss_gap']),
             max_strain      = np.array(history['max_strain']),
+            plastic_strain  = np.array(history['plastic_strain']),
+            cycles_Nf       = np.array(history['cycles_Nf']),
             max_vm_rot      = np.array(history['max_vm_rot']),
             hinge_area      = np.array(history['hinge_area']),
             fracture_strain = np.array(eps_frac),
+            yield_strain    = np.array(eps_yield),
+            target_cycles   = np.array(n_target),
             stress          = np.array(history['max_vm_rot']),   # backward-compat alias
         )
 
@@ -440,24 +469,29 @@ def run_optimization(
         area    = _hinge_area(phys, cs_static)
         gp      = phys['gap']
 
-        # loss = w_strain·(ε/ε_frac)  +  w_mat·area/area₀  +  w_gap·(gap/gap₀)²
-        # Strain is minimised CONTINUOUSLY (lower stress = more failure margin).
-        l_strain = w_strain * strain / eps_frac
+        # loss = w_fatigue·ε_plastic/ε_yield  +  w_mat·area/area₀  +  w_gap·(gap/gap₀)²
+        # Only the PLASTIC part of the strain fatigues; minimising it maximises the
+        # cycles-to-failure N_f (and pushes the design toward elastic = ~unlimited life).
+        eps_p    = max(0.0, strain - eps_yield)
+        n_f      = _cycles_to_failure(eps_p)
+        l_fat    = w_fatigue * eps_p / eps_yield
         l_mat    = w_mat * area / area_ref
         l_gap    = w_gap * (gp / gap_ref) ** 2
-        loss     = l_strain + l_mat + l_gap
+        loss     = l_fat + l_mat + l_gap
 
         # ── Gradients ─────────────────────────────────────────────────────────
         def _jac_val(output_key, inp_key):
             return _get_val(jac[output_key][inp_key]) if output_key in jac else 0.0
         dstrain  = np.array([_jac_val('max_principal_strain', ki) for ki in _JAC_INPUTS])
-        d_strain = (w_strain / eps_frac) * dstrain
+        # d(ε_p)/d(param) = dstrain when plastic (strain > yield), else 0.
+        d_fat    = (w_fatigue / eps_yield) * (1.0 if strain > eps_yield else 0.0) * dstrain
         # Material + gap terms are analytic / cheap-FD (no SOFA). Degeneracy guard:
         # stop the material pull once the hinge is at the min area (else it collapses).
-        d_mat    = (np.zeros(13) if area <= area_min
+        n_p      = len(_PARAM_NAMES)
+        d_mat    = (np.zeros(n_p) if area <= area_min
                     else (w_mat / area_ref) * _area_grad(params, cs_static))
-        d_gap    = np.zeros(13); d_gap[0] = w_gap * 2.0 * gp / gap_ref ** 2
-        grad     = d_strain + d_mat + d_gap
+        d_gap    = np.zeros(n_p); d_gap[0] = w_gap * 2.0 * gp / gap_ref ** 2
+        grad     = d_fat + d_mat + d_gap
 
         params = optimizer.update(params, grad)
         params[pos_mask] = np.maximum(params[pos_mask], floor)   # project to positivity
@@ -466,24 +500,26 @@ def run_optimization(
         for name in _PARAM_NAMES:
             history[name].append(phys[name])
         history['total_loss'].append(loss)
-        history['loss_strain'].append(l_strain)
+        history['loss_fatigue'].append(l_fat)
         history['loss_mat'].append(l_mat)
         history['loss_gap'].append(l_gap)
         history['max_strain'].append(strain)
+        history['plastic_strain'].append(eps_p)
+        history['cycles_Nf'].append(min(n_f, 1e9))   # cap inf for storage
         history['max_vm_rot'].append(max_vm)
         history['hinge_area'].append(area)
         _save_convergence()
 
+        _nf_s = '∞' if not np.isfinite(n_f) else f'{n_f:.1f}'
         print(f"  epoch {epoch+1:3d}/{n_epochs}  "
-              f"loss={loss:.3f} (str={l_strain:.2f} mat={l_mat:.2f} gap={l_gap:.2f})  "
-              f"ε_max={strain*100:.2f}%  σ_max={max_vm/1e6:.0f} MPa  area={area*1e6:.1f} mm²  "
+              f"loss={loss:.3f} (fat={l_fat:.2f} mat={l_mat:.2f} gap={l_gap:.2f})  "
+              f"ε_max={strain*100:.2f}% ε_p={eps_p*100:.2f}% N_f={_nf_s}cyc  "
+              f"σ_max={max_vm/1e6:.0f}MPa area={area*1e6:.1f}mm²  "
               f"gap={phys['gap']*1e3:.3f} mm  "
               f"s0=({phys['s0_top']*1e3:.2f},{phys['s0_bot']*1e3:.2f}) "
               f"s1=({phys['s1_top']*1e3:.2f},{phys['s1_bot']*1e3:.2f}) mm  "
-              f"bc1_up=({phys['bc1u_x']*1e3:.2f},{phys['bc1u_y']*1e3:.2f})  "
-              f"bc2_up=({phys['bc2u_x']*1e3:.2f},{phys['bc2u_y']*1e3:.2f})  "
-              f"bc1_lo=({phys['bc1l_x']*1e3:.2f},{phys['bc1l_y']*1e3:.2f})  "
-              f"bc2_lo=({phys['bc2l_x']*1e3:.2f},{phys['bc2l_y']*1e3:.2f}) mm")
+              f"bc_up=({phys['bcu_x']*1e3:.2f},{phys['bcu_y']*1e3:.2f})  "
+              f"bc_lo=({phys['bcl_x']*1e3:.2f},{phys['bcl_y']*1e3:.2f}) mm")
 
     if not history['total_loss']:
         print("No epochs completed — aborting before final-state capture.")
@@ -512,8 +548,11 @@ def run_optimization(
             constrained_face_DOF_pairs = cs_static.constrained_face_DOF_pairs,
             loaded_face_DOF_pairs      = cs_static.loaded_face_DOF_pairs,
         )
+        _nf = history['cycles_Nf'][best_idx]
         print(f"  final_state.npz saved (best epoch {best_idx + 1}: "
               f"ε_max={history['max_strain'][best_idx]*100:.2f}%, "
+              f"ε_p={history['plastic_strain'][best_idx]*100:.2f}%, "
+              f"N_f={'∞' if _nf >= 1e9 else f'{_nf:.0f}'} cyc, "
               f"area={history['hinge_area'][best_idx]*1e6:.1f} mm²).")
     except Exception as ex:
         print(f"  WARNING: final-state field capture failed ({ex}); "
@@ -566,14 +605,15 @@ def main() -> None:
 
     best_idx = int(np.argmin(history['total_loss']))
     b = lambda k: history[k][best_idx] * 1e3
+    _nfb = history['cycles_Nf'][best_idx]
     print(f'\nBest (epoch {best_idx + 1}): '
-          f'loss={history["total_loss"][best_idx]:.3f}  '
           f'ε_max={history["max_strain"][best_idx]*100:.2f}%  '
+          f'ε_p={history["plastic_strain"][best_idx]*100:.2f}%  '
+          f'N_f={"∞" if _nfb >= 1e9 else f"{_nfb:.0f}"} cyc  '
           f'area={history["hinge_area"][best_idx]*1e6:.1f} mm²  '
           f'gap={b("gap"):.3f} mm  '
           f's0=({b("s0_top"):.2f},{b("s0_bot"):.2f}) s1=({b("s1_top"):.2f},{b("s1_bot"):.2f}) mm  '
-          f'bc1_up=({b("bc1u_x"):.2f},{b("bc1u_y"):.2f}) bc2_up=({b("bc2u_x"):.2f},{b("bc2u_y"):.2f}) mm  '
-          f'bc1_lo=({b("bc1l_x"):.2f},{b("bc1l_y"):.2f}) bc2_lo=({b("bc2l_x"):.2f},{b("bc2l_y"):.2f}) mm')
+          f'bc_up=({b("bcu_x"):.2f},{b("bcu_y"):.2f}) bc_lo=({b("bcl_x"):.2f},{b("bcl_y"):.2f}) mm')
     print(f'Results saved → {out_dir}')
 
 

@@ -47,8 +47,7 @@ plt.rcParams.update({'font.family': 'serif', 'axes.linewidth': 1.0,
                      'font.size': 11, 'figure.facecolor': P_BG})
 
 _PARAMS = ['gap', 's0_top', 's0_bot', 's1_top', 's1_bot',
-           'bc1u_x', 'bc1u_y', 'bc2u_x', 'bc2u_y',
-           'bc1l_x', 'bc1l_y', 'bc2l_x', 'bc2l_y']
+           'bcu_x', 'bcu_y', 'bcl_x', 'bcl_y']
 
 
 # ── run-dir + data loading ──────────────────────────────────────────────────────
@@ -78,10 +77,8 @@ def _bezier_params(conv, idx) -> tuple:
     bp = {
         's0_top': float(conv['s0_top'][idx]), 's0_bot': float(conv['s0_bot'][idx]),
         's1_top': float(conv['s1_top'][idx]), 's1_bot': float(conv['s1_bot'][idx]),
-        'bc1_up_xy': [float(conv['bc1u_x'][idx]), float(conv['bc1u_y'][idx])],
-        'bc2_up_xy': [float(conv['bc2u_x'][idx]), float(conv['bc2u_y'][idx])],
-        'bc1_lo_xy': [float(conv['bc1l_x'][idx]), float(conv['bc1l_y'][idx])],
-        'bc2_lo_xy': [float(conv['bc2l_x'][idx]), float(conv['bc2l_y'][idx])],
+        'bc_up_xy': [float(conv['bcu_x'][idx]), float(conv['bcu_y'][idx])],
+        'bc_lo_xy': [float(conv['bcl_x'][idx]), float(conv['bcl_y'][idx])],
     }
     return g, bp
 
@@ -109,20 +106,20 @@ def _edges(tri):
     return np.unique(e, axis=0)
 
 
-def _bez(p0, c1, c2, p3, n=200):
+def _bez(p0, c, p2, n=200):
     t = np.linspace(0, 1, n)[:, None]
-    return (1-t)**3*p0 + 3*(1-t)**2*t*c1 + 3*(1-t)*t**2*c2 + t**3*p3
+    return (1-t)**2*p0 + 2*(1-t)*t*c + t**2*p2
 
 
 def _draw_arcs(ax, geo, scale=1000.0, control_points=False):
-    """Draw the two Bézier strips (upper=dark green, lower=light green).
+    """Draw the two quadratic Bézier strips (upper=dark green, lower=light green).
 
-    control_points=True also shows all control points (endpoints + interior CPs)
+    control_points=True also shows the endpoints + the single interior CP per arc
     with thin control polygons.
     """
     for hd in geo['hinge_data']:
-        top_keys = ('p0_top', 'bc1_up', 'bc2_up', 'p1_top')
-        bot_keys = ('p0_bot', 'bc1_lo', 'bc2_lo', 'p1_bot')
+        top_keys = ('p0_top', 'bc_up', 'p1_top')
+        bot_keys = ('p0_bot', 'bc_lo', 'p1_bot')
         # Dark green = the visually-upper strip (internal up/lo follows the cell's
         # perpendicular axis, which may sit either way round in world XY).
         top_y = 0.5 * (hd['p0_top'][1] + hd['p1_top'][1])
@@ -130,17 +127,17 @@ def _draw_arcs(ax, geo, scale=1000.0, control_points=False):
         order = ([(top_keys, GREEN_UP), (bot_keys, GREEN_LO)] if top_y >= bot_y
                  else [(bot_keys, GREEN_UP), (top_keys, GREEN_LO)])
         for keys, col in order:
-            p0, c1, c2, p3 = (hd[k] for k in keys)
-            arc = _bez(p0, c1, c2, p3) * scale
+            p0, c, p2 = (hd[k] for k in keys)
+            arc = _bez(p0, c, p2) * scale
             ax.plot(arc[:, 0], arc[:, 1], '-', color=col, lw=2.8, zorder=9)
             if control_points:
-                poly = np.array([p0, c1, c2, p3]) * scale
+                poly = np.array([p0, c, p2]) * scale
                 ax.plot(poly[:, 0], poly[:, 1], '--', color=CP_COL, lw=0.9,
                         alpha=0.55, zorder=10)
-                # endpoints (squares) + interior control points (circles)
-                ax.plot(poly[[0, 3], 0], poly[[0, 3], 1], 's', color=CP_COL,
+                # endpoints (squares) + the single interior control point (circle)
+                ax.plot(poly[[0, 2], 0], poly[[0, 2], 1], 's', color=CP_COL,
                         ms=7, zorder=12, markeredgecolor='white', markeredgewidth=1)
-                ax.plot(poly[[1, 2], 0], poly[[1, 2], 1], 'o', color=CP_COL,
+                ax.plot(poly[1, 0], poly[1, 1], 'o', color=CP_COL,
                         ms=7, zorder=12, markeredgecolor='white', markeredgewidth=1)
 
 
@@ -200,9 +197,9 @@ def plot_loss(run_dir, conv, out):
     best  = int(np.argmin(total))
     # Stacked component contributions (fracture / material / gap).
     comps, labels, cols = [], [], []
-    for key, lbl, col in [('loss_strain', 'Peak strain', ARROW_RED),
-                          ('loss_mat',    'Material',    LOSS_STRESS),
-                          ('loss_gap',    'Gap penalty', '#1976D2')]:
+    for key, lbl, col in [('loss_fatigue', 'Plastic strain (fatigue)', ARROW_RED),
+                          ('loss_mat',     'Material',                 LOSS_STRESS),
+                          ('loss_gap',     'Gap penalty',              '#1976D2')]:
         if key in conv.files:
             comps.append(np.asarray(conv[key], float)); labels.append(lbl); cols.append(col)
 
@@ -306,7 +303,7 @@ def main():
     print(f'Visualizing {run_dir.name}')
 
     conv = np.load(run_dir / 'convergence.npz')
-    best = int(np.argmin(conv['max_vm_rot']))
+    best = int(np.argmin(conv['total_loss']))
 
     fs_path = run_dir / 'final_state.npz'
     fs = np.load(fs_path) if fs_path.exists() else None

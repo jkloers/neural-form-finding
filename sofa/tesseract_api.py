@@ -24,7 +24,7 @@ GRADIENT STRATEGY
 SOFA is a black-box simulator — no adjoint or AD is available. Gradients are
 computed by Tesseract calling apply() with central finite differences:
   cost = 2 × n_diff_inputs × n_modes SOFA sims per gradient call
-       = 26 perturbations × 3 modes = 78 simulations for 13 Bézier params.
+       = 18 perturbations × 3 modes = 54 simulations for 9 Bézier params.
 
 Each ±ε call fully rebuilds the tet mesh then re-runs all three loading modes.
 This is necessary because the hinge design variables directly affect mesh geometry.
@@ -36,17 +36,16 @@ INPUTS / OUTPUTS
 CS topology (non-differentiable, passed as nested lists):
   face_centroids, centroid_node_vectors, hinge_node_pairs, hinge_adj_info
 
-Differentiable hinge design params (13-param corner-hinge cubic Bézier):
+Differentiable hinge design params (9-param corner-hinge quadratic Bézier):
   gap                  — rigid separation of the two faces along ê_arm [m]
   s0_top, s0_bot       — reach of the upper/lower endpoint along face-0 edges [m]
   s1_top, s1_bot       — reach of the upper/lower endpoint along face-1 edges [m]
-  bc1u_x, bc1u_y       — interior Bézier CP 1 for the UPPER arc [m] (absolute XY)
-  bc2u_x, bc2u_y       — interior Bézier CP 2 for the UPPER arc [m] (absolute XY)
-  bc1l_x, bc1l_y       — interior Bézier CP 1 for the LOWER arc [m] (absolute XY)
-  bc2l_x, bc2l_y       — interior Bézier CP 2 for the LOWER arc [m] (absolute XY)
-  The upper and lower arcs have DISTINCT endpoints that slide on the face edges.
+  bcu_x, bcu_y         — single interior CP for the UPPER arc [m] (absolute XY)
+  bcl_x, bcl_y         — single interior CP for the LOWER arc [m] (absolute XY)
+  Each arc is a quadratic Bézier (one CP → a single convex bulge, no inflections);
+  the upper/lower arcs have DISTINCT endpoints that slide on the face edges.
 
-FD gradient cost: 2 × 13 params × 3 modes = 78 SOFA sims per gradient call.
+FD gradient cost: 2 × 9 params × 3 modes = 54 SOFA sims per gradient call.
 
 Scalar outputs (Differentiable[Float64]):
   strain_energy, max_von_mises_stress, max_principal_strain, max_xy_displacement,
@@ -79,7 +78,7 @@ import simulate_cell      as _sofa
 # ── Schemas ────────────────────────────────────────────────────────────────────
 
 class InputSchema(BaseModel):
-    """Inputs to the SOFA unit-cell simulation (CS-mesh, 13-param Bézier hinge)."""
+    """Inputs to the SOFA unit-cell simulation (CS-mesh, 9-param Bézier hinge)."""
 
     # ── CS topology (non-differentiable) ──────────────────────────────────────
 
@@ -108,7 +107,7 @@ class InputSchema(BaseModel):
         description="Face indices to drive (rotation/moment applied). If empty, uses CS-derived BCs.",
     )
 
-    # ── Differentiable hinge design params (13-param corner-hinge cubic Bézier) ─
+    # ── Differentiable hinge design params (9-param corner-hinge quadratic Bézier) ─
 
     gap: Differentiable[Float64] = Field(
         default=0.003,
@@ -134,37 +133,21 @@ class InputSchema(BaseModel):
         default=0.003,
         description="Reach of the LOWER endpoint along face-1's lower edge [m] (> 0).",
     )
-    bc1u_x: Differentiable[Float64] = Field(
-        default=0.14021,
-        description="Interior Bézier CP 1 x-coordinate for the UPPER arc [m] (absolute XY).",
+    bcu_x: Differentiable[Float64] = Field(
+        default=0.14142,
+        description="Single interior CP x-coordinate for the UPPER (quadratic) arc [m] (absolute XY).",
     )
-    bc1u_y: Differentiable[Float64] = Field(
-        default=0.07583,
-        description="Interior Bézier CP 1 y-coordinate for the UPPER arc [m].",
+    bcu_y: Differentiable[Float64] = Field(
+        default=0.07883,
+        description="Single interior CP y-coordinate for the UPPER (quadratic) arc [m].",
     )
-    bc2u_x: Differentiable[Float64] = Field(
-        default=0.14263,
-        description="Interior Bézier CP 2 x-coordinate for the UPPER arc [m].",
+    bcl_x: Differentiable[Float64] = Field(
+        default=0.14142,
+        description="Single interior CP x-coordinate for the LOWER (quadratic) arc [m] (absolute XY).",
     )
-    bc2u_y: Differentiable[Float64] = Field(
-        default=0.07583,
-        description="Interior Bézier CP 2 y-coordinate for the UPPER arc [m].",
-    )
-    bc1l_x: Differentiable[Float64] = Field(
-        default=0.14021,
-        description="Interior Bézier CP 1 x-coordinate for the LOWER arc [m] (absolute XY).",
-    )
-    bc1l_y: Differentiable[Float64] = Field(
-        default=0.06559,
-        description="Interior Bézier CP 1 y-coordinate for the LOWER arc [m].",
-    )
-    bc2l_x: Differentiable[Float64] = Field(
-        default=0.14263,
-        description="Interior Bézier CP 2 x-coordinate for the LOWER arc [m].",
-    )
-    bc2l_y: Differentiable[Float64] = Field(
-        default=0.06559,
-        description="Interior Bézier CP 2 y-coordinate for the LOWER arc [m].",
+    bcl_y: Differentiable[Float64] = Field(
+        default=0.06259,
+        description="Single interior CP y-coordinate for the LOWER (quadratic) arc [m].",
     )
 
     # ── Mesh resolution (non-differentiable) ──────────────────────────────────
@@ -324,11 +307,11 @@ class OutputSchema(BaseModel):
 
 def apply(inputs: InputSchema) -> OutputSchema:
     """
-    Build the gmsh tet mesh from CS topology + 13-param corner-hinge cubic Bézier
+    Build the gmsh tet mesh from CS topology + 9-param corner-hinge quadratic Bézier
     design, then run SOFA under three load cases: rotation (primary), shear, tension.
 
     The mesh is fully rebuilt on every call — including ±ε FD perturbations —
-    because all 13 hinge design variables directly affect the tet geometry.
+    because all 9 hinge design variables directly affect the tet geometry.
     """
     # Reconstruct CS as a plain namespace (no JAX dependency in container).
     # Fill constrained/loaded_face_DOF_pairs from the explicit face lists so the
@@ -348,14 +331,12 @@ def apply(inputs: InputSchema) -> OutputSchema:
     )
 
     bezier_params = {
-        's0_top':    float(inputs.s0_top),
-        's0_bot':    float(inputs.s0_bot),
-        's1_top':    float(inputs.s1_top),
-        's1_bot':    float(inputs.s1_bot),
-        'bc1_up_xy': [float(inputs.bc1u_x), float(inputs.bc1u_y)],
-        'bc2_up_xy': [float(inputs.bc2u_x), float(inputs.bc2u_y)],
-        'bc1_lo_xy': [float(inputs.bc1l_x), float(inputs.bc1l_y)],
-        'bc2_lo_xy': [float(inputs.bc2l_x), float(inputs.bc2l_y)],
+        's0_top':  float(inputs.s0_top),
+        's0_bot':  float(inputs.s0_bot),
+        's1_top':  float(inputs.s1_top),
+        's1_bot':  float(inputs.s1_bot),
+        'bc_up_xy': [float(inputs.bcu_x), float(inputs.bcu_y)],
+        'bc_lo_xy': [float(inputs.bcl_x), float(inputs.bcl_y)],
     }
 
     nodes, tets, bc_masks = _mb_gmsh.build_mesh_gmsh(

@@ -1,12 +1,12 @@
 name: nff-sofa-oracle
-version: "0.5.0"
+version: "0.6.0"
 description: |
   High-fidelity SOFA physics oracle for the Neural Form-Finding (NFF) pipeline.
 
   Accepts a CentroidalState (CS) mesh description — face centroids, centroid-node
-  vectors, hinge topology — plus 13 differentiable corner-hinge cubic-Bézier
-  design parameters (gap, four edge reaches s0/s1, eight Bézier control-point
-  coordinates). Internally builds a conforming gmsh tetrahedral mesh via
+  vectors, hinge topology — plus 9 differentiable corner-hinge quadratic-Bézier
+  design parameters (gap, four edge reaches s0/s1, two single Bézier control
+  points). Internally builds a conforming gmsh tetrahedral mesh via
   build_mesh_gmsh (faces translated apart by gap), runs SOFA v25.12
   TetrahedronFEMForceField, and returns seven scalar quantities at static
   equilibrium: SvK strain energy, peak von Mises stress, peak in-plane XY

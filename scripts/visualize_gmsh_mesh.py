@@ -82,17 +82,17 @@ print(f'Audit: inverted={a["inverted"]} unreferenced={a["unref"]} '
 # Lower arc:  p0_bot (face fi lower edge) → p1_bot (face fk lower edge)
 geo = compute_hinge_geometry(cs, gap=arm, bezier_params=None)
 
-def _bez(p0, c1, c2, p3, n=300):
+def _bez(p0, c, p2, n=300):
     t = np.linspace(0,1,n+1)[:,None]
-    return (1-t)**3*p0 + 3*(1-t)**2*t*c1 + 3*(1-t)*t**2*c2 + t**3*p3
+    return (1-t)**2*p0 + 2*(1-t)*t*c + t**2*p2
 
 arcs = []
 for hd in geo['hinge_data']:
     arcs.append(dict(
-        up=_bez(hd['p0_top'], hd['bc1_up'], hd['bc2_up'], hd['p1_top']) * 1000,
-        lo=_bez(hd['p0_bot'], hd['bc1_lo'], hd['bc2_lo'], hd['p1_bot']) * 1000,
-        uc=np.array([hd['p0_top'], hd['bc1_up'], hd['bc2_up'], hd['p1_top']]) * 1000,
-        lc=np.array([hd['p0_bot'], hd['bc1_lo'], hd['bc2_lo'], hd['p1_bot']]) * 1000,
+        up=_bez(hd['p0_top'], hd['bc_up'], hd['p1_top']) * 1000,
+        lo=_bez(hd['p0_bot'], hd['bc_lo'], hd['p1_bot']) * 1000,
+        uc=np.array([hd['p0_top'], hd['bc_up'], hd['p1_top']]) * 1000,
+        lc=np.array([hd['p0_bot'], hd['bc_lo'], hd['p1_bot']]) * 1000,
         anchors=np.array([hd['p0_top'], hd['p1_top'],
                           hd['p0_bot'], hd['p1_bot']]) * 1000,
         center=hd['corner'] * 1000, arm=hd['gap'] * 1000,
