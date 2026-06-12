@@ -1,0 +1,9 @@
+# Tesseract Oracle — Python dependencies
+#
+# tesseract_core is injected automatically by the Tesseract build system.
+# SOFA and SofaPython3 are installed via custom_build_steps in tesseract_config.yaml.
+
+numpy
+scipy
+gmsh          # tetrahedral mesh generation in mesh_builder_gmsh.build_mesh_gmsh
+matplotlib    # matplotlib.path.Path for point-in-polygon BC classification

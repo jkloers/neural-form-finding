@@ -72,3 +72,64 @@ unit_RDQK_D:
     - {type: 'x', face1: 2, face2_offset: 5, vertex1: 9, vertex_adjacent1: 10, vertex2_offset: 3, vertex_adjacent2_offset: 6, properties: {angular_stiffness: 1.0, linear_stiffness: 1.0}}
     - {type: 'y', face1: 2, face2_offset: 3, vertex1: 10, vertex_adjacent1: 11, vertex2_offset: -5, vertex_adjacent2_offset: -6, properties: {angular_stiffness: 1.0, linear_stiffness: 1.0}}
     - {type: 'y', face1: 3, face2_offset: 5, vertex1: 15, vertex_adjacent1: 14, vertex_adjacent2_offset: -14, vertex2_offset: -15, properties: {angular_stiffness: 1.0, linear_stiffness: 1.0}}
+
+unit_2face:
+  # Minimal 2-face, 1-hinge kirigami unit — CLOSED (flat) state.
+  # Face 0 (left) and Face 1 (right) share a single corner hinge at [1,0].
+  # With nx=ny=1 this produces exactly 2 faces and 1 hinge — no external hinges needed.
+  #
+  # Layout (unit coordinates):
+  #
+  #   v3[0,1] ─── v2[1,1] v7[1,1]─── v6[2,1]
+  #      |    F0    |         |    F1    |
+  #   v0[0,0] ─── v1[1,0]≡v4[1,0]─── v5[2,0]
+  #                    ↑ hinge pivot
+  vertices:
+    - [0.0, 0.0]   # face 0, local 0
+    - [1.0, 0.0]   # face 0, local 1  — hinge pivot
+    - [1.0, 1.0]   # face 0, local 2  — hinge adjacent
+    - [0.0, 1.0]   # face 0, local 3
+    - [1.0, 0.0]   # face 1, local 0  — hinge pivot (coincident with v1)
+    - [2.0, 0.0]   # face 1, local 1
+    - [2.0, 1.0]   # face 1, local 2
+    - [1.0, 1.0]   # face 1, local 3  — hinge adjacent (coincident with v2)
+  faces:
+    - [0, 1, 2, 3]   # Face 0 (clamp)
+    - [4, 5, 6, 7]   # Face 1 (load)
+  internal_hinges:
+    - {face1: 0, face2: 1, vertex1: 1, vertex2: 4, vertex_adjacent1: 2, vertex_adjacent2: 7, angle_factor: 0.25, properties: {angular_stiffness: 1.0, linear_stiffness: 1.0}}
+  external_hinges: []
+
+unit_2face_D:
+  # Minimal 2-face, 1-hinge kirigami unit — OPEN (deployed) state.
+  # Faces are 45°-rotated diamonds sharing a single corner hinge pivot at [√2, √2/2].
+  # This is exactly the first 2 faces of unit_RDQK_D (the fully-open RDQK state).
+  # The triangular void between the faces represents the opened mechanism.
+  # Use this (not unit_2face) when simulating an already-deployed kirigami.
+  #
+  # Hinge vertex convention matches unit_RDQK_D: vertex1/vertex_adjacent1 are on
+  # the face-1 side (global vertices 4,7) and vertex2/vertex_adjacent2 on the
+  # face-0 side (global vertices 1,2).  This gives cross(v1-adj1, v2-adj2) > 0
+  # (CCW), consistent with all other RDQK patterns — no builder swap triggered.
+  #
+  # Layout (unit coordinates, all coords × 1/√2 ≈ 0.707):
+  #
+  #   v3[0, √2/2] ─── v2[√2/2, √2] ... gap ... v7[3√2/2, √2] ─── v6[2√2, √2/2]
+  #        \         F0         /  hinge  \          F1          /
+  #   v0[√2/2, 0] ─── v1[√2, √2/2] ≡ v4[√2, √2/2] ─── v5[3√2/2, 0]
+  #                             ↑ hinge pivot
+  vertices:
+    - [0.70710678, 0.0]          # face 0, local 0
+    - [1.41421356, 0.70710678]   # face 0, local 1  — hinge pivot
+    - [0.70710678, 1.41421356]   # face 0, local 2  — hinge adjacent
+    - [0.0,        0.70710678]   # face 0, local 3
+    - [1.41421356, 0.70710678]   # face 1, local 0  — hinge pivot (coincident with v1)
+    - [2.12132034, 0.0]          # face 1, local 1
+    - [2.82842712, 0.70710678]   # face 1, local 2
+    - [2.12132034, 1.41421356]   # face 1, local 3  — hinge adjacent
+  faces:
+    - [0, 1, 2, 3]   # Face 0 (clamp)
+    - [4, 5, 6, 7]   # Face 1 (load)
+  internal_hinges:
+    - {face1: 0, face2: 1, vertex1: 4, vertex2: 1, vertex_adjacent1: 7, vertex_adjacent2: 2, angle_factor: 0.25, properties: {angular_stiffness: 1.0, linear_stiffness: 1.0}}
+  external_hinges: []

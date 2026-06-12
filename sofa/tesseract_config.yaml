@@ -1,0 +1,69 @@
+name: nff-sofa-oracle
+version: "0.8.0"
+description: |
+  High-fidelity SOFA physics oracle for the Neural Form-Finding (NFF) pipeline.
+
+  Accepts a CentroidalState (CS) mesh description — face centroids, centroid-node
+  vectors, hinge topology — plus 9 differentiable corner-hinge quadratic-Bézier
+  design parameters (gap, four edge reaches s0/s1, two single Bézier control
+  points). Internally builds a conforming gmsh tetrahedral mesh via
+  build_mesh_gmsh (faces translated apart by gap), runs SOFA v25.12
+  TetrahedronFEMForceField, and returns seven scalar quantities at static
+  equilibrium: SvK strain energy, peak von Mises stress, peak in-plane XY
+  displacement, peak out-of-plane z displacement, first-yield fraction, and the
+  shear / tension strain energies. Gradients are computed via central finite
+  differences (2 × 13 SOFA calls per gradient per load mode).
+
+build_config:
+  # Ubuntu/Debian base with Python 3.12 — matches local kgnn_sofa SOFA environment.
+  base_image: "python:3.12-slim"
+
+  # SOFA Linux binaries are x86_64 only.
+  target_platform: "linux/amd64"
+
+  # System packages required by SOFA, scipy and gmsh:
+  extra_packages:
+    - wget
+    - unzip
+    - libgomp1
+    - libgl1
+    - libglu1-mesa     # gmsh headless API runtime
+    - libglib2.0-0
+    # X11 shared libs gmsh's libgmsh.so links against even when used headless:
+    - libxrender1
+    - libxcursor1
+    - libxinerama1
+    - libxft2
+    - libxfixes3
+    - libx11-6
+    - libxext6
+
+  # All SOFA physics modules and the CS mesh builder are copied into the container.
+  # tesseract_api.py imports mesh_builder_gmsh (build_mesh_gmsh) and simulate_cell.
+  # mesh_builder_gmsh.py is self-contained and needs gmsh + matplotlib
+  # (see tesseract_requirements.txt).
+  package_data:
+    - ["simulate_cell.py",      "simulate_cell.py"]
+    - ["mesh_builder_gmsh.py",  "mesh_builder_gmsh.py"]
+    - ["materials.py",          "materials.py"]
+    - ["scene_builder.py",      "scene_builder.py"]
+
+  custom_build_steps:
+    # ── Download and install SOFA v25.12 Linux / Python 3.12 binary ────────────
+    - |
+      RUN wget -q \
+            "https://github.com/sofa-framework/sofa/releases/download/v25.12.00/SOFA_v25.12.00_Linux-Python_3.12.zip" \
+            -O /tmp/sofa.zip \
+          && unzip -q /tmp/sofa.zip -d /opt \
+          && mv /opt/SOFA_v25.12.00_Linux* /opt/sofa \
+          && rm /tmp/sofa.zip
+
+    # ── Wire SOFA into the Python path ─────────────────────────────────────────
+    - |
+      ENV SOFA_ROOT=/opt/sofa
+      ENV PYTHONPATH=/opt/sofa/plugins/SofaPython3/lib/python3/site-packages
+      ENV LD_LIBRARY_PATH=/opt/sofa/lib:/opt/sofa/plugins/SofaPython3/lib
+
+    # ── Verify the SOFA import at build time ───────────────────────────────────
+    - |
+      RUN python -c "import Sofa; import Sofa.Core; import Sofa.Simulation; print('SOFA import OK')"

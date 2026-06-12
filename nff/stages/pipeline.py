@@ -4,24 +4,15 @@ Forward pipeline for neural form-finding.
 The pipeline is composed of three sequential stages:
 
     Stage 0 — Initial Mapping
-        Maps the flat Kirigami tessellation into a target shape using a
-        conformal-like polynomial mapping. This stage will eventually be
-        replaced by a Graph Neural Network (GNN) that learns the mapping
-        directly from data.
+        Maps the flat Kirigami tessellation into a target shape.
 
     Stage 1 — Geometric Validity
-        Optimizes the centroidal coordinates (face positions and shapes) to
-        satisfy geometric constraints: connectivity, non-intersection, target
-        boundary fitting, and arm symmetry. This is a differentiable
-        optimization via gradient descent.
+        Optimizes face positions to satisfy geometric constraints (no intersections, closed hinges).
 
     Stage 2 — Static Physics Solver
-        Given the geometrically valid configuration, sets up and solves the
-        static equilibrium problem by minimizing the total potential energy
-        (elastic strain energy + contact energy − external work) using L-BFGS.
+        Solves static equilibrium by minimizing total potential energy.
 
-The pipeline is fully differentiable end-to-end via JAX, enabling
-gradient-based optimization of the mapping parameters.
+The pipeline is fully differentiable end-to-end via JAX.
 """
 
 import jax.numpy as jnp
@@ -48,6 +39,10 @@ from nff.config.targets import get_target_points
 from nff.config.experiment import TargetConfig, PhysicsConfig, ValidityConfig
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# PRESENTATION-READY MAIN PIPELINE
+# ══════════════════════════════════════════════════════════════════════════════
+
 def forward_pipeline(
         initial_state: CentroidalState,
         target_cfg: TargetConfig,
@@ -59,33 +54,62 @@ def forward_pipeline(
         strict_boundary_fit: bool = True,
         static_features: Optional[dict] = None,
         load_specs: Optional[list] = None) -> dict:
-    """Full differentiable pipeline: initial map → geometric validity → static equilibrium.
+    """Full differentiable pipeline: Initial Mapping → Geometric Validity → Static Equilibrium.
 
-    Args:
-        initial_state: Flat CentroidalState exported from the Tessellation.
-        target_cfg:    Structured TargetConfig (type, center, radius).
-        physics_cfg:   Structured PhysicsConfig (material, contact, weights, solver).
-        map_type:      Initial mapping type.
-        map_params:    Differentiable parameters for the mapping.
-        use_shirley_chiu: Whether to apply Shirley-Chiu projection.
-
-    Returns:
-        dict with keys:
-            'mapped_state'          — CentroidalState after Stage 0
-            'valid_state'           — CentroidalState after Stage 1
-            'solution'              — SolutionData with equilibrium fields + energy history
-            'vertices_reference'    — (n_faces, n_nodes, 2) reference vertex positions
-            'reference_bond_vectors'— (n_hinges, 2) reference ligament vectors
+    GRADIENT PATH (Reverse-mode AD):
+    Loss → Stage 2 (Physics VJP) → Stage 1 (Validity VJP) → Stage 0 (Mapping VJP) → map_params gradients
     """
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # Stage 0 — Initial Mapping
-    # Two branches depending on map_type:
-    #   • GNN (map_type starts with 'gnn_'): apply_gnn_mapping receives the
-    #     topology graph and predicts new centroid positions.
-    #     static_features is a closure constant in JIT — all fields are concrete.
-    #   • Classical parametric: conformal/asymmetric_roots pipeline.
-    # ══════════════════════════════════════════════════════════════════════════
+    # ── Stage 0: Initial Mapping ──
+    # Forward: map_params (GNN weights or analytic coeffs) → mapped_state
+    # Backward: VJP computes gradients w.r.t map_params
+    mapped_state, mapping_fn = _execute_stage0_mapping(
+        initial_state, target_cfg, map_type, map_params,
+        use_shirley_chiu, strict_boundary_fit, static_features, physics_cfg.domain_restriction
+    )
+
+    # ── Stage 1: Geometric Validity ──
+    # Forward: mapped_state → valid_state (closes hinges, fixes overlaps, fits boundary)
+    # Backward: VJP flows automatically through the L-BFGS solver via jaxopt.custom_vjp
+    valid_state = _execute_stage1_validity(
+        mapped_state, target_cfg, validity_cfg
+    )
+
+    # ── Stage 2: Static Physics Solver ──
+    # Forward: valid_state → solution (equilibrium displacements, strain energy)
+    # Backward: VJP flows automatically through the physics minimizer
+    solution, geometry = _execute_stage2_physics(
+        valid_state, physics_cfg, load_specs
+    )
+
+    vertices_ref = reconstruct_vertices(
+        valid_state.face_centroids, valid_state.centroid_node_vectors)
+
+    return {
+        'mapped_state':           mapped_state,
+        'valid_state':            valid_state,
+        'solution':               solution,
+        'vertices_reference':     vertices_ref,
+        'reference_bond_vectors': geometry.reference_bond_vectors if geometry else jnp.zeros((0, 2), dtype=float),
+        'mapping_fn':             mapping_fn,
+        'map_params':             map_params,
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# INTERNAL HELPERS (The "Dirty" Work)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _execute_stage0_mapping(
+        initial_state: CentroidalState,
+        target_cfg: TargetConfig,
+        map_type: str,
+        map_params: Optional[dict],
+        use_shirley_chiu: bool,
+        strict_boundary_fit: bool,
+        static_features: Optional[dict],
+        domain_restriction: str):
+    
     target_params = {
         'type': target_cfg.type,
         'center': target_cfg.center,
@@ -93,53 +117,41 @@ def forward_pipeline(
     }
 
     if map_type.startswith('gnn_'):
-        # static_features is normally precomputed BEFORE JIT in create_train_step.
-        # For out-of-JIT calls (final visualisation), we compute it here.
         if static_features is None:
             from nff.models.graph_builder import build_static_graph_features
             static_features = build_static_graph_features(initial_state)
         mapped_state = apply_gnn_mapping(initial_state, map_params, static_features, map_type=map_type)
         mapping_fn = None
     elif map_type == 'direct_vertices':
-        # map_params IS the geometry: {'face_centroids': ..., 'centroid_node_vectors': ...}.
-        # Gradients flow directly from the loss back to these arrays — no Jacobian needed.
         mapped_state = apply_direct_mapping(initial_state, map_params)
         mapping_fn = None
     elif map_type == 'direct_transform':
-        # map_params = {'face_centroids': ..., 'local_transforms': (n_faces, 2, 2)}.
-        # CNVs = local_transforms[f] @ initial_cnvs[f, n] — mirrors GNN output structure.
         mapped_state = apply_direct_transform_mapping(initial_state, map_params)
         mapping_fn = None
     else:
         mapping_fn = build_mapping_fn(
             initial_state, target_params,
             map_type=map_type,
-            domain_restriction=physics_cfg.domain_restriction,
+            domain_restriction=domain_restriction,
             use_shirley_chiu=use_shirley_chiu,
             strict_boundary_fit=strict_boundary_fit
         )
-
         mapped_state = apply_mapping(
             initial_state, mapping_fn,
             map_params=map_params,
         )
+    return mapped_state, mapping_fn
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # Stage 1 — Geometric Validity
-    # Two implementations, selected by validity_cfg.validity_method:
-    #
-    #   'lbfgs' (default)              — weighted L-BFGS penalty minimisation.
-    #                                    Optimises both centroids and CNVs.
-    #
-    #   'alternating_projection'       — closed-form alternating projections.
-    #                                    Projects CNVs only (centroids fixed).
-    #                                    Enforces hinge gaps = 0 and voids
-    #                                    are parallelograms exactly, in O(n_iters)
-    #                                    instead of O(maxiter × LBFGS).
-    # ══════════════════════════════════════════════════════════════════════════
+
+def _execute_stage1_validity(mapped_state, target_cfg, validity_cfg):
+    target_params = {
+        'type': target_cfg.type,
+        'center': target_cfg.center,
+        'radius': target_cfg.radius
+    }
     target_cloud = jnp.array(get_target_points(target_params, n_points=200))
+    
     if validity_cfg.validity_method == 'none':
-        # Stage 1 disabled: pass mapped geometry directly to Stage 2.
         valid_state = mapped_state
     elif validity_cfg.validity_method == 'alternating_projection':
         from nff.stages.projection import solve_alternating_projections
@@ -148,54 +160,27 @@ def forward_pipeline(
     else:  # 'lbfgs' (default)
         valid_state = solve_geometric_validity(
             mapped_state, target_cloud, validity_cfg=validity_cfg)
+        
+    return valid_state
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # Stage 2 — Static Physics Solver
-    # ══════════════════════════════════════════════════════════════════════════
 
+def _execute_stage2_physics(valid_state, physics_cfg, load_specs):
     if not getattr(physics_cfg, 'use_stage2', True):
-        # Stage 2 disabled: return zero-displacement solution.
-        # The loss function still runs but sees zero deformation and energy,
-        # so only chamfer / openness / hinge-gap terms contribute.
         n_faces = valid_state.face_centroids.shape[0]
         zero_fields = jnp.zeros((1, n_faces, 3), dtype=float)
         dummy_energies = {k: jnp.zeros(1, dtype=float)
                          for k in ('stretch', 'shear', 'rot', 'contact')}
         solution = SolutionData(fields=zero_fields, energies=dummy_energies)
-        vertices_ref = reconstruct_vertices(
-            valid_state.face_centroids, valid_state.centroid_node_vectors)
-        return {
-            'mapped_state':           mapped_state,
-            'valid_state':            valid_state,
-            'solution':               solution,
-            'vertices_reference':     vertices_ref,
-            'reference_bond_vectors': jnp.zeros((0, 2), dtype=float),
-            'mapping_fn':             mapping_fn,
-            'map_params':             map_params,
-        }
+        return solution, None
 
-    # 2.1 — Geometry instantiation (Factory Pattern)
-    # ReferenceGeometry is the single geometry container. bond_connectivity
-    # is read from the state as a static NumPy array — never a JAX Tracer.
     geometry = ReferenceGeometry.from_centroidal_state(valid_state)
 
-    # 2.2 — Energy functional construction
-    # build_potential_energy composes elastic strain energy and contact energy
-    # into a single callable, choosing linearized or nonlinear strains.
     potential_energy_fn = build_potential_energy(
         bond_connectivity=geometry.bond_connectivity,
         linearized_strains=physics_cfg.linearized_strains,
         use_contact=physics_cfg.use_contact,
     )
 
-    # 2.3 — Loading (Neumann BCs)
-    # Two paths:
-    #   • Typed load specs (tile_to_tile / tess_frame / explicit global_frame):
-    #     force directions computed from live centroids → differentiable.
-    #     force_vals_jax is threaded through control_params.loading_params so
-    #     that jaxopt's custom_vjp solver can differentiate through it as an
-    #     explicit argument (closed-over JAX tracers are not supported there).
-    #   • Legacy (no 'type' key in load specs): fixed values from valid_state.
     if has_geometry_dependent_loads(load_specs):
         loaded_face_DOF_pairs, loading_fn, force_vals_jax = build_geometry_dependent_loading(
             load_specs, valid_state.face_centroids)
@@ -204,9 +189,6 @@ def forward_pipeline(
         loaded_face_DOF_pairs = valid_state.loaded_face_DOF_pairs if loading_fn else None
         force_vals_jax = None
 
-    # 2.4 — Static solver setup
-    # Wraps the L-BFGS minimizer with the constrained kinematics (Dirichlet BCs)
-    # and optional incremental load stepping.
     solve_statics_fn = setup_static_solver(
         geometry=geometry,
         energy_fn=potential_energy_fn,
@@ -220,9 +202,6 @@ def forward_pipeline(
         updated_lagrangian=physics_cfg.updated_lagrangian,
     )
 
-    # 2.5 — ControlParams assembly
-    # build_control_params takes all mechanical parameters explicitly —
-    # no proxy objects or implicit duck-typing.
     control_params = build_control_params(
         geometry=geometry,
         k_stretch=valid_state.k_stretch,
@@ -234,20 +213,13 @@ def forward_pipeline(
         cutoff_angle=physics_cfg.cutoff_angle,
         use_contact=physics_cfg.use_contact,
     )
-    # For geometry-dependent loads, force_values is a live JAX array that must
-    # be an explicit solver argument (not a closure) so jaxopt's custom_vjp
-    # can differentiate through it.  Inject it via loading_params here.
+    
     if force_vals_jax is not None:
         control_params = control_params._replace(loading_params={'force_values': force_vals_jax})
 
-    # 2.6 — Solve for static equilibrium
-    # Initial displacement guess is zero (undeformed configuration).
     initial_displacements = jnp.zeros((geometry.n_faces, 3), dtype=float)
     solution = solve_statics_fn(initial_displacements=initial_displacements, control_params=control_params)
 
-    # 2.7 — Energy history decomposition (delegated to energy module)
-    # Decomposes the total energy into components (stretch, shear, rot, contact)
-    # across all load steps and packages them into a dictionary.
     energies_dict = build_energy_history(
         solution=solution,
         control_params=control_params,
@@ -256,16 +228,4 @@ def forward_pipeline(
     )
     solution = solution._replace(energies=energies_dict)
 
-    # 2.8 — Reconstruct vertex positions in the reference configuration
-    vertices_ref = reconstruct_vertices(
-        geometry.face_centroids, geometry.centroid_node_vectors)
-
-    return {
-        'mapped_state':           mapped_state,
-        'valid_state':            valid_state,
-        'solution':               solution,
-        'vertices_reference':     vertices_ref,
-        'reference_bond_vectors': geometry.reference_bond_vectors,
-        'mapping_fn':             mapping_fn,
-        'map_params':             map_params,
-    }
+    return solution, geometry
