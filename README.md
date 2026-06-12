@@ -15,6 +15,10 @@ Developed at the **Princeton Form Finding Lab**.
 
 The forward pipeline is a chain of three independent, swappable stages. Gradients flow end-to-end through all three via `jax.value_and_grad`.
 
+<p align="center">
+  <img src="docs/assets/pipeline.png" width="780" alt="NFF pipeline: Kirigami pattern → initial map → validity solver → differentiable simulator / Tesseract FEA → geometric + physical loss, with gradients flowing back"/>
+</p>
+
 ```
 Flat tessellation  (CentroidalState)
         │
