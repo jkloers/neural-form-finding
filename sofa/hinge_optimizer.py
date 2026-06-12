@@ -78,7 +78,6 @@ _PARAM_NAMES = _POS_NAMES + _FREE_NAMES            # 13, == _JAC_INPUTS order
 _N_POS       = len(_POS_NAMES)
 
 _JAC_INPUTS  = list(_PARAM_NAMES)
-_JAC_OUTPUTS = ['strain_energy', 'energy_shear', 'energy_tension', 'max_von_mises_stress']
 
 
 # ── Numerics ──────────────────────────────────────────────────────────────────
@@ -306,13 +305,8 @@ def run_optimization(
     out_dir: pathlib.Path,
 ) -> dict:
     sofa_cfg = cfg.get('sofa', {})
-    loss_cfg = cfg.get('loss', {})
     mat_cfg  = cfg.get('material', {})
 
-    alpha    = float(loss_cfg.get('alpha',    1.0))
-    beta     = float(loss_cfg.get('beta',     1.0))
-    gamma    = float(loss_cfg.get('gamma',    1.0))
-    lambda_p = float(loss_cfg.get('lambda_p', 1e-10))
     yield_str = float(mat_cfg.get('yield_strength', 50e6))
 
     cs_static = build_physical_cs(cfg)
@@ -364,12 +358,12 @@ def run_optimization(
 
     optimizer = _NumpyAdam(lr)
     history: dict = {k: [] for k in _PARAM_NAMES + [
-        'total_loss', 'energy_rot', 'max_vm_rot', 'energy_shear', 'energy_tension']}
+        'total_loss', 'energy_rot', 'max_vm_rot']}
 
     _p0 = to_physical(latent)
     print(f"\nHinge optimization (corner-hinge cubic Bézier, 13-param): {n_epochs} epochs, lr={lr}")
     print(f"  Tesseract URL: {tesseract_url}")
-    print(f"  loss = {alpha}*E_rot - {beta}*E_shear - {gamma}*E_tens + {lambda_p}*yield_penalty")
+    print(f"  loss = σ_max / σ_yield  (minimize peak hinge stress; < 1 → survives)")
     print(f"  Initial: gap={_p0['gap']*1e3:.2f} mm  "
           f"reach s0=({_p0['s0_top']*1e3:.2f},{_p0['s0_bot']*1e3:.2f}) "
           f"s1=({_p0['s1_top']*1e3:.2f},{_p0['s1_bot']*1e3:.2f}) mm")
@@ -392,34 +386,24 @@ def run_optimization(
         
         e_rot    = _get_val(fwd['strain_energy'])
         max_vm   = _get_val(fwd['max_von_mises_stress'])
-        e_shear  = _get_val(fwd['energy_shear'])
-        e_tens   = _get_val(fwd['energy_tension'])
-        yield_ex = max(0.0, max_vm - yield_str)
-        loss     = alpha * e_rot - beta * e_shear - gamma * e_tens + lambda_p * yield_ex
+        # Objective: keep the hinge below yield while the panels close (displacement-
+        # controlled rotation already forces the closing motion). loss = σ_max/σ_yield;
+        # < 1 → survives, > 1 → breaks.
+        loss     = max_vm / yield_str
 
         # ── Backward pass: Jacobian from Tesseract ────────────────────────────
-        # When rotation-only, only request strain_energy gradient (no shear/tension sims).
-        skip_secondary = payload.get('skip_secondary_modes', False)
-        jac_outputs_req = ['strain_energy', 'max_von_mises_stress']
-        if not skip_secondary:
-            jac_outputs_req += ['energy_shear', 'energy_tension']
-        jac = _call_tesseract_jacobian(tesseract_url, payload, _JAC_INPUTS, jac_outputs_req)
+        jac = _call_tesseract_jacobian(
+            tesseract_url, payload, _JAC_INPUTS, ['max_von_mises_stress'])
 
-        # d(loss)/d(physical_param) for each of the 13 differentiable params,
-        # ordered as _JAC_INPUTS (== _PARAM_NAMES).
-        yield_active = 1.0 if max_vm > yield_str else 0.0
+        # d(loss)/d(param) = (1/σ_yield) · d(σ_max)/d(param), ordered as _JAC_INPUTS.
         def _jac_val(output_key, inp_key):
             if output_key not in jac:
                 return 0.0
             return _get_val(jac[output_key][inp_key])
 
-        dloss_dphys = np.array([
-            (alpha    * _jac_val('strain_energy', ki)
-             - beta   * _jac_val('energy_shear', ki)
-             - gamma  * _jac_val('energy_tension', ki)
-             + lambda_p * yield_active * _jac_val('max_von_mises_stress', ki))
-            for ki in _JAC_INPUTS
-        ], dtype=np.float64)
+        dloss_dphys = np.array(
+            [_jac_val('max_von_mises_stress', ki) / yield_str for ki in _JAC_INPUTS],
+            dtype=np.float64)
 
         # Chain through latent space: d(loss)/d(lat) = J_phys_lat.T @ d(loss)/d(phys)
         J_phys_lat = _lat_to_phys_jacobian(latent, pos_scale)
@@ -433,11 +417,9 @@ def run_optimization(
         history['total_loss'].append(loss)
         history['energy_rot'].append(e_rot)
         history['max_vm_rot'].append(max_vm)
-        history['energy_shear'].append(e_shear)
-        history['energy_tension'].append(e_tens)
 
         print(f"  epoch {epoch+1:3d}/{n_epochs}  "
-              f"loss={loss:.4e}  E_rot={e_rot:.3e} J  σ_max={max_vm/1e6:.1f} MPa  "
+              f"loss=σ/σy={loss:.3f}  σ_max={max_vm/1e6:.1f} MPa  "
               f"gap={phys['gap']*1e3:.3f} mm  "
               f"s0=({phys['s0_top']*1e3:.2f},{phys['s0_bot']*1e3:.2f}) "
               f"s1=({phys['s1_top']*1e3:.2f},{phys['s1_bot']*1e3:.2f}) mm  "
@@ -449,12 +431,11 @@ def run_optimization(
     np.savez(
         str(out_dir / 'convergence.npz'),
         **{name: np.array(history[name]) for name in _PARAM_NAMES},
-        total_loss     = np.array(history['total_loss']),
+        total_loss     = np.array(history['total_loss']),     # σ_max / σ_yield
         energy_rot     = np.array(history['energy_rot']),
         max_vm_rot     = np.array(history['max_vm_rot']),
-        energy_shear   = np.array(history['energy_shear']),
-        energy_tension = np.array(history['energy_tension']),
-        stress         = np.array(history['max_vm_rot']), # backward-compat alias
+        yield_strength = np.array(yield_str),
+        stress         = np.array(history['max_vm_rot']),     # backward-compat alias
     )
 
     # ── Final state at the best design — capture the von Mises field for viz ──

@@ -31,18 +31,18 @@ from matplotlib.collections import PolyCollection, LineCollection
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 from nff.sofa.mesh_builder_gmsh import build_mesh_gmsh, compute_hinge_geometry
 
-# ── Princeton palette ──────────────────────────────────────────────────────────
-P_ORANGE = "#F58025"   # free panels
-P_CLAMP  = "#2B2B2B"   # clamped face
-P_GREEN  = "#27AE60"   # loaded face
+# ── Princeton palette (mirrors nff/utils/visualization.py) ─────────────────────
+P_ORANGE = "#F58025"   # free / loaded panels AND hinge mesh fill
+P_GRAY   = "#6C757D"   # clamped face
 P_EDGE   = "#1A1A1A"   # mesh edges
 P_DARK   = "#1A1A1A"
 P_BG     = "#FFFFFF"
-P_HINGE  = "#F4C542"   # hinge strip fill
-ARC_UP   = "#E8743B"   # upper Bézier arc
-ARC_LO   = "#7E57C2"   # lower Bézier arc
-# Loss-component colours — identical to the main pipeline (training_animation.py)
-LOSS_ROT, LOSS_SH, LOSS_TEN, LOSS_TOT = '#E07B39', '#D32F2F', '#1976D2', '#111111'
+ARROW_RED = "#D62828"  # positive-moment arrow
+GREEN_UP  = "#1B6B3A"  # upper strip (dark Princeton green)
+GREEN_LO  = "#5CB87F"  # lower strip (light Princeton green)
+CP_COL    = "#16324A"  # Bézier control points / polygons
+# Loss colour — peak-stress band (orange, matching the main pipeline positive term)
+LOSS_STRESS, LOSS_TOT = '#E07B39', '#111111'
 
 plt.rcParams.update({'font.family': 'serif', 'axes.linewidth': 1.0,
                      'font.size': 11, 'figure.facecolor': P_BG})
@@ -115,27 +115,39 @@ def _bez(p0, c1, c2, p3, n=200):
     return (1-t)**3*p0 + 3*(1-t)**2*t*c1 + 3*(1-t)*t**2*c2 + t**3*p3
 
 
-def _draw_arcs(ax, geo, scale=1000.0, anchors=True):
+def _draw_arcs(ax, geo, scale=1000.0, control_points=False):
+    """Draw the two Bézier strips (upper=dark green, lower=light green).
+
+    control_points=True also shows all control points (endpoints + interior CPs)
+    with thin control polygons.
+    """
     for hd in geo['hinge_data']:
-        up = _bez(hd['p0_top'], hd['bc1_up'], hd['bc2_up'], hd['p1_top']) * scale
-        lo = _bez(hd['p0_bot'], hd['bc1_lo'], hd['bc2_lo'], hd['p1_bot']) * scale
-        ax.plot(up[:, 0], up[:, 1], '-', color=ARC_UP, lw=2.5, zorder=9)
-        ax.plot(lo[:, 0], lo[:, 1], '-', color=ARC_LO, lw=2.5, zorder=9)
-        if anchors:
-            for key, col in [('p0_top', ARC_UP), ('p1_top', ARC_UP),
-                             ('p0_bot', ARC_LO), ('p1_bot', ARC_LO)]:
-                ax.plot(*(hd[key] * scale), 's', color=col, ms=7, zorder=11,
-                        markeredgecolor='white', markeredgewidth=1)
+        top_keys = ('p0_top', 'bc1_up', 'bc2_up', 'p1_top')
+        bot_keys = ('p0_bot', 'bc1_lo', 'bc2_lo', 'p1_bot')
+        # Dark green = the visually-upper strip (internal up/lo follows the cell's
+        # perpendicular axis, which may sit either way round in world XY).
+        top_y = 0.5 * (hd['p0_top'][1] + hd['p1_top'][1])
+        bot_y = 0.5 * (hd['p0_bot'][1] + hd['p1_bot'][1])
+        order = ([(top_keys, GREEN_UP), (bot_keys, GREEN_LO)] if top_y >= bot_y
+                 else [(bot_keys, GREEN_UP), (top_keys, GREEN_LO)])
+        for keys, col in order:
+            p0, c1, c2, p3 = (hd[k] for k in keys)
+            arc = _bez(p0, c1, c2, p3) * scale
+            ax.plot(arc[:, 0], arc[:, 1], '-', color=col, lw=2.8, zorder=9)
+            if control_points:
+                poly = np.array([p0, c1, c2, p3]) * scale
+                ax.plot(poly[:, 0], poly[:, 1], '--', color=CP_COL, lw=0.9,
+                        alpha=0.55, zorder=10)
+                # endpoints (squares) + interior control points (circles)
+                ax.plot(poly[[0, 3], 0], poly[[0, 3], 1], 's', color=CP_COL,
+                        ms=7, zorder=12, markeredgecolor='white', markeredgewidth=1)
+                ax.plot(poly[[1, 2], 0], poly[[1, 2], 1], 'o', color=CP_COL,
+                        ms=7, zorder=12, markeredgecolor='white', markeredgewidth=1)
 
 
-def _clean(ax):
+def _noaxis(ax):
     ax.set_aspect('equal')
-    for s in ('top', 'right'):
-        ax.spines[s].set_visible(False)
-    ax.spines['left'].set_color('#BBBBBB')
-    ax.spines['bottom'].set_color('#BBBBBB')
-    ax.tick_params(labelsize=8, colors=P_DARK)
-    ax.set_xlabel('x [mm]', fontsize=9); ax.set_ylabel('y [mm]', fontsize=9)
+    ax.axis('off')
 
 
 # ── Panel 1 — initial state + boundary conditions ──────────────────────────────
@@ -143,41 +155,39 @@ def _clean(ax):
 def plot_initial_state(run_dir, cs, conv, out):
     g, bp = _bezier_params(conv, 0)
     nodes, tets, bc = build_mesh_gmsh(cs, gap=g, bezier_params=bp, n_z_layers=1)
-    geo = compute_hinge_geometry(cs, gap=g, bezier_params=bp)
     tri, _ = _bottom_tris(nodes, tets)
     xy = nodes[:, :2] * 1000
 
-    region = np.where(bc['clamped'], 0, np.where(bc['loaded'], 2, 1))
-    rc = {0: P_CLAMP, 1: P_ORANGE, 2: P_GREEN}
-    fc = [rc[int(round(region[t].mean()))] for t in tri]
+    # Clamped face gray; loaded face + hinge orange (matches main pipeline).
+    region = np.where(bc['clamped'], 0, 1)        # 0 = clamped, 1 = active/orange
+    fc = [P_GRAY if region[t].mean() < 0.5 else P_ORANGE for t in tri]
 
-    fig, ax = plt.subplots(figsize=(8, 6.2))
-    ax.add_collection(PolyCollection(xy[tri], facecolors=fc, alpha=0.78,
-                                     edgecolors='none', zorder=1))
-    ax.add_collection(LineCollection(xy[_edges(tri)], colors='white', lw=0.35,
-                                     alpha=0.55, zorder=2))
-    _draw_arcs(ax, geo, anchors=False)
+    fig, ax = plt.subplots(figsize=(8.4, 5.2))
+    ax.add_collection(PolyCollection(xy[tri], facecolors=fc, alpha=0.95,
+                                     edgecolors=P_EDGE, linewidths=0.25, zorder=1))
 
-    # Boundary-condition labels
     fcx = cs.face_centroids * 1000
     cl = sorted({int(r[0]) for r in np.asarray(cs.constrained_face_DOF_pairs)})
     ld = sorted({int(r[0]) for r in np.asarray(cs.loaded_face_DOF_pairs)})
     for f in cl:
-        ax.annotate('CLAMPED', fcx[f], ha='center', va='center', fontsize=11,
+        ax.annotate('clamped', fcx[f], ha='center', va='center', fontsize=11,
                     fontweight='bold', color='white', zorder=12)
-    for f in ld:
-        ax.annotate('LOADED', fcx[f], ha='center', va='center', fontsize=11,
-                    fontweight='bold', color='white', zorder=12)
-        ax.annotate('rotation', (fcx[f][0], fcx[f][1] - 9), ha='center', va='center',
-                    fontsize=8.5, style='italic', color='white', zorder=12)
 
-    ax.autoscale(); _clean(ax)
-    ax.set_title(f'Initial design — boundary conditions   (gap = {g*1e3:.1f} mm)',
-                 fontsize=12, fontweight='bold', color=P_DARK, pad=8)
-    ax.legend(handles=[mpatches.Patch(color=P_CLAMP, label='clamped face'),
-                       mpatches.Patch(color=P_GREEN, label='loaded face'),
-                       mpatches.Patch(color=P_ORANGE, label='free panel')],
-              loc='upper right', fontsize=8.5, frameon=True, edgecolor='#DDDDDD')
+    # Positive-moment arrow on the loaded face (red curved arrow, main-pipeline style).
+    for f in ld:
+        cxy = fcx[f]
+        r = 0.30 * float(np.ptp(xy[:, 0]))   # arc radius ~ scene scale
+        a0, a1 = np.deg2rad(-50), np.deg2rad(140)   # CCW = positive = closing
+        start = cxy + r * np.array([np.cos(a0), np.sin(a0)])
+        end   = cxy + r * np.array([np.cos(a1), np.sin(a1)])
+        ax.add_patch(mpatches.FancyArrowPatch(
+            start, end, connectionstyle="arc3,rad=0.42", color=ARROW_RED,
+            arrowstyle="Simple,tail_width=1.6,head_width=8,head_length=10", zorder=13))
+        ax.annotate('M', cxy, ha='center', va='center', fontsize=12,
+                    fontweight='bold', color=ARROW_RED, zorder=14)
+
+    ax.autoscale(); _noaxis(ax)
+    ax.set_title('Initial state', fontsize=13, fontweight='bold', color=P_DARK, pad=6)
     fig.tight_layout(); fig.savefig(out, dpi=160, bbox_inches='tight', facecolor=P_BG)
     plt.close(fig); print(f'  → {out.name}')
 
@@ -187,31 +197,21 @@ def plot_initial_state(run_dir, cs, conv, out):
 def plot_loss(run_dir, conv, out):
     n = len(conv['total_loss'])
     ep = np.arange(1, n + 1)
-    e_rot = np.asarray(conv['energy_rot'], float)
-    e_sh  = np.asarray(conv['energy_shear'], float)
-    e_ten = np.asarray(conv['energy_tension'], float)
-    total = np.asarray(conv['total_loss'], float)
-    best  = int(np.argmin(conv['max_vm_rot']))
+    ratio = np.asarray(conv['total_loss'], float)   # σ_max / σ_yield
+    best  = int(np.argmin(ratio))
 
-    def active(a): return bool(np.any(np.abs(a) > 1e-12))
     fig, ax = plt.subplots(figsize=(8.5, 5.2))
-    ax.stackplot(ep, e_rot, colors=[LOSS_ROT], labels=['Rotation energy  (min)'],
-                 alpha=0.75, zorder=2)
-    cum = np.zeros(n)
-    for arr, lbl, col in [(-e_sh, 'Shear stiffness  (max ↓)', LOSS_SH),
-                          (-e_ten, 'Tension stiffness  (max ↓)', LOSS_TEN)]:
-        if active(arr):
-            ax.fill_between(ep, cum, cum + arr, color=col, alpha=0.55, label=lbl, zorder=2)
-            cum = cum + arr
-    ax.plot(ep, total, color=LOSS_TOT, lw=2.5, label='Total loss', zorder=10)
-    ax.axhline(0, color='#333333', lw=0.8, alpha=0.4)
-    ax.axvline(best + 1, color=P_ORANGE, ls=':', lw=1.4, label=f'best (ep {best+1})', zorder=8)
+    ax.stackplot(ep, ratio, colors=[LOSS_STRESS],
+                 labels=['Peak hinge stress  σ_max / σ_yield  (min)'], alpha=0.75, zorder=2)
+    ax.plot(ep, ratio, color=LOSS_TOT, lw=2.5, label='Total loss', zorder=10)
+    ax.axhline(1.0, color=ARROW_RED, ls='--', lw=1.6, label='yield (breaks above)', zorder=6)
+    ax.axvline(best + 1, color=GREEN_UP, ls=':', lw=1.4, label='best', zorder=8)
 
     ax.set_xlim(1, max(n, 2))
+    ax.set_ylim(0, max(1.15, float(ratio.max()) * 1.1))
     ax.set_xlabel('Optimizer epoch', fontsize=10, fontweight='bold')
-    ax.set_ylabel('Weighted loss contribution', fontsize=10, fontweight='bold')
-    ax.set_title('Training loss — component contributions', fontsize=12,
-                 fontweight='bold', color=P_DARK, pad=8)
+    ax.set_ylabel('σ_max / σ_yield', fontsize=10, fontweight='bold')
+    ax.set_title('Training loss', fontsize=13, fontweight='bold', color=P_DARK, pad=8)
     for s in ('top', 'right'):
         ax.spines[s].set_visible(False)
     ax.grid(True, ls=':', alpha=0.3)
@@ -229,31 +229,27 @@ def plot_final_hinge(run_dir, cs, conv, best, out):
     tri, _ = _bottom_tris(nodes, tets)
     xy = nodes[:, :2] * 1000
     hinge = ~bc['clamped'] & ~bc['loaded']
-    fc = [P_HINGE if hinge[t].mean() > 0.5 else '#E8E8E8' for t in tri]
+    # Hinge mesh in Princeton orange; flanking panels a faint gray.
+    fc = [P_ORANGE if hinge[t].mean() > 0.5 else '#ECECEC' for t in tri]
 
-    fig, ax = plt.subplots(figsize=(7.6, 6.4))
-    ax.add_collection(PolyCollection(xy[tri], facecolors=fc, alpha=0.55,
+    fig, ax = plt.subplots(figsize=(7.2, 6.6))
+    ax.add_collection(PolyCollection(xy[tri], facecolors=fc, alpha=0.85,
                                      edgecolors='none', zorder=1))
-    ax.add_collection(LineCollection(xy[_edges(tri)], colors='#9AA7B0', lw=0.5,
-                                     alpha=0.8, zorder=2))
-    _draw_arcs(ax, geo, anchors=True)
+    ax.add_collection(LineCollection(xy[_edges(tri)], colors='white', lw=0.45,
+                                     alpha=0.7, zorder=2))
+    _draw_arcs(ax, geo, control_points=True)
 
     hd = geo['hinge_data'][0]
     cx, cy = hd['corner'] * 1000
-    pad = max(g * 1000 * 3.5, 8.0)
+    pad = max(g * 1000 * 3.2, 7.0)
     ax.set_xlim(cx - pad, cx + pad); ax.set_ylim(cy - pad, cy + pad)
-    _clean(ax)
-    ax.set_title(f'Optimal hinge — Bézier arcs   (epoch {best+1}, gap = {g*1e3:.2f} mm)',
-                 fontsize=12, fontweight='bold', color=P_DARK, pad=8)
-    # Label arcs by their actual vertical position (internal up/lo follows the
-    # cell's perpendicular axis, which may sit either way round in world XY).
-    top_y = 0.5 * (hd['p0_top'][1] + hd['p1_top'][1])
-    bot_y = 0.5 * (hd['p0_bot'][1] + hd['p1_bot'][1])
-    up_lbl, lo_lbl = (('upper arc', 'lower arc') if top_y >= bot_y
-                      else ('lower arc', 'upper arc'))
-    ax.legend(handles=[plt.Line2D([0], [0], color=ARC_UP, lw=2.5, label=up_lbl),
-                       plt.Line2D([0], [0], color=ARC_LO, lw=2.5, label=lo_lbl)],
-              loc='upper right', fontsize=8.5, frameon=True, edgecolor='#DDDDDD')
+    _noaxis(ax)
+    ax.set_title('Optimal hinge', fontsize=13, fontweight='bold', color=P_DARK, pad=6)
+    ax.legend(handles=[
+        plt.Line2D([0], [0], color=GREEN_UP, lw=2.8, label='upper strip'),
+        plt.Line2D([0], [0], color=GREEN_LO, lw=2.8, label='lower strip'),
+        plt.Line2D([0], [0], color=CP_COL, lw=0, marker='o', ms=6, label='control points')],
+        loc='upper right', fontsize=8.5, frameon=True, edgecolor='#DDDDDD')
     fig.tight_layout(); fig.savefig(out, dpi=160, bbox_inches='tight', facecolor=P_BG)
     plt.close(fig); print(f'  → {out.name}')
 
@@ -271,19 +267,25 @@ def plot_von_mises(run_dir, fs, out):
     xy = nodes[:, :2] * 1000
     vm_mpa = vm[owner] / 1e6
 
-    fig, ax = plt.subplots(figsize=(8.4, 6.2))
+    fig, ax = plt.subplots(figsize=(7.6, 6.4))
     pc = PolyCollection(xy[tri], array=vm_mpa, cmap='magma',
                         edgecolors='none', zorder=1)
     ax.add_collection(pc)
-    ax.add_collection(LineCollection(xy[_edges(tri)], colors='white', lw=0.18,
-                                     alpha=0.3, zorder=2))
+    ax.add_collection(LineCollection(xy[_edges(tri)], colors='white', lw=0.2,
+                                     alpha=0.35, zorder=2))
     cb = fig.colorbar(pc, ax=ax, fraction=0.046, pad=0.02)
     cb.set_label('von Mises stress [MPa]', fontsize=9)
     cb.ax.tick_params(labelsize=8)
 
-    ax.autoscale(); _clean(ax)
-    ax.set_title(f'Final state — von Mises stress   (σ_max = {vm_mpa.max():.0f} MPa)',
-                 fontsize=12, fontweight='bold', color=P_DARK, pad=8)
+    # Zoom onto the stressed hinge region (where the field is meaningful).
+    hi = vm_mpa > 0.05 * vm_mpa.max()
+    pts = xy[tri[hi]].reshape(-1, 2) if hi.any() else xy[tri].reshape(-1, 2)
+    c = 0.5 * (pts.min(0) + pts.max(0))
+    half = 0.6 * float(np.ptp(pts, axis=0).max()) + 3.0
+    ax.set_xlim(c[0] - half, c[0] + half); ax.set_ylim(c[1] - half, c[1] + half)
+    _noaxis(ax)
+    ax.set_title('Final state — von Mises stress', fontsize=13, fontweight='bold',
+                 color=P_DARK, pad=6)
     fig.tight_layout(); fig.savefig(out, dpi=160, bbox_inches='tight', facecolor=P_BG)
     plt.close(fig); print(f'  → {out.name}')
 
