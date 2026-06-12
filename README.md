@@ -5,7 +5,7 @@ End-to-end differentiable pipeline for the inverse design of deployable Kirigami
 Developed at the **Princeton Form Finding Lab**.
 
 <p align="center">
-  <img src="docs/assets/closing_mpnn.gif" width="460" alt="A 2×2 MPNN-designed Kirigami tessellation closing onto a target circle"/>
+  <img src="docs/assets/closing_mpnn.gif" width="460" alt="A 4×4 MPNN-designed Kirigami tessellation closing onto a target circle"/>
 </p>
 <p align="center"><em>An MPNN-designed Kirigami closing onto its target shape — the output of the differentiable pipeline.</em></p>
 
