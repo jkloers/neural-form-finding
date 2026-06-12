@@ -303,6 +303,7 @@ def _build_tesseract_payload(
         # Mesh resolution
         "sheet_thickness":      float(sofa_cfg.get('sheet_thickness', 0.001)),
         "n_z":                  int(sofa_cfg.get('n_z', 2)),
+        "mesh_refine":          float(sofa_cfg.get('mesh_refine', 1.0)),
         # Loading
         "rotation_angle_deg":     float(sofa_cfg.get('rotation_angle_deg', -5.0)),
         "applied_moment":         0.0,
@@ -330,6 +331,7 @@ def run_optimization(
     lr: float,
     tesseract_url: str,
     out_dir: pathlib.Path,
+    capture_fields: bool = True,
 ) -> dict:
     sofa_cfg = cfg.get('sofa', {})
     mat_cfg  = cfg.get('material', {})
@@ -410,6 +412,16 @@ def run_optimization(
     area_min = float(loss_cfg.get('min_hinge_area_m2', 20e-6))   # 20 mm²
 
     optimizer = _NumpyAdam(lr)
+    # Learning-rate schedule: 'cosine' anneals lr → 5% of lr over the run, which
+    # damps the momentum overshoot (big steps early, tiny steps late = settles
+    # instead of oscillating). 'constant' = fixed lr.
+    lr_sched = str(cfg.get('optimization', {}).get('lr_schedule', 'cosine'))
+
+    def _lr_at(epoch):
+        if lr_sched == 'cosine' and n_epochs > 1:
+            return lr * (0.05 + 0.95 * 0.5 * (1.0 + np.cos(np.pi * epoch / (n_epochs - 1))))
+        return lr
+
     history: dict = {k: [] for k in _PARAM_NAMES + [
         'total_loss', 'loss_fatigue', 'loss_mat', 'loss_gap',
         'max_strain', 'plastic_strain', 'cycles_Nf', 'max_vm_rot', 'hinge_area']}
@@ -493,6 +505,7 @@ def run_optimization(
         d_gap    = np.zeros(n_p); d_gap[0] = w_gap * 2.0 * gp / gap_ref ** 2
         grad     = d_fat + d_mat + d_gap
 
+        optimizer.lr = _lr_at(epoch)                             # lr schedule (damps overshoot)
         params = optimizer.update(params, grad)
         params[pos_mask] = np.maximum(params[pos_mask], floor)   # project to positivity
 
@@ -524,6 +537,9 @@ def run_optimization(
     if not history['total_loss']:
         print("No epochs completed — aborting before final-state capture.")
         return history
+
+    if not capture_fields:
+        return history   # search mode: metrics come from convergence.npz; skip the field sim
 
     # ── Final state at the best (lowest-loss) design — capture field for viz ──
     best_idx  = int(np.argmin(history['total_loss']))

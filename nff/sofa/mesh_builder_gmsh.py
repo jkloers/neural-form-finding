@@ -137,6 +137,7 @@ def compute_hinge_geometry(
     bezier_params: dict = None,
     mesh_size_face: float = None,
     mesh_size_hinge: float = None,
+    mesh_refine: float = 1.0,
 ) -> dict:
     """Resolve face polygons and per-hinge Bézier strip geometry.
 
@@ -205,7 +206,9 @@ def compute_hinge_geometry(
         mesh_size_face = span / 8.0
     if mesh_size_hinge is None:
         mesh_size_hinge = max(gap * 1.5, 1e-5)
-    lc_f, lc_h = mesh_size_face, mesh_size_hinge
+    # mesh_refine > 1 → finer elements (smoother FD gradients, slower sims).
+    r = max(float(mesh_refine), 1e-3)
+    lc_f, lc_h = mesh_size_face / r, mesh_size_hinge / r
 
     hinge_data = []
     for hg in hinges:
@@ -285,6 +288,7 @@ def build_mesh_gmsh(
     bezier_params: dict = None,
     mesh_size_face: float = None,
     mesh_size_hinge: float = None,
+    mesh_refine: float = 1.0,
     n_z_layers: int = 2,
     verbose: bool = False,
 ) -> tuple:
@@ -306,6 +310,7 @@ def build_mesh_gmsh(
                           symmetrically bowed arcs (gap away from the chord axis).
     mesh_size_face      : target element size in face bodies [m]
     mesh_size_hinge     : target element size inside the hinge [m]
+    mesh_refine         : >1 → finer in-plane elements (smoother FD gradients, slower)
     n_z_layers          : prism layers through thickness
     verbose             : show gmsh output
 
@@ -320,7 +325,8 @@ def build_mesh_gmsh(
     # ── 1-3. Face geometry + hinge strip endpoints ───────────────────────────
     geo = compute_hinge_geometry(
         cs, gap=gap, bezier_params=bezier_params,
-        mesh_size_face=mesh_size_face, mesh_size_hinge=mesh_size_hinge)
+        mesh_size_face=mesh_size_face, mesh_size_hinge=mesh_size_hinge,
+        mesh_refine=mesh_refine)
     face_verts    = geo['face_verts']
     hinge_data    = geo['hinge_data']
     clamped_faces = geo['clamped_faces']

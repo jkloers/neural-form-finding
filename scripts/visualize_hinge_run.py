@@ -25,6 +25,7 @@ matplotlib.use('Agg')
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+import matplotlib.animation as manim
 from matplotlib.collections import PolyCollection, LineCollection
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
@@ -291,12 +292,97 @@ def plot_von_mises(run_dir, fs, out):
     plt.close(fig); print(f'  → {out.name}')
 
 
+# ── Training animation — Bézier curves learning + loss ──────────────────────────
+
+def animate_training(run_dir, cs, conv, out, fps=3):
+    """Animate the hinge morphing over epochs (left) alongside the stacked loss (right).
+
+    Uses convergence.npz only (per-epoch params) — no simulation. Mirrors the main
+    pipeline's training animation: geometry learns on the left, loss accrues on the right.
+    """
+    n = len(conv['total_loss'])
+    if n < 2:
+        print('  (need ≥2 epochs for the training animation — skipping)')
+        return
+
+    # Pre-build per-epoch geometry (rebuilding gmsh inside the anim loop is slow/fragile).
+    frames = []
+    for e in range(n):
+        g, bp = _bezier_params(conv, e)
+        nodes, tets, bc = build_mesh_gmsh(cs, gap=g, bezier_params=bp, n_z_layers=1)
+        geo = compute_hinge_geometry(cs, gap=g, bezier_params=bp)
+        tri, _ = _bottom_tris(nodes, tets)
+        hinge = ~bc['clamped'] & ~bc['loaded']
+        frames.append((nodes[:, :2] * 1000, tri, hinge, geo))
+    # Fixed, hinge-centred view across all frames so it doesn't jump. Size it from
+    # the HINGE tris only (not the big flanking faces).
+    cx, cy = frames[0][3]['hinge_data'][0]['corner'] * 1000
+    span = 10.0
+    for xy, tri, hinge, _ in frames:
+        htris = tri[hinge[tri].mean(axis=1) > 0.5]
+        if len(htris):
+            pts = xy[htris].reshape(-1, 2)
+            span = max(span, float(np.abs(pts - [cx, cy]).max()))
+    span += 5.0
+
+    # Loss components for the right panel.
+    ep = np.arange(1, n + 1)
+    total = np.asarray(conv['total_loss'], float)
+    comps, cols, labels = [], [], []
+    for key, lbl, col in [('loss_fatigue', 'Plastic strain (fatigue)', ARROW_RED),
+                          ('loss_mat', 'Material', LOSS_STRESS),
+                          ('loss_gap', 'Gap penalty', '#1976D2')]:
+        if key in conv.files:
+            comps.append(np.asarray(conv[key], float)); cols.append(col); labels.append(lbl)
+
+    fig, (axh, axl) = plt.subplots(1, 2, figsize=(13.5, 6), facecolor=P_BG,
+                                   gridspec_kw={'width_ratios': [1.05, 1.25], 'wspace': 0.18})
+    fig.suptitle('Hinge optimization — learning the Bézier flexure',
+                 fontsize=13, fontweight='bold', color=P_DARK, y=0.98)
+    # Static loss panel (drawn once); a marker sweeps across it.
+    if comps:
+        axl.stackplot(ep, *comps, colors=cols, labels=labels, alpha=0.8, zorder=2)
+    axl.plot(ep, total, color=LOSS_TOT, lw=2.2, label='Total loss', zorder=10)
+    axl.set_xlim(1, max(n, 2)); axl.set_ylim(0, float(total.max()) * 1.12 + 1e-6)
+    axl.set_xlabel('Optimizer epoch', fontsize=10, fontweight='bold')
+    axl.set_ylabel('Loss contribution', fontsize=10, fontweight='bold')
+    for s in ('top', 'right'):
+        axl.spines[s].set_visible(False)
+    axl.grid(True, ls=':', alpha=0.3)
+    axl.legend(loc='upper right', fontsize=8.5, frameon=True, edgecolor='#DDDDDD')
+    vline = axl.axvline(1, color=GREEN_UP, lw=1.6, zorder=11)
+    vdot, = axl.plot([1], [total[0]], 'o', color=GREEN_UP, ms=8, zorder=12)
+
+    def update(e):
+        xy, tri, hinge, geo = frames[e]
+        axh.clear()
+        fc = [P_ORANGE if hinge[t].mean() > 0.5 else '#ECECEC' for t in tri]
+        axh.add_collection(PolyCollection(xy[tri], facecolors=fc, alpha=0.85,
+                                          edgecolors='none', zorder=1))
+        axh.add_collection(LineCollection(xy[_edges(tri)], colors='white', lw=0.4,
+                                          alpha=0.7, zorder=2))
+        _draw_arcs(axh, geo, control_points=True)
+        axh.set_xlim(cx - span, cx + span); axh.set_ylim(cy - span, cy + span)
+        _noaxis(axh)
+        axh.set_title('Hinge shape', fontsize=11, fontweight='bold', color=P_DARK, pad=4)
+        axh.text(0.03, 0.04, f'epoch {e+1}/{n}', transform=axh.transAxes,
+                 fontsize=10, color=P_DARK, fontweight='bold')
+        vline.set_xdata([e + 1, e + 1]); vdot.set_data([e + 1], [total[e]])
+        return ()
+
+    anim = manim.FuncAnimation(fig, update, frames=n, blit=False)
+    anim.save(str(out), writer=manim.PillowWriter(fps=fps), dpi=110)
+    plt.close(fig); print(f'  → {out.name}')
+
+
 # ── Entry point ─────────────────────────────────────────────────────────────────
 
 def main():
     ap = argparse.ArgumentParser(description='Clean Princeton-themed hinge-run visuals.')
     ap.add_argument('run_dir', nargs='?', default=None,
                     help='hinge_opt run directory (default: latest).')
+    ap.add_argument('--animate', action='store_true',
+                    help='Also render training.gif (hinge morph + loss).')
     args = ap.parse_args()
 
     run_dir = pathlib.Path(args.run_dir) if args.run_dir else _latest_run_dir()
@@ -309,9 +395,10 @@ def main():
     fs = np.load(fs_path) if fs_path.exists() else None
     if fs is not None:
         cs = _cs_from_final(fs)
-        plot_initial_state(run_dir, cs, conv, run_dir / 'initial_state.png')
         plot_final_hinge(run_dir, cs, conv, best, run_dir / 'final_hinge.png')
         plot_von_mises(run_dir, fs, run_dir / 'von_mises.png')
+        if args.animate:
+            animate_training(run_dir, cs, conv, run_dir / 'training.gif')
     else:
         print('  (no final_state.npz — initial/hinge/von_mises panels need it; '
               'run the optimizer with the field-returning oracle)')

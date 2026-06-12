@@ -161,6 +161,11 @@ class InputSchema(BaseModel):
         description="Tet prism layers through thickness. 2 is sufficient with PartialFixed(z). "
                     "In-plane element sizing is handled automatically by gmsh.",
     )
+    mesh_refine: float = Field(
+        default=1.0,
+        description="In-plane mesh refinement factor (>1 = finer). Finer meshes give "
+                    "smoother FD gradients (less re-meshing/peak-element noise) at higher cost.",
+    )
 
     # ── Loading ───────────────────────────────────────────────────────────────
 
@@ -344,6 +349,7 @@ def apply(inputs: InputSchema) -> OutputSchema:
         gap             = float(inputs.gap),
         bezier_params   = bezier_params,
         sheet_thickness = float(inputs.sheet_thickness),
+        mesh_refine     = float(inputs.mesh_refine),
         n_z_layers      = int(inputs.n_z),
     )
 
