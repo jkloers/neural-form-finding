@@ -53,3 +53,22 @@ def vm_stress_per_tet(pos_nat: np.ndarray, pos_cur: np.ndarray,
         s = sigma - np.trace(sigma)/3 * np.eye(3)
         vm_list.append(float(np.sqrt(1.5 * np.sum(s**2))))
     return np.array(vm_list) if vm_list else np.array([0.0])
+
+
+def max_principal_strain_per_tet(pos_nat: np.ndarray, pos_cur: np.ndarray,
+                                 tets: np.ndarray) -> np.ndarray:
+    """Per-element max principal Green-Lagrange strain [–].
+
+    Largest eigenvalue of E = ½(FᵀF − I) — the brittle (fracture) criterion.
+    Compared against the material's elongation at break to decide 'breaks'.
+    """
+    eps_list = []
+    for tet in tets:
+        dX = (pos_nat[tet[1:]] - pos_nat[tet[0]]).T
+        dx = (pos_cur[tet[1:]] - pos_cur[tet[0]]).T
+        if abs(np.linalg.det(dX)) < 1e-30:
+            continue
+        F = dx @ np.linalg.inv(dX)
+        E = 0.5 * (F.T @ F - np.eye(3))
+        eps_list.append(float(np.max(np.linalg.eigvalsh(E))))
+    return np.array(eps_list) if eps_list else np.array([0.0])

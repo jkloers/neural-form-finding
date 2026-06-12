@@ -15,7 +15,6 @@ final_state.npz (the Tesseract oracle returns it at the best design).
 Usage:
     python scripts/visualize_hinge_run.py [run_dir]      # default: latest run
 """
-import os
 import sys
 import types
 import pathlib
@@ -197,20 +196,25 @@ def plot_initial_state(run_dir, cs, conv, out):
 def plot_loss(run_dir, conv, out):
     n = len(conv['total_loss'])
     ep = np.arange(1, n + 1)
-    ratio = np.asarray(conv['total_loss'], float)   # σ_max / σ_yield
-    best  = int(np.argmin(ratio))
+    total = np.asarray(conv['total_loss'], float)
+    best  = int(np.argmin(total))
+    # Stacked component contributions (fracture / material / gap).
+    comps, labels, cols = [], [], []
+    for key, lbl, col in [('loss_strain', 'Peak strain', ARROW_RED),
+                          ('loss_mat',    'Material',    LOSS_STRESS),
+                          ('loss_gap',    'Gap penalty', '#1976D2')]:
+        if key in conv.files:
+            comps.append(np.asarray(conv[key], float)); labels.append(lbl); cols.append(col)
 
     fig, ax = plt.subplots(figsize=(8.5, 5.2))
-    ax.stackplot(ep, ratio, colors=[LOSS_STRESS],
-                 labels=['Peak hinge stress  σ_max / σ_yield  (min)'], alpha=0.75, zorder=2)
-    ax.plot(ep, ratio, color=LOSS_TOT, lw=2.5, label='Total loss', zorder=10)
-    ax.axhline(1.0, color=ARROW_RED, ls='--', lw=1.6, label='yield (breaks above)', zorder=6)
+    if comps:
+        ax.stackplot(ep, *comps, colors=cols, labels=labels, alpha=0.8, zorder=2)
+    ax.plot(ep, total, color=LOSS_TOT, lw=2.5, label='Total loss', zorder=10)
     ax.axvline(best + 1, color=GREEN_UP, ls=':', lw=1.4, label='best', zorder=8)
 
-    ax.set_xlim(1, max(n, 2))
-    ax.set_ylim(0, max(1.15, float(ratio.max()) * 1.1))
+    ax.set_xlim(1, max(n, 2)); ax.set_ylim(0, float(total.max()) * 1.12 + 1e-6)
     ax.set_xlabel('Optimizer epoch', fontsize=10, fontweight='bold')
-    ax.set_ylabel('σ_max / σ_yield', fontsize=10, fontweight='bold')
+    ax.set_ylabel('Loss contribution', fontsize=10, fontweight='bold')
     ax.set_title('Training loss', fontsize=13, fontweight='bold', color=P_DARK, pad=8)
     for s in ('top', 'right'):
         ax.spines[s].set_visible(False)

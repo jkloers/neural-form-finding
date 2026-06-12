@@ -49,7 +49,7 @@ Differentiable hinge design params (13-param corner-hinge cubic Bézier):
 FD gradient cost: 2 × 13 params × 3 modes = 78 SOFA sims per gradient call.
 
 Scalar outputs (Differentiable[Float64]):
-  strain_energy, max_von_mises_stress, max_xy_displacement,
+  strain_energy, max_von_mises_stress, max_principal_strain, max_xy_displacement,
   max_z_displacement, first_yield_fraction  — from rotation mode
   energy_shear                               — from shear loading mode
   energy_tension                             — from tension loading mode
@@ -293,6 +293,10 @@ class OutputSchema(BaseModel):
     first_yield_fraction: Differentiable[Float64] = Field(
         description="max_von_mises_stress / yield_strength (rotation mode). > 1 = plastic.",
     )
+    max_principal_strain: Differentiable[Float64] = Field(
+        description="Peak max-principal Green-Lagrange strain (rotation mode) [–]. "
+                    "Compare to fracture strain (~0.045 PLA) for the 'breaks' criterion.",
+    )
     # ── Shear mode ────────────────────────────────────────────────────────────
     energy_shear: Differentiable[Float64] = Field(
         description="Total SvK elastic energy under shear loading [J].",
@@ -428,6 +432,7 @@ def apply(inputs: InputSchema) -> OutputSchema:
         max_xy_displacement  = float(res_rot['max_xy_displacement']),
         max_z_displacement   = float(res_rot['max_z_displacement']),
         first_yield_fraction = float(res_rot['first_yield_fraction']),
+        max_principal_strain = float(res_rot['max_principal_strain']),
         energy_shear         = e_shear,
         energy_tension       = e_tension,
         von_mises_field      = vm_field,
@@ -488,6 +493,7 @@ def abstract_eval(abstract_inputs: InputSchema) -> dict[str, Any]:
         "max_xy_displacement":  scalar,
         "max_z_displacement":   scalar,
         "first_yield_fraction": scalar,
+        "max_principal_strain": scalar,
         "energy_shear":         scalar,
         "energy_tension":       scalar,
         "von_mises_field":      ShapeDType(shape=(None,),    dtype="Float64"),

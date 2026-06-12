@@ -2,25 +2,32 @@
 sofa/hinge_optimizer.py — Corner-hinge cubic Bézier optimizer via Tesseract HTTP.
 
 Optimizes 13 hinge parameters using the Tesseract physics oracle (SOFA FEM
-running in Docker). The /apply endpoint returns all three load-case outputs;
-the /jacobian endpoint returns server-side central-FD gradients. Client-side
-chain rule propagates gradients through the softplus latent reparameterization
-to a numpy Adam update — no JAX tracing or subprocess calls required.
+running in Docker). All 13 parameters live directly in physical space (metres)
+and are updated by a numpy Adam step; gap + the four edge reaches are kept
+positive by projecting (clipping) to a small floor after each step. No softplus
+reparametrisation — that froze gap/reaches ~500× slower than the control points.
 
-Parameters (physical) — 5 positive (softplus) + 8 free (ℝ)
-  gap                     — rigid face separation along ê_arm [m]   (softplus, positive)
-  s0_top, s0_bot          — upper/lower endpoint reach on face 0 [m] (softplus, positive)
-  s1_top, s1_bot          — upper/lower endpoint reach on face 1 [m] (softplus, positive)
-  bc1u_x, bc1u_y          — interior Bézier CP 1, UPPER arc [m]       (free in ℝ)
-  bc2u_x, bc2u_y          — interior Bézier CP 2, UPPER arc [m]       (free in ℝ)
-  bc1l_x, bc1l_y          — interior Bézier CP 1, LOWER arc [m]       (free in ℝ)
-  bc2l_x, bc2l_y          — interior Bézier CP 2, LOWER arc [m]       (free in ℝ)
+Objective — a lean hinge that closes with low peak strain (low stress = more
+failure margin), keeping the face gap small:
+  loss = w_strain · (ε_max / ε_fracture)    (minimise peak strain CONTINUOUSLY)
+       + w_mat    · hinge_area / area₀       (lean hinge — minimise material)
+       + w_gap    · (gap / gap₀)²            (keep the face gap small/controlled —
+                                              widening a gap eats adjacent face area)
+The strain term uses the oracle's max principal strain (FD Jacobian). The material
++ gap terms are analytic / cheap client-side FD (no SOFA call). Strain is minimised
+continuously (not just held under fracture), which also yields a safety margin.
+
+Parameters (physical, metres) — gap + 4 reaches (positive, floored) + 8 free CPs:
+  gap                — rigid face separation along ê_arm [m]
+  s0_top, s0_bot     — upper/lower endpoint reach on face 0 [m]
+  s1_top, s1_bot     — upper/lower endpoint reach on face 1 [m]
+  bc1u/bc2u, bc1l/bc2l — interior Bézier CPs for the upper/lower arcs [m] (absolute XY)
   CP defaults come from the symmetric mesh geometry at the initial gap.
 
 Gradient cost per epoch:
-  POST /apply    →  1 forward pass (1–3 SOFA sims depending on skip_secondary_modes)
-  POST /jacobian →  26 central-FD perturbations × 1 mode = 26 SOFA sims (rotation-only)
-  Total: ~27 SOFA simulations per optimizer step (rotation-only mode).
+  POST /apply    →  1 forward pass (rotation mode)
+  POST /jacobian →  26 central-FD perturbations × 1 mode = 26 SOFA sims (strain only)
+  Total: ~27 SOFA simulations per optimizer step.
 
 Usage
 -----
@@ -75,21 +82,60 @@ _POS_NAMES   = ['gap', 's0_top', 's0_bot', 's1_top', 's1_bot']
 _FREE_NAMES  = ['bc1u_x', 'bc1u_y', 'bc2u_x', 'bc2u_y',
                 'bc1l_x', 'bc1l_y', 'bc2l_x', 'bc2l_y']
 _PARAM_NAMES = _POS_NAMES + _FREE_NAMES            # 13, == _JAC_INPUTS order
-_N_POS       = len(_POS_NAMES)
 
 _JAC_INPUTS  = list(_PARAM_NAMES)
 
 
 # ── Numerics ──────────────────────────────────────────────────────────────────
 
-def _softplus(x: np.ndarray) -> np.ndarray:
-    """Numerically stable log(1 + exp(x))."""
-    return np.log1p(np.exp(-np.abs(x))) + np.maximum(x, 0.0)
+def _phys(params: np.ndarray) -> dict:
+    """13-vector of physical params → name→value dict (keys == schema names)."""
+    return {n: float(v) for n, v in zip(_PARAM_NAMES, params)}
 
 
-def _sigmoid(x: np.ndarray) -> np.ndarray:
-    """Numerically stable 1 / (1 + exp(-x))."""
-    return 1.0 / (1.0 + np.exp(-np.clip(x, -500.0, 500.0)))
+def _bezier_from_phys(phys: dict) -> dict:
+    """Physical param dict → bezier_params for compute_hinge_geometry / the oracle."""
+    return {
+        's0_top': phys['s0_top'], 's0_bot': phys['s0_bot'],
+        's1_top': phys['s1_top'], 's1_bot': phys['s1_bot'],
+        'bc1_up_xy': [phys['bc1u_x'], phys['bc1u_y']],
+        'bc2_up_xy': [phys['bc2u_x'], phys['bc2u_y']],
+        'bc1_lo_xy': [phys['bc1l_x'], phys['bc1l_y']],
+        'bc2_lo_xy': [phys['bc2l_x'], phys['bc2l_y']],
+    }
+
+
+def _hinge_area(phys: dict, cs) -> float:
+    """Hinge-strip area [m²] from the Bézier boundary — analytic, no SOFA.
+
+    Area of the lens between the upper and lower arcs (shoelace on a sampled
+    boundary). Cheap regulariser term that rewards lean hinges.
+    """
+    from nff.sofa.mesh_builder_gmsh import compute_hinge_geometry
+    geo = compute_hinge_geometry(cs, gap=phys['gap'], bezier_params=_bezier_from_phys(phys))
+
+    def _bez(p0, c1, c2, p3, n=40):
+        t = np.linspace(0.0, 1.0, n)[:, None]
+        return (1-t)**3*p0 + 3*(1-t)**2*t*c1 + 3*(1-t)*t**2*c2 + t**3*p3
+
+    total = 0.0
+    for hd in geo['hinge_data']:
+        up = _bez(hd['p0_top'], hd['bc1_up'], hd['bc2_up'], hd['p1_top'])
+        lo = _bez(hd['p0_bot'], hd['bc1_lo'], hd['bc2_lo'], hd['p1_bot'])
+        poly = np.vstack([up, lo[::-1]])
+        x, y = poly[:, 0], poly[:, 1]
+        total += 0.5 * abs(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))
+    return float(total)
+
+
+def _area_grad(params: np.ndarray, cs, eps: float = 1e-5) -> np.ndarray:
+    """d(hinge_area)/d(param) via central FD on the cheap analytic area."""
+    g = np.zeros(len(params))
+    for i in range(len(params)):
+        pp = params.copy(); pp[i] += eps
+        pm = params.copy(); pm[i] -= eps
+        g[i] = (_hinge_area(_phys(pp), cs) - _hinge_area(_phys(pm), cs)) / (2 * eps)
+    return g
 
 
 def _decode_array(v) -> np.ndarray:
@@ -130,7 +176,7 @@ class _NumpyAdam:
 def _call_tesseract_apply(url: str, payload: dict) -> dict:
     """POST /apply and return the OutputSchema as a plain dict."""
     try:
-        resp = requests.post(f"{url}/apply", json={"inputs": payload}, timeout=300)
+        resp = requests.post(f"{url}/apply", json={"inputs": payload}, timeout=600)
         resp.raise_for_status()
         return resp.json()
     except requests.exceptions.ConnectionError:
@@ -157,7 +203,7 @@ def _call_tesseract_jacobian(
     """
     body = {"inputs": payload, "jac_inputs": jac_inputs, "jac_outputs": jac_outputs}
     try:
-        resp = requests.post(f"{url}/jacobian", json=body, timeout=1200)
+        resp = requests.post(f"{url}/jacobian", json=body, timeout=1800)
         resp.raise_for_status()
         return resp.json()
     except requests.exceptions.ConnectionError:
@@ -278,23 +324,6 @@ def _build_tesseract_payload(
     }
 
 
-# ── Latent-to-physical Jacobian ───────────────────────────────────────────────
-
-def _lat_to_phys_jacobian(latent: np.ndarray, pos_scale: np.ndarray) -> np.ndarray:
-    """13×13 diagonal Jacobian: d(physical) / d(latent).
-
-    The first 5 params (gap, s0_top, s0_bot, s1_top, s1_bot) are positive via
-    softplus: phys = softplus(lat) * scale → d(phys)/d(lat) = sigmoid(lat)*scale.
-    The remaining 8 CP coordinates map identically (latent == physical).
-    """
-    J = np.zeros((13, 13), dtype=np.float64)
-    diag_pos = _sigmoid(latent[:_N_POS]) * pos_scale
-    J[np.arange(_N_POS), np.arange(_N_POS)] = diag_pos
-    for i in range(_N_POS, 13):
-        J[i, i] = 1.0
-    return J
-
-
 # ── Optimization loop ─────────────────────────────────────────────────────────
 
 def run_optimization(
@@ -306,8 +335,6 @@ def run_optimization(
 ) -> dict:
     sofa_cfg = cfg.get('sofa', {})
     mat_cfg  = cfg.get('material', {})
-
-    yield_str = float(mat_cfg.get('yield_strength', 50e6))
 
     cs_static = build_physical_cs(cfg)
 
@@ -339,87 +366,117 @@ def run_optimization(
     clamped_faces = sorted({int(f) for f in cs_static.constrained_face_DOF_pairs[:, 0]})
     loaded_faces  = sorted({int(f) for f in cs_static.loaded_face_DOF_pairs[:, 0]})
 
-    # ── Latent space ──────────────────────────────────────────────────────────
-    # softplus(0) = log(2) → scale = init / softplus(0) so that lat=0 → init.
-    sp0 = np.log(2.0)
-    pos_scale = np.where(pos_init > 0, pos_init / sp0, 1.0)
-    # lat0 for positive dims: 0 if init>0 (→ softplus(0)*scale=init), else -5.
-    latent = np.concatenate([
-        np.where(pos_init > 0, 0.0, -5.0),
-        free_init,                       # identity mapping — latent = physical
-    ]).astype(np.float64)
+    # ── Parameters live directly in physical space (metres) ───────────────────
+    # No softplus — Adam moves every coordinate at a comparable ~lr/step rate, so
+    # gap and the boundary reaches actually move. Positivity is enforced by
+    # projecting (clipping) gap + reaches to a floor after each step.
+    params   = np.concatenate([pos_init, free_init]).astype(np.float64)
+    pos_mask = np.array([n in _POS_NAMES for n in _PARAM_NAMES])  # gap + 4 reaches
+    floor    = float(sofa_cfg.get('param_floor', 0.0005))         # 0.5 mm min
 
-    def to_physical(lat: np.ndarray) -> dict:
-        """13-element latent → physical param dict (keys == schema names)."""
-        pos  = _softplus(lat[:_N_POS]) * pos_scale
-        free = lat[_N_POS:]
-        return {name: float(v) for name, v in
-                zip(_PARAM_NAMES, np.concatenate([pos, free]))}
+    # ── Loss weights + the strain-fracture reference ──────────────────────────
+    loss_cfg = cfg.get('loss', {})
+    w_strain = float(loss_cfg.get('w_strain', 5.0))   # minimise peak strain (durability)
+    w_mat    = float(loss_cfg.get('w_mat',    2.0))   # material (lean hinge)
+    w_gap    = float(loss_cfg.get('w_gap',    0.5))   # keep the face gap small/controlled
+    eps_frac = float(mat_cfg.get('fracture_strain', 0.045))
+    gap_ref  = max(gap_init, 1e-6)
+    area_ref = max(_hinge_area(_phys(params), cs_static), 1e-12)
+    # Degeneracy guard: stop rewarding material reduction below this floor — a
+    # too-small hinge is unmanufacturable and makes the SOFA solve ill-conditioned.
+    area_min = float(loss_cfg.get('min_hinge_area_m2', 20e-6))   # 20 mm²
 
     optimizer = _NumpyAdam(lr)
     history: dict = {k: [] for k in _PARAM_NAMES + [
-        'total_loss', 'energy_rot', 'max_vm_rot']}
+        'total_loss', 'loss_strain', 'loss_mat', 'loss_gap',
+        'max_strain', 'max_vm_rot', 'hinge_area']}
 
-    _p0 = to_physical(latent)
-    print(f"\nHinge optimization (corner-hinge cubic Bézier, 13-param): {n_epochs} epochs, lr={lr}")
+    _p0 = _phys(params)
+    print(f"\nHinge optimization (13-param, physical space): {n_epochs} epochs, lr={lr}")
     print(f"  Tesseract URL: {tesseract_url}")
-    print(f"  loss = σ_max / σ_yield  (minimize peak hinge stress; < 1 → survives)")
+    print(f"  loss = {w_strain}·(ε_max/{eps_frac}) + {w_mat}·area/area₀ + {w_gap}·(gap/gap₀)²")
     print(f"  Initial: gap={_p0['gap']*1e3:.2f} mm  "
           f"reach s0=({_p0['s0_top']*1e3:.2f},{_p0['s0_bot']*1e3:.2f}) "
-          f"s1=({_p0['s1_top']*1e3:.2f},{_p0['s1_bot']*1e3:.2f}) mm")
-    print(f"           bc1_up=({_p0['bc1u_x']*1e3:.1f}, {_p0['bc1u_y']*1e3:.1f}) mm  "
-          f"bc2_up=({_p0['bc2u_x']*1e3:.1f}, {_p0['bc2u_y']*1e3:.1f}) mm")
-    print(f"           bc1_lo=({_p0['bc1l_x']*1e3:.1f}, {_p0['bc1l_y']*1e3:.1f}) mm  "
-          f"bc2_lo=({_p0['bc2l_x']*1e3:.1f}, {_p0['bc2l_y']*1e3:.1f}) mm\n")
+          f"s1=({_p0['s1_top']*1e3:.2f},{_p0['s1_bot']*1e3:.2f}) mm  "
+          f"area={area_ref*1e6:.1f} mm²\n")
+
+    def _get_val(v):
+        if isinstance(v, dict):
+            if 'data' in v and 'buffer' in v['data']: return float(v['data']['buffer'])
+            if 'value' in v: return float(v['value'])
+        return float(v)
+
+    def _save_convergence():
+        np.savez(
+            str(out_dir / 'convergence.npz'),
+            **{name: np.array(history[name]) for name in _PARAM_NAMES},
+            total_loss      = np.array(history['total_loss']),
+            loss_strain     = np.array(history['loss_strain']),
+            loss_mat        = np.array(history['loss_mat']),
+            loss_gap        = np.array(history['loss_gap']),
+            max_strain      = np.array(history['max_strain']),
+            max_vm_rot      = np.array(history['max_vm_rot']),
+            hinge_area      = np.array(history['hinge_area']),
+            fracture_strain = np.array(eps_frac),
+            stress          = np.array(history['max_vm_rot']),   # backward-compat alias
+        )
 
     for epoch in range(n_epochs):
-        phys    = to_physical(latent)
+        phys    = _phys(params)
         payload = _build_tesseract_payload(cs_static, phys, cfg, clamped_faces, loaded_faces)
 
-        # ── Forward pass: all metrics ─────────────────────────────────────────
-        fwd    = _call_tesseract_apply(tesseract_url, payload)
-        def _get_val(v):
-            if isinstance(v, dict):
-                if 'data' in v and 'buffer' in v['data']: return float(v['data']['buffer'])
-                if 'value' in v: return float(v['value'])
-            return float(v)
-        
-        e_rot    = _get_val(fwd['strain_energy'])
-        max_vm   = _get_val(fwd['max_von_mises_stress'])
-        # Objective: keep the hinge below yield while the panels close (displacement-
-        # controlled rotation already forces the closing motion). loss = σ_max/σ_yield;
-        # < 1 → survives, > 1 → breaks.
-        loss     = max_vm / yield_str
+        # ── Oracle calls (apply + strain Jacobian) — robust to a hung sim ──────
+        try:
+            fwd = _call_tesseract_apply(tesseract_url, payload)
+            jac = _call_tesseract_jacobian(
+                tesseract_url, payload, _JAC_INPUTS, ['max_principal_strain'])
+        except Exception as ex:
+            print(f"  epoch {epoch+1}: oracle call failed ({type(ex).__name__}: {ex}); "
+                  "stopping early — keeping the epochs completed so far.")
+            break
 
-        # ── Backward pass: Jacobian from Tesseract ────────────────────────────
-        jac = _call_tesseract_jacobian(
-            tesseract_url, payload, _JAC_INPUTS, ['max_von_mises_stress'])
+        max_vm  = _get_val(fwd['max_von_mises_stress'])
+        strain  = _get_val(fwd['max_principal_strain'])
+        area    = _hinge_area(phys, cs_static)
+        gp      = phys['gap']
 
-        # d(loss)/d(param) = (1/σ_yield) · d(σ_max)/d(param), ordered as _JAC_INPUTS.
+        # loss = w_strain·(ε/ε_frac)  +  w_mat·area/area₀  +  w_gap·(gap/gap₀)²
+        # Strain is minimised CONTINUOUSLY (lower stress = more failure margin).
+        l_strain = w_strain * strain / eps_frac
+        l_mat    = w_mat * area / area_ref
+        l_gap    = w_gap * (gp / gap_ref) ** 2
+        loss     = l_strain + l_mat + l_gap
+
+        # ── Gradients ─────────────────────────────────────────────────────────
         def _jac_val(output_key, inp_key):
-            if output_key not in jac:
-                return 0.0
-            return _get_val(jac[output_key][inp_key])
+            return _get_val(jac[output_key][inp_key]) if output_key in jac else 0.0
+        dstrain  = np.array([_jac_val('max_principal_strain', ki) for ki in _JAC_INPUTS])
+        d_strain = (w_strain / eps_frac) * dstrain
+        # Material + gap terms are analytic / cheap-FD (no SOFA). Degeneracy guard:
+        # stop the material pull once the hinge is at the min area (else it collapses).
+        d_mat    = (np.zeros(13) if area <= area_min
+                    else (w_mat / area_ref) * _area_grad(params, cs_static))
+        d_gap    = np.zeros(13); d_gap[0] = w_gap * 2.0 * gp / gap_ref ** 2
+        grad     = d_strain + d_mat + d_gap
 
-        dloss_dphys = np.array(
-            [_jac_val('max_von_mises_stress', ki) / yield_str for ki in _JAC_INPUTS],
-            dtype=np.float64)
+        params = optimizer.update(params, grad)
+        params[pos_mask] = np.maximum(params[pos_mask], floor)   # project to positivity
 
-        # Chain through latent space: d(loss)/d(lat) = J_phys_lat.T @ d(loss)/d(phys)
-        J_phys_lat = _lat_to_phys_jacobian(latent, pos_scale)
-        dloss_dlat = J_phys_lat.T @ dloss_dphys
-
-        latent = optimizer.update(latent, dloss_dlat)
-
-        # ── Record ────────────────────────────────────────────────────────────
+        # ── Record + save every epoch (a crash never loses everything) ────────
         for name in _PARAM_NAMES:
             history[name].append(phys[name])
         history['total_loss'].append(loss)
-        history['energy_rot'].append(e_rot)
+        history['loss_strain'].append(l_strain)
+        history['loss_mat'].append(l_mat)
+        history['loss_gap'].append(l_gap)
+        history['max_strain'].append(strain)
         history['max_vm_rot'].append(max_vm)
+        history['hinge_area'].append(area)
+        _save_convergence()
 
         print(f"  epoch {epoch+1:3d}/{n_epochs}  "
-              f"loss=σ/σy={loss:.3f}  σ_max={max_vm/1e6:.1f} MPa  "
+              f"loss={loss:.3f} (str={l_strain:.2f} mat={l_mat:.2f} gap={l_gap:.2f})  "
+              f"ε_max={strain*100:.2f}%  σ_max={max_vm/1e6:.0f} MPa  area={area*1e6:.1f} mm²  "
               f"gap={phys['gap']*1e3:.3f} mm  "
               f"s0=({phys['s0_top']*1e3:.2f},{phys['s0_bot']*1e3:.2f}) "
               f"s1=({phys['s1_top']*1e3:.2f},{phys['s1_bot']*1e3:.2f}) mm  "
@@ -428,18 +485,12 @@ def run_optimization(
               f"bc1_lo=({phys['bc1l_x']*1e3:.2f},{phys['bc1l_y']*1e3:.2f})  "
               f"bc2_lo=({phys['bc2l_x']*1e3:.2f},{phys['bc2l_y']*1e3:.2f}) mm")
 
-    np.savez(
-        str(out_dir / 'convergence.npz'),
-        **{name: np.array(history[name]) for name in _PARAM_NAMES},
-        total_loss     = np.array(history['total_loss']),     # σ_max / σ_yield
-        energy_rot     = np.array(history['energy_rot']),
-        max_vm_rot     = np.array(history['max_vm_rot']),
-        yield_strength = np.array(yield_str),
-        stress         = np.array(history['max_vm_rot']),     # backward-compat alias
-    )
+    if not history['total_loss']:
+        print("No epochs completed — aborting before final-state capture.")
+        return history
 
-    # ── Final state at the best design — capture the von Mises field for viz ──
-    best_idx  = int(np.argmin(history['max_vm_rot']))
+    # ── Final state at the best (lowest-loss) design — capture field for viz ──
+    best_idx  = int(np.argmin(history['total_loss']))
     best_phys = {name: float(history[name][best_idx]) for name in _PARAM_NAMES}
     print(f"\nCapturing final-state field at best design (epoch {best_idx + 1}) ...")
     payload = _build_tesseract_payload(cs_static, best_phys, cfg, clamped_faces, loaded_faces)
@@ -461,8 +512,9 @@ def run_optimization(
             constrained_face_DOF_pairs = cs_static.constrained_face_DOF_pairs,
             loaded_face_DOF_pairs      = cs_static.loaded_face_DOF_pairs,
         )
-        print(f"  final_state.npz saved ({len(history['max_vm_rot'])} epochs, "
-              f"σ_max={history['max_vm_rot'][best_idx]/1e6:.1f} MPa).")
+        print(f"  final_state.npz saved (best epoch {best_idx + 1}: "
+              f"ε_max={history['max_strain'][best_idx]*100:.2f}%, "
+              f"area={history['hinge_area'][best_idx]*1e6:.1f} mm²).")
     except Exception as ex:
         print(f"  WARNING: final-state field capture failed ({ex}); "
               "visualizer will skip the von Mises panel.")
@@ -512,10 +564,12 @@ def main() -> None:
 
     history = run_optimization(cfg, n_epochs, lr, url, out_dir)
 
-    best_idx = int(np.argmin(history['max_vm_rot']))
+    best_idx = int(np.argmin(history['total_loss']))
     b = lambda k: history[k][best_idx] * 1e3
     print(f'\nBest (epoch {best_idx + 1}): '
-          f'σ_max={history["max_vm_rot"][best_idx]:.4e} Pa  '
+          f'loss={history["total_loss"][best_idx]:.3f}  '
+          f'ε_max={history["max_strain"][best_idx]*100:.2f}%  '
+          f'area={history["hinge_area"][best_idx]*1e6:.1f} mm²  '
           f'gap={b("gap"):.3f} mm  '
           f's0=({b("s0_top"):.2f},{b("s0_bot"):.2f}) s1=({b("s1_top"):.2f},{b("s1_bot"):.2f}) mm  '
           f'bc1_up=({b("bc1u_x"):.2f},{b("bc1u_y"):.2f}) bc2_up=({b("bc2u_x"):.2f},{b("bc2u_y"):.2f}) mm  '
