@@ -285,6 +285,12 @@ class OutputSchema(BaseModel):
         description="Peak max-principal Green-Lagrange strain (rotation mode) [–]. "
                     "Compare to fracture strain (~0.045 PLA) for the 'breaks' criterion.",
     )
+    smooth_principal_strain: Differentiable[Float64] = Field(
+        description="Smooth (Kreisselmeier-Steinhauser) aggregate of per-tet max-principal "
+                    "strain (rotation mode) [–]. Continuous/differentiable surrogate of "
+                    "max_principal_strain — use as the DESIGN objective to avoid the "
+                    "argmax-switching noise that makes the hard max a sawtooth.",
+    )
     # ── Shear mode ────────────────────────────────────────────────────────────
     energy_shear: Differentiable[Float64] = Field(
         description="Total SvK elastic energy under shear loading [J].",
@@ -420,6 +426,7 @@ def apply(inputs: InputSchema) -> OutputSchema:
         max_z_displacement   = float(res_rot['max_z_displacement']),
         first_yield_fraction = float(res_rot['first_yield_fraction']),
         max_principal_strain = float(res_rot['max_principal_strain']),
+        smooth_principal_strain = float(res_rot['smooth_principal_strain']),
         energy_shear         = e_shear,
         energy_tension       = e_tension,
         von_mises_field      = vm_field,

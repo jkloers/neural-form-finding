@@ -22,7 +22,8 @@ try:
 except ImportError as e:
     sys.exit(f"Cannot import SOFA: {e}\nRun via ./sofa/run_sofa.sh")
 
-from materials     import svk_energy, vm_stress_per_tet, max_principal_strain_per_tet
+from materials     import (svk_energy, vm_stress_per_tet, max_principal_strain_per_tet,
+                            aggregate_strain_ks)
 from scene_builder import build_scene, N_STEPS_DEFAULT, DT
 
 _SOFA_LOCK = threading.Lock()
@@ -107,6 +108,7 @@ def evaluate_unit_cell(
     max_vm   = float(np.max(vm))
     eps      = max_principal_strain_per_tet(nodes, nodes_cur, tets)
     max_eps  = float(np.max(eps))
+    smooth_eps = aggregate_strain_ks(eps)   # smooth surrogate of max_eps for design
 
     _clamped  = bc_masks.get('clamped', bc_masks.get('f0', np.zeros(len(nodes), dtype=bool)))
     free_mask = ~_clamped
@@ -125,6 +127,7 @@ def evaluate_unit_cell(
         "strain_energy":        strain_e,
         "max_von_mises_stress": max_vm,
         "max_principal_strain": max_eps,
+        "smooth_principal_strain": smooth_eps,
         "max_xy_displacement":  max_xy,
         "max_z_displacement":   max_z,
         "first_yield_fraction": max_vm / yield_strength,

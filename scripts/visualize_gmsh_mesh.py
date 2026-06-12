@@ -13,6 +13,8 @@ Run:
     python scripts/visualize_gmsh_mesh.py
 """
 import sys, types
+from collections import Counter
+
 import matplotlib; matplotlib.use('Agg')
 import numpy as np
 import matplotlib.pyplot as plt
@@ -29,6 +31,7 @@ arm    = 0.003
 # ── build mesh ────────────────────────────────────────────────────────────────
 sys.path.insert(0, 'sofa')
 from nff.sofa.mesh_builder_gmsh import build_mesh_gmsh, compute_hinge_geometry
+from nff.sofa.hinge_viz import quad_bezier
 
 cs = types.SimpleNamespace(
     face_centroids             = np.array([[70.71e-3,70.71e-3],[212.13e-3,70.71e-3]]),
@@ -60,7 +63,6 @@ def _audit(nodes, tets):
     es = np.sum((p[:,[0,0,0,1,1,2]] - p[:,[1,2,3,2,3,3]])**2, axis=(1,2))
     q = 12*(3*av)**(2/3) / es
     ref = np.zeros(len(nodes), bool); ref[tets.ravel()] = True
-    from collections import Counter
     fc = Counter(map(tuple, np.sort(np.concatenate(
         [tets[:,[0,1,2]],tets[:,[0,1,3]],tets[:,[0,2,3]],tets[:,[1,2,3]]]), axis=1)))
     nonmanifold = sum(1 for c in fc.values() if c > 2)
@@ -82,15 +84,11 @@ print(f'Audit: inverted={a["inverted"]} unreferenced={a["unref"]} '
 # Lower arc:  p0_bot (face fi lower edge) → p1_bot (face fk lower edge)
 geo = compute_hinge_geometry(cs, gap=arm, bezier_params=None)
 
-def _bez(p0, c, p2, n=300):
-    t = np.linspace(0,1,n+1)[:,None]
-    return (1-t)**2*p0 + 2*(1-t)*t*c + t**2*p2
-
 arcs = []
 for hd in geo['hinge_data']:
     arcs.append(dict(
-        up=_bez(hd['p0_top'], hd['bc_up'], hd['p1_top']) * 1000,
-        lo=_bez(hd['p0_bot'], hd['bc_lo'], hd['p1_bot']) * 1000,
+        up=quad_bezier(hd['p0_top'], hd['bc_up'], hd['p1_top'], n=300) * 1000,
+        lo=quad_bezier(hd['p0_bot'], hd['bc_lo'], hd['p1_bot'], n=300) * 1000,
         uc=np.array([hd['p0_top'], hd['bc_up'], hd['p1_top']]) * 1000,
         lc=np.array([hd['p0_bot'], hd['bc_lo'], hd['p1_bot']]) * 1000,
         anchors=np.array([hd['p0_top'], hd['p1_top'],

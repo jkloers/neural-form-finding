@@ -29,11 +29,10 @@ from matplotlib.collections import PolyCollection, LineCollection
 
 REPO = pathlib.Path(__file__).parent.parent
 sys.path.insert(0, str(REPO))
-sys.path.insert(0, str(REPO / 'scripts'))
 
-from sofa.hinge_optimizer import (build_physical_cs, _build_tesseract_payload,
-                                  _call_tesseract_apply, _decode_array, _PARAM_NAMES)
-from visualize_hinge_run import _bottom_tris, _edges, P_BG, P_DARK
+from nff.sofa import tesseract_client as tc
+from nff.sofa.fatigue import cycles_to_failure
+from nff.sofa.hinge_viz import bottom_tris, edges, P_BG, P_DARK
 
 OUTPUTS = REPO / 'data' / 'outputs' / 'hinge_opt'
 
@@ -49,23 +48,6 @@ C_SVK     = '#6C757D'   # gray — beyond St-Venant–Kirchhoff validity
 SVK_VALID_STRAIN = 0.20
 
 
-def _scalar(v):
-    """Decode a Tesseract scalar diff output (mirrors the optimizer's _get_val)."""
-    if isinstance(v, dict):
-        if 'data' in v and 'buffer' in v['data']:
-            return float(v['data']['buffer'])
-        if 'value' in v:
-            return float(v['value'])
-    return float(v)
-
-
-def _cycles_to_failure(eps_p, fat_ef, fat_c):
-    """Coffin-Manson low-cycle fatigue: N_f = ½·(ε_plastic/ε_f')^(1/c)."""
-    if eps_p <= 0.0:
-        return np.inf
-    return 0.5 * (eps_p / fat_ef) ** (1.0 / fat_c)
-
-
 def _latest_run():
     runs = sorted(d for d in OUTPUTS.iterdir() if (d / 'convergence.npz').exists())
     if not runs:
@@ -76,10 +58,10 @@ def _latest_run():
 def capture_closing(run_dir, url, max_angle, frames):
     """Sweep the rotation angle on the run's best design; return per-angle states."""
     cfg = yaml.safe_load(open(run_dir / 'config.yaml'))
-    cs = build_physical_cs(cfg)
+    cs = tc.build_physical_cs(cfg)
     conv = np.load(run_dir / 'convergence.npz')
     best = int(np.argmin(conv['total_loss']))
-    best_phys = {n: float(conv[n][best]) for n in _PARAM_NAMES}
+    best_phys = {n: float(conv[n][best]) for n in tc.PARAM_NAMES}
     clamped = sorted({int(f) for f in cs.constrained_face_DOF_pairs[:, 0]})
     loaded  = sorted({int(f) for f in cs.loaded_face_DOF_pairs[:, 0]})
 
@@ -88,15 +70,15 @@ def capture_closing(run_dir, url, max_angle, frames):
           f'(epoch {best + 1}) ...')
     states = []
     for a in angles:
-        payload = _build_tesseract_payload(cs, best_phys, cfg, clamped, loaded)
+        payload = tc.build_payload(cs, best_phys, cfg, clamped, loaded)
         payload['rotation_angle_deg']   = float(a)
         payload['return_fields']        = True
         payload['skip_secondary_modes'] = True
-        fwd = _call_tesseract_apply(url, payload)
-        nodes = _decode_array(fwd['deformed_nodes'])
-        vm    = _decode_array(fwd['von_mises_field'])
-        tets  = _decode_array(fwd['mesh_tets'])
-        strain = _scalar(fwd['max_principal_strain'])
+        fwd = tc.apply(url, payload)
+        nodes = tc.decode_array(fwd['deformed_nodes'])
+        vm    = tc.decode_array(fwd['von_mises_field'])
+        tets  = tc.decode_array(fwd['mesh_tets'])
+        strain = tc.decode_scalar(fwd['max_principal_strain'])
         states.append((nodes, vm, tets, float(a), strain))
         print(f'  {a:5.1f}°  →  max σ = {vm.max()/1e6:6.1f} MPa   ε_max = {strain*100:5.1f} %')
     return states
@@ -105,8 +87,8 @@ def capture_closing(run_dir, url, max_angle, frames):
 def animate_closing(states, out, fps=6):
     """Animate the closing: wide view (panels swinging shut) + zoom (stress in hinge)."""
     # Connectivity is constant across angles — compute the bottom-tri map once.
-    tri, owner = _bottom_tris(states[0][0], states[0][2])
-    edg = _edges(tri)
+    tri, owner = bottom_tris(states[0][0], states[0][2])
+    edg = edges(tri)
     vmax = max(float(s[1].max()) for s in states) / 1e6   # fixed colour scale [MPa]
 
     allxy = np.vstack([s[0][:, :2] * 1000 for s in states])
@@ -150,7 +132,7 @@ def animate_closing(states, out, fps=6):
         pcW.set_verts(xy[tri]); pcW.set_array(arr)
         pcZ.set_verts(xy[tri]); pcZ.set_array(arr)
         lcZ.set_segments(xy[edg])
-        ann.set_text(f'{a:.0f}°   (σ_max {vm.max()/1e6:.0f} MPa)')
+        ann.set_text(f'{a:.0f}°')
         return ()
 
     anim = manim.FuncAnimation(fig, update, frames=len(states), blit=False)
@@ -166,8 +148,8 @@ def animate_behavior(states, eps_yield, fat_ef, fat_c, out, fps=6):
     elastic / plastic regimes, with the SvK validity ceiling and a live cycles-
     to-failure readout — the rigorous "how it behaves physically" story.
     """
-    tri, owner = _bottom_tris(states[0][0], states[0][2])
-    edg = _edges(tri)
+    tri, owner = bottom_tris(states[0][0], states[0][2])
+    edg = edges(tri)
     vmax = max(float(s[1].max()) for s in states) / 1e6
     angles = np.array([s[3] for s in states])
     strain = np.array([s[4] for s in states])
@@ -236,7 +218,7 @@ def animate_behavior(states, eps_yield, fat_ef, fat_c, out, fps=6):
         line.set_data(angles[:i + 1], strain[:i + 1] * 100)
         mark.set_data([a], [e * 100])
         eps_p = max(0.0, e - eps_yield)
-        nf = _cycles_to_failure(eps_p, fat_ef, fat_c)
+        nf = cycles_to_failure(eps_p, fat_ef, fat_c)
         if e < eps_yield:
             txt = f'{a:.0f}°    ε = {e*100:.1f}%\nelastic · unlimited cycles'
         else:

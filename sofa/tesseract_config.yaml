@@ -1,5 +1,5 @@
 name: nff-sofa-oracle
-version: "0.7.0"
+version: "0.8.0"
 description: |
   High-fidelity SOFA physics oracle for the Neural Form-Finding (NFF) pipeline.
 

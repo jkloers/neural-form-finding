@@ -30,18 +30,11 @@ from matplotlib.collections import PolyCollection, LineCollection
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 from nff.sofa.mesh_builder_gmsh import build_mesh_gmsh, compute_hinge_geometry
+from nff.sofa.hinge_viz import (P_ORANGE, P_GRAY, P_EDGE, P_DARK, P_BG, ARROW_RED,
+                                GREEN_UP, GREEN_LO, CP_COL,
+                                bottom_tris, edges, quad_bezier, draw_bezier_arcs, hide_axes)
 
-# ── Princeton palette (mirrors nff/utils/visualization.py) ─────────────────────
-P_ORANGE = "#F58025"   # free / loaded panels AND hinge mesh fill
-P_GRAY   = "#6C757D"   # clamped face
-P_EDGE   = "#1A1A1A"   # mesh edges
-P_DARK   = "#1A1A1A"
-P_BG     = "#FFFFFF"
-ARROW_RED = "#D62828"  # positive-moment arrow
-GREEN_UP  = "#1B6B3A"  # upper strip (dark Princeton green)
-GREEN_LO  = "#5CB87F"  # lower strip (light Princeton green)
-CP_COL    = "#16324A"  # Bézier control points / polygons
-# Loss colour — peak-stress band (orange, matching the main pipeline positive term)
+# Loss colours — peak-stress band (orange) + total line.
 LOSS_STRESS, LOSS_TOT = '#E07B39', '#111111'
 
 plt.rcParams.update({'font.family': 'serif', 'axes.linewidth': 1.0,
@@ -84,75 +77,12 @@ def _bezier_params(conv, idx) -> tuple:
     return g, bp
 
 
-# ── mesh-rendering helpers ──────────────────────────────────────────────────────
-
-def _bottom_tris(nodes, tets):
-    """Boundary triangles on the bottom (z≈min) layer + their owning tet index."""
-    faces = {}
-    for ti, t in enumerate(tets):
-        for c in ((0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3)):
-            f = tuple(sorted((int(t[c[0]]), int(t[c[1]]), int(t[c[2]]))))
-            faces.setdefault(f, []).append(ti)
-    zmin = nodes[:, 2].min()
-    bot = nodes[:, 2] < zmin + 1e-6
-    tri, owner = [], []
-    for f, tis in faces.items():
-        if len(tis) == 1 and bot[f[0]] and bot[f[1]] and bot[f[2]]:
-            tri.append(f); owner.append(tis[0])
-    return np.array(tri), np.array(owner)
-
-
-def _edges(tri):
-    e = np.sort(np.concatenate([tri[:, [0, 1]], tri[:, [1, 2]], tri[:, [0, 2]]]), axis=1)
-    return np.unique(e, axis=0)
-
-
-def _bez(p0, c, p2, n=200):
-    t = np.linspace(0, 1, n)[:, None]
-    return (1-t)**2*p0 + 2*(1-t)*t*c + t**2*p2
-
-
-def _draw_arcs(ax, geo, scale=1000.0, control_points=False):
-    """Draw the two quadratic Bézier strips (upper=dark green, lower=light green).
-
-    control_points=True also shows the endpoints + the single interior CP per arc
-    with thin control polygons.
-    """
-    for hd in geo['hinge_data']:
-        top_keys = ('p0_top', 'bc_up', 'p1_top')
-        bot_keys = ('p0_bot', 'bc_lo', 'p1_bot')
-        # Dark green = the visually-upper strip (internal up/lo follows the cell's
-        # perpendicular axis, which may sit either way round in world XY).
-        top_y = 0.5 * (hd['p0_top'][1] + hd['p1_top'][1])
-        bot_y = 0.5 * (hd['p0_bot'][1] + hd['p1_bot'][1])
-        order = ([(top_keys, GREEN_UP), (bot_keys, GREEN_LO)] if top_y >= bot_y
-                 else [(bot_keys, GREEN_UP), (top_keys, GREEN_LO)])
-        for keys, col in order:
-            p0, c, p2 = (hd[k] for k in keys)
-            arc = _bez(p0, c, p2) * scale
-            ax.plot(arc[:, 0], arc[:, 1], '-', color=col, lw=2.8, zorder=9)
-            if control_points:
-                poly = np.array([p0, c, p2]) * scale
-                ax.plot(poly[:, 0], poly[:, 1], '--', color=CP_COL, lw=0.9,
-                        alpha=0.55, zorder=10)
-                # endpoints (squares) + the single interior control point (circle)
-                ax.plot(poly[[0, 2], 0], poly[[0, 2], 1], 's', color=CP_COL,
-                        ms=7, zorder=12, markeredgecolor='white', markeredgewidth=1)
-                ax.plot(poly[1, 0], poly[1, 1], 'o', color=CP_COL,
-                        ms=7, zorder=12, markeredgecolor='white', markeredgewidth=1)
-
-
-def _noaxis(ax):
-    ax.set_aspect('equal')
-    ax.axis('off')
-
-
 # ── Panel 1 — initial state + boundary conditions ──────────────────────────────
 
 def plot_initial_state(run_dir, cs, conv, out):
     g, bp = _bezier_params(conv, 0)
     nodes, tets, bc = build_mesh_gmsh(cs, gap=g, bezier_params=bp, n_z_layers=1)
-    tri, _ = _bottom_tris(nodes, tets)
+    tri, _ = bottom_tris(nodes, tets)
     xy = nodes[:, :2] * 1000
 
     # Clamped face gray; loaded face + hinge orange (matches main pipeline).
@@ -183,7 +113,7 @@ def plot_initial_state(run_dir, cs, conv, out):
         ax.annotate('M', cxy, ha='center', va='center', fontsize=12,
                     fontweight='bold', color=ARROW_RED, zorder=14)
 
-    ax.autoscale(); _noaxis(ax)
+    ax.autoscale(); hide_axes(ax)
     ax.set_title('Initial state', fontsize=13, fontweight='bold', color=P_DARK, pad=6)
     fig.tight_layout(); fig.savefig(out, dpi=160, bbox_inches='tight', facecolor=P_BG)
     plt.close(fig); print(f'  → {out.name}')
@@ -228,7 +158,7 @@ def plot_final_hinge(run_dir, cs, conv, best, out):
     g, bp = _bezier_params(conv, best)
     nodes, tets, bc = build_mesh_gmsh(cs, gap=g, bezier_params=bp, n_z_layers=1)
     geo = compute_hinge_geometry(cs, gap=g, bezier_params=bp)
-    tri, _ = _bottom_tris(nodes, tets)
+    tri, _ = bottom_tris(nodes, tets)
     xy = nodes[:, :2] * 1000
     hinge = ~bc['clamped'] & ~bc['loaded']
     # Hinge mesh in Princeton orange; flanking panels a faint gray.
@@ -237,15 +167,15 @@ def plot_final_hinge(run_dir, cs, conv, best, out):
     fig, ax = plt.subplots(figsize=(7.2, 6.6))
     ax.add_collection(PolyCollection(xy[tri], facecolors=fc, alpha=0.85,
                                      edgecolors='none', zorder=1))
-    ax.add_collection(LineCollection(xy[_edges(tri)], colors='white', lw=0.45,
+    ax.add_collection(LineCollection(xy[edges(tri)], colors='white', lw=0.45,
                                      alpha=0.7, zorder=2))
-    _draw_arcs(ax, geo, control_points=True)
+    draw_bezier_arcs(ax, geo, control_points=True)
 
     hd = geo['hinge_data'][0]
     cx, cy = hd['corner'] * 1000
     pad = max(g * 1000 * 3.2, 7.0)
     ax.set_xlim(cx - pad, cx + pad); ax.set_ylim(cy - pad, cy + pad)
-    _noaxis(ax)
+    hide_axes(ax)
     ax.set_title('Optimal hinge', fontsize=13, fontweight='bold', color=P_DARK, pad=6)
     ax.legend(handles=[
         plt.Line2D([0], [0], color=GREEN_UP, lw=2.8, label='upper strip'),
@@ -265,7 +195,7 @@ def plot_von_mises(run_dir, fs, out):
     if nodes.size == 0 or tets.size == 0:
         print('  (no field in final_state.npz — skipping von_mises.png)')
         return
-    tri, owner = _bottom_tris(nodes, tets)
+    tri, owner = bottom_tris(nodes, tets)
     xy = nodes[:, :2] * 1000
     vm_mpa = vm[owner] / 1e6
 
@@ -273,7 +203,7 @@ def plot_von_mises(run_dir, fs, out):
     pc = PolyCollection(xy[tri], array=vm_mpa, cmap='magma',
                         edgecolors='none', zorder=1)
     ax.add_collection(pc)
-    ax.add_collection(LineCollection(xy[_edges(tri)], colors='white', lw=0.2,
+    ax.add_collection(LineCollection(xy[edges(tri)], colors='white', lw=0.2,
                                      alpha=0.35, zorder=2))
     cb = fig.colorbar(pc, ax=ax, fraction=0.046, pad=0.02)
     cb.set_label('von Mises stress [MPa]', fontsize=9)
@@ -285,7 +215,7 @@ def plot_von_mises(run_dir, fs, out):
     c = 0.5 * (pts.min(0) + pts.max(0))
     half = 0.6 * float(np.ptp(pts, axis=0).max()) + 3.0
     ax.set_xlim(c[0] - half, c[0] + half); ax.set_ylim(c[1] - half, c[1] + half)
-    _noaxis(ax)
+    hide_axes(ax)
     ax.set_title('Final state — von Mises stress', fontsize=13, fontweight='bold',
                  color=P_DARK, pad=6)
     fig.tight_layout(); fig.savefig(out, dpi=160, bbox_inches='tight', facecolor=P_BG)
@@ -311,7 +241,7 @@ def animate_training(run_dir, cs, conv, out, fps=3):
         g, bp = _bezier_params(conv, e)
         nodes, tets, bc = build_mesh_gmsh(cs, gap=g, bezier_params=bp, n_z_layers=1)
         geo = compute_hinge_geometry(cs, gap=g, bezier_params=bp)
-        tri, _ = _bottom_tris(nodes, tets)
+        tri, _ = bottom_tris(nodes, tets)
         hinge = ~bc['clamped'] & ~bc['loaded']
         frames.append((nodes[:, :2] * 1000, tri, hinge, geo))
     # Fixed, hinge-centred view across all frames so it doesn't jump. Size it from
@@ -359,11 +289,11 @@ def animate_training(run_dir, cs, conv, out, fps=3):
         fc = [P_ORANGE if hinge[t].mean() > 0.5 else '#ECECEC' for t in tri]
         axh.add_collection(PolyCollection(xy[tri], facecolors=fc, alpha=0.85,
                                           edgecolors='none', zorder=1))
-        axh.add_collection(LineCollection(xy[_edges(tri)], colors='white', lw=0.4,
+        axh.add_collection(LineCollection(xy[edges(tri)], colors='white', lw=0.4,
                                           alpha=0.7, zorder=2))
-        _draw_arcs(axh, geo, control_points=True)
+        draw_bezier_arcs(axh, geo, control_points=True)
         axh.set_xlim(cx - span, cx + span); axh.set_ylim(cy - span, cy + span)
-        _noaxis(axh)
+        hide_axes(axh)
         axh.set_title('Hinge shape', fontsize=11, fontweight='bold', color=P_DARK, pad=4)
         axh.text(0.03, 0.04, f'epoch {e+1}/{n}', transform=axh.transAxes,
                  fontsize=10, color=P_DARK, fontweight='bold')

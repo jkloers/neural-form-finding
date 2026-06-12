@@ -72,3 +72,29 @@ def max_principal_strain_per_tet(pos_nat: np.ndarray, pos_cur: np.ndarray,
         E = 0.5 * (F.T @ F - np.eye(3))
         eps_list.append(float(np.max(np.linalg.eigvalsh(E))))
     return np.array(eps_list) if eps_list else np.array([0.0])
+
+
+def aggregate_strain_ks(eps_per_tet: np.ndarray, rho: float = 100.0) -> float:
+    """Smooth (Kreisselmeier-Steinhauser) approximation of the peak principal strain.
+
+    KS(ε) = ε_max + (1/ρ)·ln(mean(exp(ρ(ε − ε_max)))) ≈ max(ε), but continuous and
+    differentiable: it blends the near-peak elements instead of latching onto the
+    single worst tet, so as the design changes the aggregate (and its finite-
+    difference gradient) move smoothly rather than jumping when the argmax tet
+    switches. Used as the design objective in place of the hard max, which made the
+    optimization loss a sawtooth. Larger ρ → closer to the hard max (less smoothing).
+
+    Args:
+        eps_per_tet: (n_tets,) per-element max principal strain.
+        rho: aggregation sharpness [1/strain].
+
+    Returns:
+        Scalar smooth-max strain.
+    """
+    e = np.maximum(np.asarray(eps_per_tet, dtype=np.float64), 0.0)
+    if e.size == 0:
+        return 0.0
+    emax = float(e.max())
+    if emax <= 0.0:
+        return 0.0
+    return emax + (1.0 / rho) * float(np.log(np.mean(np.exp(rho * (e - emax)))))
