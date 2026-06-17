@@ -23,6 +23,7 @@ from nff.stages.geometry import reconstruct_vertices
 from nff.stages.mapping import (
     build_mapping_fn, apply_mapping,
     apply_gnn_mapping, apply_direct_mapping, apply_direct_transform_mapping,
+    apply_closed_les_mapping,
 )
 from nff.stages.validity import solve_geometric_validity
 from nff.stages.physics.energy import (
@@ -127,6 +128,11 @@ def _execute_stage0_mapping(
         mapping_fn = None
     elif map_type == 'direct_transform':
         mapped_state = apply_direct_transform_mapping(initial_state, map_params)
+        mapping_fn = None
+    elif map_type == 'closed_les':
+        # Closed-state RDPQK builder: design params -> flat sheet via LES.
+        # Stage 1 is bypassed (validity_method: none); Stage 2 deploys via physics.
+        mapped_state = apply_closed_les_mapping(initial_state, map_params, static_features)
         mapping_fn = None
     else:
         mapping_fn = build_mapping_fn(

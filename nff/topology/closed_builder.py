@@ -219,15 +219,18 @@ def _assemble_panels(T: Int[np.ndarray, "M+1 N+1"], cut_vertices: dict) -> tuple
         top-left     C_{i,j+1}   -> x               (always)
 
     Returns:
-        (vertices, faces): vertices is (V, 2); faces is a list of length-4
-        index lists in CCW order. Coincident corners across panels are NOT
-        merged — that is what lets the hinge step recover pivots as
-        coincident-but-distinct vertex pairs.
+        (vertices, faces, corner_pid): vertices is (V, 2); faces is a list of
+        length-4 index lists in CCW order; corner_pid is (n_faces, 4), the cut
+        endpoint *index* (``2*(ci*cols+cj)+which``) each corner draws from. Two
+        corners share a hinge iff they share this index — used by ``_build_hinges``
+        to identify pivots topologically (so the x/x' endpoints of a boundary cut,
+        which are colocated but distinct, are never confused).
     """
     rows, cols = T.shape
     M, N = rows - 1, cols - 1
     vertices = []
     faces = []
+    corner_pid = []
 
     def endpoint(cut_ij, which):
         """which: 0 -> x, 1 -> x'."""
@@ -236,75 +239,71 @@ def _assemble_panels(T: Int[np.ndarray, "M+1 N+1"], cut_vertices: dict) -> tuple
     for i in range(M):
         for j in range(N):
             h = abs(int(T[i, j])) == 1
-            corner_pts = [
-                endpoint((i, j),         1 if h else 0),  # BL
-                endpoint((i + 1, j),     1),              # BR: x'
-                endpoint((i + 1, j + 1), 0 if h else 1),  # TR
-                endpoint((i, j + 1),     0),              # TL: x
-            ]
+            cuts = [(i, j), (i + 1, j), (i + 1, j + 1), (i, j + 1)]   # BL, BR, TR, TL
+            which = [1 if h else 0, 1, 0 if h else 1, 0]
+            corner_pts = [endpoint(cuts[k], which[k]) for k in range(4)]
             base = len(vertices)
             vertices.extend(corner_pts)
             faces.append([base, base + 1, base + 2, base + 3])
+            corner_pid.append([2 * (cuts[k][0] * cols + cuts[k][1]) + which[k] for k in range(4)])
 
-    return np.array(vertices, dtype=float), faces
+    return np.array(vertices, dtype=float), faces, np.array(corner_pid, dtype=np.int64)
 
 
-def _build_hinges(vertices: Float[np.ndarray, "V 2"], faces: list, tol: float = 1e-6) -> list:
-    """Detect corner hinges as coincident vertex pairs between distinct faces.
+def _build_hinges(vertices: Float[np.ndarray, "V 2"], faces: list,
+                  corner_pid: Int[np.ndarray, "n_faces 4"]) -> list:
+    """Identify corner hinges topologically: panel corners sharing a cut endpoint.
 
-    Two panels form a hinge where one vertex of each coincides (a pivot). The
-    hinge's adjacent vertices are the next vertices CCW within each face; the
-    cross-product orientation check mirrors ``builder.py`` so the CCW
-    convention is consistent across the codebase.
+    Two panels are hinged at a vertex iff one corner of each maps to the *same*
+    cut endpoint index (``corner_pid``). This is unambiguous even on boundary
+    cuts, where the two endpoints x and x' are pinned to the same position but
+    remain distinct indices — geometric coincidence would otherwise place the
+    pivot on the boundary instead of at the true interior hinge near the void.
+
+    The adjacent vertices are the next vertices CCW within each face; the
+    cross-product orientation check mirrors ``builder.py`` for a consistent CCW
+    convention.
 
     Returns:
         List of dicts with keys face1, face2, vertex1, vertex2,
         vertex_adjacent1, vertex_adjacent2.
     """
-    # Local-node lookup: global vertex -> (face_id, local_id).
-    v_to_fn = {}
+    from collections import defaultdict
+
+    corners_at_point = defaultdict(list)
     for f_id, f in enumerate(faces):
-        for local, gv in enumerate(f):
-            v_to_fn[gv] = (f_id, local)
+        for local in range(4):
+            corners_at_point[int(corner_pid[f_id, local])].append((f_id, local))
 
     hinges = []
-    seen = set()
-    n_faces = len(faces)
-    for f1 in range(n_faces):
-        for f2 in range(f1 + 1, n_faces):
-            for v1 in faces[f1]:
-                for v2 in faces[f2]:
-                    if np.sum((vertices[v1] - vertices[v2]) ** 2) >= tol ** 2:
-                        continue
-                    key = (f1, f2)
-                    if key in seen:
-                        continue                # one pivot per face pair
-                    seen.add(key)
+    for occ in corners_at_point.values():
+        # Boundary endpoints belong to a single panel (no hinge); shared interior
+        # endpoints belong to exactly two panels (the pivot).
+        for a in range(len(occ)):
+            for b in range(a + 1, len(occ)):
+                (f1, l1), (f2, l2) = occ[a], occ[b]
+                v1, v2 = faces[f1][l1], faces[f2][l2]
+                adj1, adj2 = faces[f1][(l1 + 1) % 4], faces[f2][(l2 + 1) % 4]
 
-                    l1 = v_to_fn[v1][1]
-                    l2 = v_to_fn[v2][1]
-                    adj1 = faces[f1][(l1 + 1) % 4]
-                    adj2 = faces[f2][(l2 + 1) % 4]
+                face1, face2 = f1, f2
+                vertex1, vertex2 = v1, v2
+                vertex_adjacent1, vertex_adjacent2 = adj1, adj2
 
-                    face1, face2 = f1, f2
-                    vertex1, vertex2 = v1, v2
-                    vertex_adjacent1, vertex_adjacent2 = adj1, adj2
+                cross = np.cross(
+                    vertices[vertex1] - vertices[vertex_adjacent1],
+                    vertices[vertex2] - vertices[vertex_adjacent2],
+                )
+                if cross < 0:               # enforce CCW, as in builder.py
+                    face1, face2 = face2, face1
+                    vertex1, vertex2 = vertex2, vertex1
+                    vertex_adjacent1, vertex_adjacent2 = vertex_adjacent2, vertex_adjacent1
 
-                    cross = np.cross(
-                        vertices[vertex1] - vertices[vertex_adjacent1],
-                        vertices[vertex2] - vertices[vertex_adjacent2],
-                    )
-                    if cross < 0:               # enforce CCW, as in builder.py
-                        face1, face2 = face2, face1
-                        vertex1, vertex2 = vertex2, vertex1
-                        vertex_adjacent1, vertex_adjacent2 = vertex_adjacent2, vertex_adjacent1
-
-                    hinges.append({
-                        'face1': face1, 'face2': face2,
-                        'vertex1': vertex1, 'vertex2': vertex2,
-                        'vertex_adjacent1': vertex_adjacent1,
-                        'vertex_adjacent2': vertex_adjacent2,
-                    })
+                hinges.append({
+                    'face1': face1, 'face2': face2,
+                    'vertex1': vertex1, 'vertex2': vertex2,
+                    'vertex_adjacent1': vertex_adjacent1,
+                    'vertex_adjacent2': vertex_adjacent2,
+                })
     return hinges
 
 
@@ -390,8 +389,8 @@ def build_closed_tessellation(
         boundary_points = build_square_boundary_points(T, spacing=spacing)
 
     cut_vertices = solve_cut_vertices(T, boundary_points, r)
-    vertices, faces = _assemble_panels(T, cut_vertices)
-    hinges = _build_hinges(vertices, faces)
+    vertices, faces, corner_pid = _assemble_panels(T, cut_vertices)
+    hinges = _build_hinges(vertices, faces, corner_pid)
 
     tessellation = Tessellation(vertices=vertices, faces=faces, dim=2)
     for h in hinges:

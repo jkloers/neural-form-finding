@@ -211,6 +211,62 @@ def boundary_flat_from_sliders(sliders, bnd_free: Float[Array, "n_sliders"]) -> 
     return flat
 
 
+# ── Ordered (non-crossing) boundary parameterization ──────────────────────────
+# Boundary sliders on each edge are kept strictly ordered via a cumulative-softmax
+# of unconstrained logits. This preserves the convexity of the boundary polygon —
+# the single precondition Tutte's embedding theorem needs — so the assembled flat
+# tessellation is GUARANTEED non-self-intersecting for any r in (0, 1), with no
+# validity loss and full placement freedom along each edge.
+
+def build_boundary_edges(struct, spacing: float = 1.0):
+    """Group non-corner boundary cuts by edge, in order, for monotonic sliders.
+
+    Returns a dict with the (P, 2) template (corners filled), a list of edges
+    (each with ordered point indices, free axis, and [lo, hi] span), the per-edge
+    logit counts, and an all-zeros init that reproduces the uniform grid spacing.
+    """
+    T, rows, cols = struct["T"], struct["rows"], struct["cols"]
+    template = boundary_points_flat(struct, spacing=spacing)
+    x_max = (rows - 1) * spacing      # bottom/top edges span x
+    y_max = (cols - 1) * spacing      # left/right edges span y
+
+    edges = []
+    for j in (0, cols - 1):           # bottom, top — sliders vary in i (x)
+        pb = [2 * (i * cols + j) for i in range(1, rows - 1)]
+        edges.append({"pbase": np.array(pb, dtype=np.int64), "axis": 0, "lo": 0.0, "hi": x_max})
+    for i in (0, rows - 1):           # left, right — sliders vary in j (y)
+        pb = [2 * (i * cols + j) for j in range(1, cols - 1)]
+        edges.append({"pbase": np.array(pb, dtype=np.int64), "axis": 1, "lo": 0.0, "hi": y_max})
+
+    logit_sizes = [len(e["pbase"]) + 1 for e in edges]   # k sliders -> k+1 gaps
+    return {
+        "template": template,
+        "edges": edges,
+        "logit_sizes": logit_sizes,
+        "n_logits": int(sum(logit_sizes)),
+        "init_logits": np.zeros(int(sum(logit_sizes)), dtype=float),  # uniform spacing
+    }
+
+
+def boundary_flat_from_logits(bnd, logits: Float[Array, "n_logits"]) -> Float[Array, "P 2"]:
+    """Build the (P, 2) boundary array from per-edge logits (differentiable).
+
+    Per edge with k sliders: softmax over (k+1) logits gives positive gaps that
+    sum to 1; the cumulative sum (dropping the last) yields k strictly increasing
+    positions in (0, 1), mapped onto the edge span. Strictly increasing ⟹ sliders
+    never cross ⟹ the boundary stays convex.
+    """
+    flat = jnp.array(bnd["template"])
+    off = 0
+    for e, sz in zip(bnd["edges"], bnd["logit_sizes"]):
+        gaps = jax.nn.softmax(logits[off:off + sz])
+        pos = e["lo"] + (e["hi"] - e["lo"]) * jnp.cumsum(gaps)[:-1]   # (k,) strictly increasing
+        flat = flat.at[e["pbase"], e["axis"]].set(pos)
+        flat = flat.at[e["pbase"] + 1, e["axis"]].set(pos)
+        off += sz
+    return flat
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Differentiable forward map (JAX)
 # ══════════════════════════════════════════════════════════════════════════════

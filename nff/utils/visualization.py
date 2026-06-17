@@ -1,11 +1,63 @@
 import numpy as np
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
-from matplotlib.patches import Polygon, FancyArrowPatch
+from matplotlib.patches import Polygon, FancyArrowPatch, Circle
 import matplotlib.animation as animation
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
 from nff.config.targets import get_target_points
+
+
+def plot_cuts_in_sheet(tessellation, ax=None, filepath=None, hinge_frac=0.10,
+                       paper_color="#F58025", cut_color="#1A1A1A", title=None):
+    """Render the flat sheet as a kirigami cut pattern.
+
+    Shows the solid sheet with the cuts (slits) drawn as black lines along the
+    panel boundaries, and the small remaining-paper bridges (hinges) as paper-
+    coloured discs at the pivot points. Long cuts ⟺ small ``hinge_frac``.
+
+    Args:
+        tessellation: flat closed Tessellation (Stage-0 geometry).
+        hinge_frac: hinge bridge radius as a fraction of the mean panel edge.
+    """
+    from shapely.geometry import Polygon as _ShPoly
+    from shapely.ops import unary_union
+
+    own = ax is None
+    if own:
+        fig, ax = plt.subplots(figsize=(9, 9), facecolor="white")
+    verts = tessellation.vertices
+
+    polys = []
+    for f in tessellation.faces:
+        p = verts[f.vertex_indices]
+        ax.add_patch(Polygon(p, closed=True, facecolor=paper_color,
+                             edgecolor=cut_color, lw=1.6, zorder=2))
+        polys.append(_ShPoly(p))
+
+    # Solid (uncut) sheet outline.
+    sheet = unary_union([p if p.is_valid else p.buffer(0) for p in polys])
+    geoms = getattr(sheet, "geoms", [sheet])
+    for g in geoms:
+        xs, ys = g.exterior.xy
+        ax.plot(xs, ys, color=cut_color, lw=3.0, zorder=4)
+
+    # Remaining-paper bridges (hinges) at the pivots.
+    edge_len = np.mean([np.linalg.norm(verts[f.vertex_indices[0]] - verts[f.vertex_indices[1]])
+                        for f in tessellation.faces])
+    radius = hinge_frac * float(edge_len)
+    for h in tessellation.hinges:
+        ax.add_patch(Circle(verts[h.vertex1], radius, facecolor=paper_color,
+                            edgecolor="none", zorder=3))
+
+    ax.set_aspect("equal")
+    ax.axis("off")
+    if title:
+        ax.set_title(title)
+    if own and filepath:
+        plt.savefig(filepath, dpi=200, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  Saved cut pattern to {filepath}")
 
 def plot_tessellation(tessellation, ax=None, 
                       show_faces=True, 

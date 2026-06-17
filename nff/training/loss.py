@@ -18,6 +18,31 @@ from nff.stages.constraints import hinge_connectivity
 from nff.config.targets import get_target_points
 from nff.config.experiment import TargetConfig, PhysicsConfig, TrainingConfig, ValidityConfig
 
+def _circularity_loss(pts: Float[Array, "n 2"]) -> Float[Array, ""]:
+    """Scale/translation-invariant circularity loss for a boundary point cloud.
+
+    Fits the best circle algebraically (Kåsa: solve for the center and radius
+    that make the points equidistant from one unknown point), then returns the
+    mean squared *relative* radial residual. Zero iff the points lie on a circle
+    of any size/position — so the target circle's size adapts to the
+    tessellation instead of being fixed.
+
+    Args:
+        pts: (n, 2) deployed boundary vertices.
+
+    Returns:
+        Scalar circularity loss.
+    """
+    n = pts.shape[0]
+    A = jnp.concatenate([2.0 * pts, jnp.ones((n, 1))], axis=1)        # (n, 3)
+    rhs = jnp.sum(pts ** 2, axis=1)                                   # (n,)
+    coeffs = jnp.linalg.solve(A.T @ A + 1e-8 * jnp.eye(3), A.T @ rhs)  # [cx, cy, c]
+    center = coeffs[:2]
+    radius = jnp.sqrt(jnp.clip(coeffs[2] + jnp.sum(center ** 2), 1e-12, None))
+    dist = jnp.linalg.norm(pts - center[None, :], axis=1)
+    return jnp.mean(((dist - radius) / radius) ** 2)
+
+
 def evaluate_physical_loss(
         solution,
         valid_state,
@@ -47,7 +72,7 @@ def evaluate_physical_loss(
     # 2. Reconstruct Geometric Points for matching
     loss_type = training_cfg.geometric_loss_type
     
-    if loss_type == "boundary_vertices":
+    if loss_type in ("boundary_vertices", "circle_fit"):
         # Use the actual exterior vertices of the boundary faces
         b_face_ids = valid_state.boundary_face_node_ids[:, 0]
         b_local_node_ids = valid_state.boundary_face_node_ids[:, 1]
@@ -70,23 +95,27 @@ def evaluate_physical_loss(
         b_faces = valid_state.boundary_face_node_ids[:, 0]
         geometric_positions = final_centroids[b_faces]
     
-    # 3. Compute Geometric Loss (Chamfer distance)
-    # target_cloud is precomputed before the JIT boundary — it's a constant in XLA.
-    # Compute pairwise squared distances: (N_boundary, M_target)
-    dist_matrix = jnp.sum((geometric_positions[:, None, :] - target_cloud[None, :, :])**2, axis=-1)
-    
-    # 1. Distance from each boundary point to the closest target point (Precision)
-    min_to_target = jnp.min(dist_matrix, axis=1)
-    precision_loss = jnp.mean(min_to_target)
-    
-    # 2. Distance from each target point to the closest boundary point (Coverage)
-    # This prevents the "collapse to a single point" issue. All target points 
-    # want to be satisfied (i.e. have a structure point close to them).
-    min_to_structure = jnp.min(dist_matrix, axis=0)
-    coverage_loss = jnp.mean(min_to_structure)
-    
-    # Combine them. We allow tuning the coverage weight in the config.
-    chamfer_loss = precision_loss + training_cfg.loss_weights.coverage * coverage_loss
+    # 3. Compute Geometric Loss
+    if loss_type == "circle_fit":
+        # Size/position-free objective: make the deployed boundary lie on a
+        # circle whose center and radius are fit to the points themselves.
+        chamfer_loss = _circularity_loss(geometric_positions)
+    else:
+        # Chamfer distance to a fixed target cloud (precomputed before JIT).
+        dist_matrix = jnp.sum((geometric_positions[:, None, :] - target_cloud[None, :, :])**2, axis=-1)
+
+        # 1. Distance from each boundary point to the closest target point (Precision)
+        min_to_target = jnp.min(dist_matrix, axis=1)
+        precision_loss = jnp.mean(min_to_target)
+
+        # 2. Distance from each target point to the closest boundary point (Coverage)
+        # This prevents the "collapse to a single point" issue. All target points
+        # want to be satisfied (i.e. have a structure point close to them).
+        min_to_structure = jnp.min(dist_matrix, axis=0)
+        coverage_loss = jnp.mean(min_to_structure)
+
+        # Combine them. We allow tuning the coverage weight in the config.
+        chamfer_loss = precision_loss + training_cfg.loss_weights.coverage * coverage_loss
     
     # 4a. Global Material Conservation — computed upstream (see compute_end_to_end_loss).
     global_material_loss = 0.0
