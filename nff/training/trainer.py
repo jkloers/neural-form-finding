@@ -63,6 +63,7 @@ def create_train_step(
         use_jit: bool = True,
         load_specs=None,
         static_features=None,
+        target_cloud=None,
 ):
     """Creates a compiled training step for optimizing map_params.
 
@@ -129,8 +130,13 @@ def create_train_step(
         'center': target_cfg.center,
         'radius': target_cfg.radius,
     }
-    _target_cloud = jnp.asarray(
-        get_target_points(_target_params, n_points=500), dtype=jnp.float64)
+    # Allow a caller-supplied target cloud (e.g. a rectangle the closed-state
+    # driver fits to the deployment) to override the shape from target_cfg.
+    if target_cloud is not None:
+        _target_cloud = jnp.asarray(target_cloud, dtype=jnp.float64)
+    else:
+        _target_cloud = jnp.asarray(
+            get_target_points(_target_params, n_points=500), dtype=jnp.float64)
 
     # Pure loss function closed over all compile-time constants.
     def loss_fn(params: Any) -> tuple[Float[Array, ""], dict]:

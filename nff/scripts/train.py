@@ -25,9 +25,8 @@ import jax.numpy as jnp
 import numpy as np
 
 from nff.topology.builder import build_tessellation
-from nff.topology.closed_builder import build_closed_tessellation
-from nff.topology.closed_builder_jax import build_deploy_structure, build_boundary_edges
 from nff.config.conditions import configure_tessellation
+from nff.scripts.closed_setup import build_closed_initial_state, init_closed_les_params
 from nff.config.experiment import (
     load_and_parse_config,
     load_arch_config,
@@ -50,7 +49,7 @@ def _build_initial_state(config):
 
     # Closed-state RDPQK builder: flat sheet deployed by Stage-2 physics.
     if topo.get('tessellation_type') == 'closed_rdpqk':
-        return _build_closed_initial_state(config)
+        return build_closed_initial_state(config)
 
     topo_obj = SimpleNamespace(**topo)
 
@@ -83,26 +82,6 @@ def _build_initial_state(config):
     return CentroidalState.from_tessellation(tessellation, target_cfg=config.target), tessellation
 
 
-def _build_closed_initial_state(config):
-    """Build a flat closed-state RDPQK tessellation + CentroidalState from config.
-
-    Geometry comes from the closed builder (M×N panels); material, clamps, and
-    loads are applied with the standard config machinery. The deployed shape is
-    produced later by Stage-2 physics.
-    """
-    topo = config.topology
-    M = int(topo['M'])
-    N = int(topo['N'])
-    r_init = float(topo.get('r_init', 0.45))
-    spacing = float(topo.get('spacing', 1.0))
-
-    tessellation = build_closed_tessellation(M, N, r=r_init, spacing=spacing)
-    configure_tessellation(tessellation, SimpleNamespace(**topo))  # material, clamps, loads
-
-    state = CentroidalState.from_tessellation(tessellation, target_cfg=config.target)
-    return state, tessellation
-
-
 def _init_gnn_params(config, initial_state):
     """Initialise GNN parameters from architecture config."""
     from nff.models.graph_builder import build_static_features
@@ -131,35 +110,10 @@ def _init_gnn_params(config, initial_state):
     return params, {**static_features, 'num_layers': num_layers, 'inner_depth': inner_depth}
 
 
-def _init_closed_les_params(config):
-    """Init design params and static LES structure for the closed_les map type.
-
-    Params: {'z': (rows, cols) latent for r = sigmoid(z), init r_init;
-             'bnd_logits': (n_logits,) per-edge logits -> ordered boundary sliders}.
-    The ordered-boundary + r∈(0,1) parameterization guarantees a valid (non-self-
-    intersecting) flat tessellation, so no validity loss is needed.
-    """
-    topo = config.topology
-    M, N = int(topo['M']), int(topo['N'])
-    r_init = float(topo.get('r_init', 0.45))
-    spacing = float(topo.get('spacing', 1.0))
-
-    struct = build_deploy_structure(M, N)
-    sliders = build_boundary_edges(struct, spacing=spacing)
-
-    z_init = float(np.log(r_init / (1.0 - r_init)))         # sigmoid(z_init) = r_init
-    params = {
-        'z': jnp.full((struct['rows'], struct['cols']), z_init),
-        'bnd_logits': jnp.asarray(sliders['init_logits'], dtype=float),
-    }
-    static_features = {'struct': struct, 'sliders': sliders, 'closed_les': True}
-    return params, static_features
-
-
 def _init_map_params(config, initial_state):
     """Initialise mapping parameters (GNN, direct_vertices, or analytical)."""
     if config.mapping.type == 'closed_les':
-        return _init_closed_les_params(config)
+        return init_closed_les_params(config)
     if config.mapping.type.startswith('gnn_'):
         params, static_features = _init_gnn_params(config, initial_state)
         return params, static_features
@@ -275,21 +229,6 @@ def _run_one_problem(config, problem_label, run_dir):
             result, tessellation, config, target_params,
             problem_label + "_trained", run_dir=prob_dir,
             load_specs=load_specs)
-
-        # Closed-state extra: the kirigami cut pattern of the trained flat sheet.
-        if config.topology.get('tessellation_type') == 'closed_rdpqk' and prob_dir:
-            from nff.stages.geometry import reconstruct_vertices
-            from nff.utils.visualization import plot_cuts_in_sheet
-            ms = result['mapped_state']
-            recon = np.asarray(reconstruct_vertices(ms.face_centroids, ms.centroid_node_vectors))
-            cut_tess = tessellation.copy()
-            new_v = np.array(cut_tess.vertices, dtype=float)
-            for f_id, face in enumerate(cut_tess.faces):
-                for local, gv in enumerate(face.vertex_indices):
-                    new_v[gv] = recon[f_id, local]
-            cut_tess.update_vertices(new_v)
-            plot_cuts_in_sheet(cut_tess, filepath=os.path.join(prob_dir, "cut_pattern.png"),
-                               hinge_frac=0.08, title="Kirigami cut pattern (flat sheet)")
 
     final_metrics = history_loss[-1] if history_loss else {}
     return {

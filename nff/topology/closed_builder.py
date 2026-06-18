@@ -319,39 +319,42 @@ def _detect_voids(tessellation: Tessellation) -> None:
     unvisited = set(range(len(tessellation.hinges)))
     discovered = set()
 
-    def walk(h_id):
-        if h_id not in unvisited:
-            return
-        unvisited.remove(h_id)
-        h0 = tessellation.hinges[h_id]
-        a1, a2 = h0.vertex_adjacent1, h0.vertex_adjacent2
-
-        for hs1_id in primary_to_hinges.get(a1, []):
-            if hs1_id == h_id:
-                continue
-            hs1 = tessellation.hinges[hs1_id]
-            p1 = hs1.vertex2 if hs1.vertex1 == a1 else hs1.vertex1
-            for hs2_id in primary_to_hinges.get(a2, []):
-                if hs2_id == h_id:
-                    continue
-                hs2 = tessellation.hinges[hs2_id]
-                p2 = hs2.vertex2 if hs2.vertex1 == a2 else hs2.vertex1
-                target_pair = frozenset([p1, p2])
-                if target_pair in adjacents_to_hinge:
-                    h_opp_id = adjacents_to_hinge[target_pair]
-                    if h_opp_id != h_id:
-                        sig = tuple(sorted([h_id, h_opp_id]))
-                        if sig not in discovered:
-                            discovered.add(sig)
-                            tessellation.add_void(h_id, h_opp_id)
-                        break
-
-        for v in [h0.vertex1, h0.vertex2, h0.vertex_adjacent1, h0.vertex_adjacent2]:
-            for next_h_id in primary_to_hinges.get(v, []):
-                walk(next_h_id)
-
+    # Iterative (stack-based) walk — recursion overflows the Python stack on
+    # large grids (e.g. 50×50 has ~4900 hinges).
     while unvisited:
-        walk(next(iter(unvisited)))
+        stack = [next(iter(unvisited))]
+        while stack:
+            h_id = stack.pop()
+            if h_id not in unvisited:
+                continue
+            unvisited.remove(h_id)
+            h0 = tessellation.hinges[h_id]
+            a1, a2 = h0.vertex_adjacent1, h0.vertex_adjacent2
+
+            for hs1_id in primary_to_hinges.get(a1, []):
+                if hs1_id == h_id:
+                    continue
+                hs1 = tessellation.hinges[hs1_id]
+                p1 = hs1.vertex2 if hs1.vertex1 == a1 else hs1.vertex1
+                for hs2_id in primary_to_hinges.get(a2, []):
+                    if hs2_id == h_id:
+                        continue
+                    hs2 = tessellation.hinges[hs2_id]
+                    p2 = hs2.vertex2 if hs2.vertex1 == a2 else hs2.vertex1
+                    target_pair = frozenset([p1, p2])
+                    if target_pair in adjacents_to_hinge:
+                        h_opp_id = adjacents_to_hinge[target_pair]
+                        if h_opp_id != h_id:
+                            sig = tuple(sorted([h_id, h_opp_id]))
+                            if sig not in discovered:
+                                discovered.add(sig)
+                                tessellation.add_void(h_id, h_opp_id)
+                            break
+
+            for v in (h0.vertex1, h0.vertex2, h0.vertex_adjacent1, h0.vertex_adjacent2):
+                for next_h_id in primary_to_hinges.get(v, []):
+                    if next_h_id in unvisited:
+                        stack.append(next_h_id)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

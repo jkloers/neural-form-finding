@@ -1,54 +1,69 @@
 import numpy as np
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
-from matplotlib.patches import Polygon, FancyArrowPatch, Circle
+from matplotlib.patches import Polygon, FancyArrowPatch, Circle, Rectangle
 import matplotlib.animation as animation
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
 from nff.config.targets import get_target_points
 
 
-def plot_cuts_in_sheet(tessellation, ax=None, filepath=None, hinge_frac=0.10,
-                       paper_color="#F58025", cut_color="#1A1A1A", title=None):
-    """Render the flat sheet as a kirigami cut pattern.
+def plot_cut_pattern(coords, T, cols, ax=None, filepath=None, hinge_margin=0.06,
+                     paper_color="#F58025", cut_color="#1A1A1A", lw=2.4, title=None):
+    """Render the true kirigami cut pattern of the flat sheet.
 
-    Shows the solid sheet with the cuts (slits) drawn as black lines along the
-    panel boundaries, and the small remaining-paper bridges (hinges) as paper-
-    coloured discs at the pivot points. Long cuts ⟺ small ``hinge_frac``.
+    Each interior cut C_{i,j} is the long slit that runs from one hinge to its
+    opposite hinge across the void — i.e. between the collinear neighbour vertices
+    the LES links (horizontal: x_{i-1,j} -> x'_{i+1,j}; vertical: x'_{i,j-1} ->
+    x_{i,j+1}), with the cut's own vertices x_{i,j}, x'_{i,j} lying in between. The
+    slit is drawn as long as possible, retracted by ``hinge_margin`` at interior
+    ends (leaving the small uncut hinge ligaments) and run all the way to the sheet
+    border when an endpoint is a boundary vertex.
 
     Args:
-        tessellation: flat closed Tessellation (Stage-0 geometry).
-        hinge_frac: hinge bridge radius as a fraction of the mean panel edge.
+        coords: (P, 2) cut endpoint positions, P = 2 * rows * cols.
+                Endpoint s of cut (i, j) is index 2*(i*cols + j) + s.
+        T: (rows, cols) topology matrix (sign = interior/boundary, |.| = h/v).
+        cols: number of cut-grid columns (T.shape[1]).
+        hinge_margin: uncut ligament length left at each interior cut end.
     """
-    from shapely.geometry import Polygon as _ShPoly
-    from shapely.ops import unary_union
+    from shapely.geometry import MultiPoint
+    coords = np.asarray(coords)
+    rows = T.shape[0]
+
+    def pid(i, j, s):
+        return 2 * (i * cols + j) + s
 
     own = ax is None
     if own:
         fig, ax = plt.subplots(figsize=(9, 9), facecolor="white")
-    verts = tessellation.vertices
 
-    polys = []
-    for f in tessellation.faces:
-        p = verts[f.vertex_indices]
-        ax.add_patch(Polygon(p, closed=True, facecolor=paper_color,
-                             edgecolor=cut_color, lw=1.6, zorder=2))
-        polys.append(_ShPoly(p))
+    # Solid sheet = convex hull of the boundary-cut positions.
+    bpos = [coords[pid(i, j, 0)] for i in range(rows) for j in range(cols) if T[i, j] < 0]
+    hull = MultiPoint(bpos).convex_hull
+    hx, hy = hull.exterior.xy
+    ax.fill(hx, hy, facecolor=paper_color, edgecolor=cut_color, lw=2.8, zorder=1)
 
-    # Solid (uncut) sheet outline.
-    sheet = unary_union([p if p.is_valid else p.buffer(0) for p in polys])
-    geoms = getattr(sheet, "geoms", [sheet])
-    for g in geoms:
-        xs, ys = g.exterior.xy
-        ax.plot(xs, ys, color=cut_color, lw=3.0, zorder=4)
-
-    # Remaining-paper bridges (hinges) at the pivots.
-    edge_len = np.mean([np.linalg.norm(verts[f.vertex_indices[0]] - verts[f.vertex_indices[1]])
-                        for f in tessellation.faces])
-    radius = hinge_frac * float(edge_len)
-    for h in tessellation.hinges:
-        ax.add_patch(Circle(verts[h.vertex1], radius, facecolor=paper_color,
-                            edgecolor="none", zorder=3))
+    # Interior cuts: long slit from hinge to opposite hinge across the void.
+    for i in range(rows):
+        for j in range(cols):
+            if T[i, j] <= 0:
+                continue
+            if abs(int(T[i, j])) == 1:                  # horizontal cut
+                (ai, aj, as_), (bi, bj, bs) = (i - 1, j, 0), (i + 1, j, 1)
+            else:                                       # vertical cut
+                (ai, aj, as_), (bi, bj, bs) = (i, j - 1, 1), (i, j + 1, 0)
+            A, B = coords[pid(ai, aj, as_)], coords[pid(bi, bj, bs)]
+            d = B - A
+            L = float(np.linalg.norm(d))
+            if L < 1e-9:
+                continue
+            u = d / L
+            # Retract at interior ends (leave a hinge); run to the border otherwise.
+            p0 = A + (0.0 if T[ai, aj] < 0 else hinge_margin) * u
+            p1 = B - (0.0 if T[bi, bj] < 0 else hinge_margin) * u
+            ax.plot([p0[0], p1[0]], [p0[1], p1[1]], color=cut_color, lw=lw,
+                    solid_capstyle="round", zorder=2)
 
     ax.set_aspect("equal")
     ax.axis("off")
@@ -59,7 +74,161 @@ def plot_cuts_in_sheet(tessellation, ax=None, filepath=None, hinge_frac=0.10,
         plt.close(fig)
         print(f"  Saved cut pattern to {filepath}")
 
-def plot_tessellation(tessellation, ax=None, 
+
+def write_deformed_into(tessellation, node_positions):
+    """Return a copy of ``tessellation`` with vertices set to deformed positions.
+
+    Args:
+        tessellation: reference Tessellation.
+        node_positions: (n_faces, max_nodes, 2) per-face deformed node positions
+            (e.g. from ``deformed_vertices``).
+    """
+    deformed = tessellation.copy()
+    new_vertices = np.array(deformed.vertices, dtype=float)
+    for f_id, face in enumerate(deformed.faces):
+        for local, gv in enumerate(face.vertex_indices):
+            new_vertices[gv] = node_positions[f_id, local]
+    deformed.update_vertices(new_vertices)
+    return deformed
+
+
+def plot_loading_diagram(tessellation, clamped_faces, load_specs, filepath,
+                         title="Loading"):
+    """One clean schematic of the boundary conditions and applied loads.
+
+    Clamped faces are greyed with a hatched fixed-support wall; a distributed edge
+    pull (dof 0) is drawn as a comb of uniform arrows just outside the loaded edge;
+    point loads (dof 1) are single bold arrows at the loaded tile. No per-face arrow
+    clutter — exactly one legible loading picture.
+    """
+    clamped = {int(f) for f in (clamped_faces or [])}
+    colors = ["#9AA3AB" if i in clamped else "#F7C59F" for i in range(len(tessellation.faces))]
+    fig, ax = plt.subplots(figsize=(11, 8.5), facecolor="white")
+    plot_tessellation(tessellation, ax=ax, show_target=False, show_hinges=False,
+                      show_face_indices=False, show_hinge_indices=False,
+                      show_external_forces=False, color_faces=colors)
+
+    allv = np.asarray(tessellation.vertices, dtype=float)
+    x0, y0 = allv.min(axis=0)
+    x1, y1 = allv.max(axis=0)
+    span = float(max(x1 - x0, y1 - y0))
+    L = 0.11 * span
+    RED = "#D62828"
+
+    def fv(fi):
+        return np.asarray(tessellation.vertices[tessellation.faces[int(fi)].vertex_indices], dtype=float)
+
+    # Distributed pull (dof 0) — comb of uniform arrows + a tail bracket.
+    pull = [s for s in (load_specs or []) if int(s.get('dof', -1)) == 0 and float(s.get('value', 0.0)) != 0.0]
+    if pull:
+        xa = max(fv(s['face'])[:, 0].max() for s in pull) + 0.03 * span
+        ys = [fv(s['face'])[:, 1].mean() for s in pull]
+        for cy in ys:
+            ax.annotate('', xy=(xa + L, cy), xytext=(xa, cy),
+                        arrowprops=dict(arrowstyle='-|>', color=RED, lw=2.0, mutation_scale=14), zorder=30)
+        ax.plot([xa, xa], [min(ys), max(ys)], color=RED, lw=2.5, zorder=29)
+
+    # Point loads (dof 1) — single bold arrow per loaded tile.
+    for s in (load_specs or []):
+        if int(s.get('dof', -1)) == 1 and float(s.get('value', 0.0)) != 0.0:
+            p = fv(s['face'])
+            cx = p[:, 0].mean()
+            if float(s['value']) < 0:           # downward
+                y_anchor = p[:, 1].max() + 0.02 * span
+                ax.annotate('', xy=(cx, y_anchor), xytext=(cx, y_anchor + 1.7 * L),
+                            arrowprops=dict(arrowstyle='-|>', color=RED, lw=3.2, mutation_scale=22), zorder=31)
+            else:                               # upward
+                y_anchor = p[:, 1].min() - 0.02 * span
+                ax.annotate('', xy=(cx, y_anchor), xytext=(cx, y_anchor - 1.7 * L),
+                            arrowprops=dict(arrowstyle='-|>', color=RED, lw=3.2, mutation_scale=22), zorder=31)
+
+    # Fixed-support wall on the clamped edge.
+    if clamped:
+        wx = min(fv(i)[:, 0].min() for i in clamped)
+        ax.add_patch(Rectangle((wx - 0.06 * span, y0), 0.05 * span, y1 - y0,
+                               facecolor="#6C757D", edgecolor="#6C757D", hatch="////", lw=0, alpha=0.55, zorder=2))
+
+    ax.set_xlim(x0 - 0.14 * span, x1 + 0.28 * span)
+    ax.set_ylim(y0 - 0.16 * span, y1 + 0.22 * span)
+    ax.set_aspect("equal")
+    ax.axis("off")
+    ax.set_title(title, fontsize=15, weight="bold")
+    fig.savefig(filepath, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved loading diagram to {filepath}")
+
+
+def plot_area_change(tess_flat, tess_deployed, rel, filepath,
+                     titles=("Trained design (closed)", "Deployed")):
+    """Two-panel figure colouring each panel by its area change vs the initial design.
+
+    Args:
+        tess_flat, tess_deployed: trained-design tessellations (flat / deployed).
+        rel: (n_faces,) relative area change (trained / initial - 1).
+        filepath: output PNG path.
+    """
+    from matplotlib.ticker import FuncFormatter
+    cmap = plt.get_cmap("coolwarm")          # blue = shrunk, red = enlarged
+    norm = mcolors.TwoSlopeNorm(vmin=min(float(rel.min()), -1e-3), vcenter=0.0,
+                                vmax=max(float(rel.max()), 1e-3))
+    area_colors = [cmap(norm(r)) for r in rel]
+
+    fig, axes = plt.subplots(1, 2, figsize=(15, 7.6), facecolor="white")
+    for ax, t, ttl in ((axes[0], tess_flat, titles[0]), (axes[1], tess_deployed, titles[1])):
+        plot_tessellation(t, ax=ax, show_target=False, show_hinges=False,
+                          show_face_indices=False, show_hinge_indices=False, color_faces=area_colors)
+        ax.set_aspect("equal"); ax.axis("off")
+        ax.set_title(ttl)
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm); sm.set_array([])
+    cbar = fig.colorbar(sm, ax=axes, fraction=0.025, pad=0.02)
+    cbar.set_label("panel area change vs initial design", fontsize=12)
+    cbar.ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:+.0%}"))
+    fig.savefig(filepath, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def animate_closed_evolution(tessellation, frames, add_target, filepath,
+                             title="Opening process", fps=6):
+    """Animate the closed-state design morphing over training epochs (flat | deployed).
+
+    Args:
+        tessellation: reference Tessellation (copied internally for each panel).
+        frames: list of (epoch, flat_verts, deployed_verts, boundary_cloud), where
+            *_verts are (n_global_vertices, 2) global vertex arrays.
+        add_target: callable (ax, boundary_cloud) -> None drawing the target on the
+            deployed panel.
+        filepath: output GIF path.
+    """
+    allf = np.concatenate([f[1] for f in frames])
+    alld = np.concatenate([f[2] for f in frames])
+    fb = (allf[:, 0].min() - .5, allf[:, 0].max() + .5, allf[:, 1].min() - .5, allf[:, 1].max() + .5)
+    db = (alld[:, 0].min() - .5, alld[:, 0].max() + .5, alld[:, 1].min() - .5, alld[:, 1].max() + .5)
+    tfl, tdp = tessellation.copy(), tessellation.copy()
+    fig, (axf, axd) = plt.subplots(1, 2, figsize=(15, 7.6), facecolor="white")
+    fig.suptitle(title, fontsize=16, weight="bold")
+
+    def draw(k):
+        ep, flat, dep, cloud = frames[k]
+        axf.clear(); axd.clear()
+        tfl.update_vertices(flat)
+        plot_tessellation(tfl, ax=axf, show_target=False, show_hinges=False,
+                          show_face_indices=False, show_hinge_indices=False, color_faces="#F58025")
+        axf.set_xlim(fb[0], fb[1]); axf.set_ylim(fb[2], fb[3]); axf.set_aspect("equal"); axf.axis("off")
+        axf.set_title(f"Closed design — epoch {ep}")
+        tdp.update_vertices(dep)
+        plot_tessellation(tdp, ax=axd, show_target=False, show_hinges=False,
+                          show_face_indices=False, show_hinge_indices=False, color_faces="#F58025")
+        add_target(axd, cloud)
+        axd.set_xlim(db[0], db[1]); axd.set_ylim(db[2], db[3]); axd.set_aspect("equal"); axd.axis("off")
+        axd.set_title(f"Deploy — epoch {ep}")
+
+    animation.FuncAnimation(fig, draw, frames=len(frames), blit=False).save(
+        filepath, writer="pillow", fps=fps)
+    plt.close(fig)
+    print(f"  Saved training-evolution animation to {filepath}")
+
+
+def plot_tessellation(tessellation, ax=None,
                       show_faces=True, 
                       show_hinges=True, 
                       show_vertices=False, 
@@ -179,45 +348,57 @@ def plot_tessellation(tessellation, ax=None,
 
     # 4. External Forces & Moments
     if show_external_forces:
+        # Size arrows relative to the domain and to the largest load in the scene,
+        # so the biggest force is a clearly visible fraction of the geometry and the
+        # rest are drawn in proportion (independent of absolute force magnitude).
+        X_all = tessellation.vertices
+        domain_scale = float(np.linalg.norm(X_all.max(axis=0) - X_all.min(axis=0))) if len(X_all) else 1.0
+        max_force = 0.0
+        max_moment = 0.0
         for face in tessellation.faces:
             if hasattr(face, 'loads') and face.loads:
-                vertices = tessellation.vertices[face.vertex_indices]
-                centroid = vertices.mean(axis=0)
-                
-                fx = face.loads.get(0, 0.0)
-                fy = face.loads.get(1, 0.0)
-                moment = face.loads.get(2, 0.0)
-                
-                # Draw force vector
-                if fx != 0 or fy != 0:
-                    force_len = np.sqrt(fx**2 + fy**2)
-                    scale = min(0.2 / force_len, 0.05) if force_len > 0 else 0.05
-                    dx = fx * scale
-                    dy = fy * scale
-                    
-                    # Offset start slightly so we don't cover the centroid index
-                    ax.arrow(centroid[0], centroid[1], dx, dy, 
-                             head_width=0.03, head_length=0.03, fc="#D62828", ec="#D62828", 
-                             zorder=30, width=0.005)
-                             
-                # Draw moment
-                if moment != 0:
-                    r = 0.08
-                    if moment > 0:
-                        # Counter-clockwise
-                        start = (centroid[0] + r, centroid[1] - r/2)
-                        end = (centroid[0] - r/2, centroid[1] + r)
-                        rad = 0.6
-                    else:
-                        # Clockwise
-                        start = (centroid[0] - r, centroid[1] - r/2)
-                        end = (centroid[0] + r/2, centroid[1] + r)
-                        rad = -0.6
-                        
-                    arrow = FancyArrowPatch(start, end, connectionstyle=f"arc3,rad={rad}", 
-                                            color="#D62828", arrowstyle="Simple, tail_width=1.5, head_width=6, head_length=8",
-                                            zorder=30)
-                    ax.add_patch(arrow)
+                max_force = max(max_force, float(np.hypot(face.loads.get(0, 0.0), face.loads.get(1, 0.0))))
+                max_moment = max(max_moment, abs(float(face.loads.get(2, 0.0))))
+        ref_len = 0.16 * domain_scale          # length of the largest force arrow
+        head = 0.045 * domain_scale
+        shaft = 0.012 * domain_scale
+
+        for face in tessellation.faces:
+            if not (hasattr(face, 'loads') and face.loads):
+                continue
+            vertices = tessellation.vertices[face.vertex_indices]
+            centroid = vertices.mean(axis=0)
+
+            fx = face.loads.get(0, 0.0)
+            fy = face.loads.get(1, 0.0)
+            moment = face.loads.get(2, 0.0)
+
+            # Draw force vector — length proportional to |F| / max|F|.
+            if (fx != 0 or fy != 0) and max_force > 0:
+                fmag = np.hypot(fx, fy)
+                length = ref_len * fmag / max_force
+                dx, dy = fx / fmag * length, fy / fmag * length
+                ax.arrow(centroid[0], centroid[1], dx, dy,
+                         head_width=head, head_length=head, width=shaft,
+                         length_includes_head=True, fc="#D62828", ec="#8B0000",
+                         linewidth=0.8, alpha=0.95, zorder=30)
+
+            # Draw moment as a curved arrow, sized to the domain.
+            if moment != 0:
+                r = 0.07 * domain_scale
+                if moment > 0:                  # counter-clockwise
+                    start = (centroid[0] + r, centroid[1] - r / 2)
+                    end = (centroid[0] - r / 2, centroid[1] + r)
+                    rad = 0.6
+                else:                           # clockwise
+                    start = (centroid[0] - r, centroid[1] - r / 2)
+                    end = (centroid[0] + r / 2, centroid[1] + r)
+                    rad = -0.6
+                arrow = FancyArrowPatch(start, end, connectionstyle=f"arc3,rad={rad}",
+                                        color="#D62828",
+                                        arrowstyle="Simple, tail_width=1.5, head_width=6, head_length=8",
+                                        mutation_scale=max(10.0, 0.6 * domain_scale), zorder=30)
+                ax.add_patch(arrow)
 
     # 4. Target Shape
     if show_target:
@@ -284,7 +465,7 @@ def animate_tessellation(tessellation, state_history, filepath="closing_animatio
         tessellation.update_vertices(state_history[frame])
         
         # We reuse the existing plotting function
-        plot_tessellation(tessellation, ax=ax, title=f"Closing Process", target_params=target_params, **plot_kwargs)
+        plot_tessellation(tessellation, ax=ax, title="Opening process", target_params=target_params, **plot_kwargs)
         
         # Enforce fixed bounds over the automatic ones computed in plot_tessellation
         ax.set_xlim(center_x - max_range/2, center_x + max_range/2)

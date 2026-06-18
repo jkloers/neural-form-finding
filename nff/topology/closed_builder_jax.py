@@ -1,21 +1,20 @@
 """Differentiable JAX forward map for closed-state RDPQK kirigami.
 
 Implements the Dang et al. (2021) inverse-design forward map as a differentiable
-function of the per-cut aspect ratios ``r`` (and, optionally, boundary points):
+function of the per-cut aspect ratios ``r`` and the boundary-slider positions:
 
-    r -> LES (flat cut vertices) -> rigid kinematic deployment at angle omega
-      -> deployed panel vertices.
+    {r, boundary logits} -> LES -> flat cut vertices.
 
 The static topology (which cut endpoint each panel corner takes, the hinge graph,
 the panel rotation classes) is precomputed once with NumPy in
-``build_deploy_structure``; the differentiable part (``forward_deploy``) is pure
-JAX and JIT/grad-friendly.
+``build_deploy_structure``; the differentiable part (``solve_cut_vertices_jax``)
+is pure JAX and JIT/grad-friendly. The flat panel vertices it produces are mapped
+into a ``CentroidalState`` by ``apply_closed_les_mapping`` (Stage 0); the actual
+deployment is then performed by the Stage-2 physics solver.
 
-Deployment (Eqs. 5-9): each panel's absolute rotation is the identity if its cut
-type ``|t_{i,j}| == 1`` else ``R_omega``; the per-panel translations are fixed by
-requiring shared hinge vertices to coincide, propagated over a spanning tree of
-the panel adjacency graph. Genus-0 patterns built from the LES have parallelogram
-voids (Lemma 1), so the propagation is path-independent.
+Genus-0 patterns built from the LES have parallelogram voids (Lemma 1) and convex
+boundary (ordered sliders), satisfying Tutte's embedding conditions — so the
+assembled flat tessellation is non-self-intersecting for any r in (0, 1).
 """
 
 from collections import deque
@@ -154,63 +153,6 @@ def boundary_points_flat(struct, spacing: float = 1.0) -> np.ndarray:
     return flat
 
 
-def build_boundary_sliders(struct, spacing: float = 1.0):
-    """Parameterize non-corner boundary cuts as sliders along the square outline.
-
-    Corners stay fixed; every other boundary cut slides tangentially along its
-    edge (its perpendicular coordinate is held, preserving the square shape of
-    the flat sheet — Dang et al. Sec. V).
-
-    Returns a dict with:
-        template:   (P, 2) base positions (corners + initial slider positions).
-        point_base: (n_sliders,) int  — first point index of each slider cut.
-        free_axis:  (n_sliders,) int  — 0 (x free) or 1 (y free).
-        init:       (n_sliders,) float — initial free coordinate (grid position).
-        lo, hi:     (n_sliders,) float — slider range along the edge.
-    """
-    T, rows, cols = struct["T"], struct["rows"], struct["cols"]
-    template = boundary_points_flat(struct, spacing=spacing)
-
-    x_max = (rows - 1) * spacing      # bottom/top edges span x in [0, x_max]
-    y_max = (cols - 1) * spacing      # left/right edges span y in [0, y_max]
-
-    point_base, free_axis, init, lo, hi = [], [], [], [], []
-    for i in range(rows):
-        for j in range(cols):
-            if T[i, j] >= 0:
-                continue                                # interior cut
-            on_v_edge = (i == 0 or i == rows - 1)       # left/right
-            on_h_edge = (j == 0 or j == cols - 1)       # bottom/top
-            if on_v_edge and on_h_edge:
-                continue                                # corner: fixed
-            base = 2 * (i * cols + j)
-            if on_v_edge:                               # slide in y
-                point_base.append(base); free_axis.append(1)
-                init.append(j * spacing); lo.append(0.0); hi.append(y_max)
-            else:                                       # slide in x
-                point_base.append(base); free_axis.append(0)
-                init.append(i * spacing); lo.append(0.0); hi.append(x_max)
-
-    return {
-        "template": template,
-        "point_base": np.array(point_base, dtype=np.int64),
-        "free_axis": np.array(free_axis, dtype=np.int64),
-        "init": np.array(init, dtype=float),
-        "lo": np.array(lo, dtype=float),
-        "hi": np.array(hi, dtype=float),
-    }
-
-
-def boundary_flat_from_sliders(sliders, bnd_free: Float[Array, "n_sliders"]) -> Float[Array, "P 2"]:
-    """Build the (P, 2) boundary array from slider free-coordinates (differentiable)."""
-    flat = jnp.array(sliders["template"])
-    pb = sliders["point_base"]
-    ax = sliders["free_axis"]
-    flat = flat.at[pb, ax].set(bnd_free)
-    flat = flat.at[pb + 1, ax].set(bnd_free)
-    return flat
-
-
 # ── Ordered (non-crossing) boundary parameterization ──────────────────────────
 # Boundary sliders on each edge are kept strictly ordered via a cumulative-softmax
 # of unconstrained logits. This preserves the convexity of the boundary polygon —
@@ -239,6 +181,7 @@ def build_boundary_edges(struct, spacing: float = 1.0):
         edges.append({"pbase": np.array(pb, dtype=np.int64), "axis": 1, "lo": 0.0, "hi": y_max})
 
     logit_sizes = [len(e["pbase"]) + 1 for e in edges]   # k sliders -> k+1 gaps
+
     return {
         "template": template,
         "edges": edges,
@@ -254,7 +197,8 @@ def boundary_flat_from_logits(bnd, logits: Float[Array, "n_logits"]) -> Float[Ar
     Per edge with k sliders: softmax over (k+1) logits gives positive gaps that
     sum to 1; the cumulative sum (dropping the last) yields k strictly increasing
     positions in (0, 1), mapped onto the edge span. Strictly increasing ⟹ sliders
-    never cross ⟹ the boundary stays convex.
+    never cross ⟹ the boundary stays convex. The flat outline therefore stays a
+    square (sliders move only tangentially along each edge).
     """
     flat = jnp.array(bnd["template"])
     off = 0
@@ -317,38 +261,3 @@ def solve_cut_vertices_jax(
                 A = A.at[p1, pid(i, j + 1, 0)].add(-rij)
 
     return jnp.linalg.solve(A, b)
-
-
-def forward_deploy(
-        struct,
-        boundary_flat: Float[Array, "P 2"],
-        r: Float[Array, "rows cols"],
-        omega: float) -> Float[Array, "n_panels 4 2"]:
-    """Full differentiable map: r -> flat LES -> rigid deployment at omega.
-
-    Returns deployed panel vertices, shape (n_panels, 4, 2).
-    """
-    coords = solve_cut_vertices_jax(struct, boundary_flat, r)        # (P, 2) flat
-    corner_pid = struct["corner_pid"]
-    panel_flat = coords[corner_pid]                                  # (n_panels, 4, 2)
-
-    c, s = jnp.cos(omega), jnp.sin(omega)
-    R_rot = jnp.array([[c, -s], [s, c]])
-    eye = jnp.eye(2)
-    panel_rotates = struct["panel_rotates"]
-    n_panels = panel_flat.shape[0]
-    R = [R_rot if panel_rotates[p] else eye for p in range(n_panels)]
-
-    # Propagate translations over the spanning tree: t_child = t_parent +
-    # (R_parent - R_child) @ p_shared.
-    t = [None] * n_panels
-    t[struct["order"][0]] = jnp.zeros(2)
-    for p in struct["order"][1:]:
-        parent, shared_pid = struct["parent_edge"][p]
-        p_shared = coords[shared_pid]
-        t[p] = t[parent] + (R[parent] - R[p]) @ p_shared
-
-    deployed = jnp.stack([
-        (R[p] @ panel_flat[p].T).T + t[p] for p in range(n_panels)
-    ])
-    return deployed

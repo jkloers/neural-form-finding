@@ -21,7 +21,19 @@ def get_target_points(target_params=None, n_points=200):
 
     if shape_type == 'circle':
         return np.column_stack([cx + scale*np.cos(t), cy + scale*np.sin(t)])
-    
+
+    elif shape_type == 'rectangle':
+        # Axis-aligned rectangle perimeter; half-extents half_w / half_h
+        # (fall back to radius if not provided).
+        hw = target_params.get('half_w', scale)
+        hh = target_params.get('half_h', scale)
+        n = max(2, n_points // 4)
+        top    = np.column_stack([np.linspace(cx - hw, cx + hw, n), np.full(n, cy + hh)])
+        right  = np.column_stack([np.full(n, cx + hw), np.linspace(cy + hh, cy - hh, n)])
+        bottom = np.column_stack([np.linspace(cx + hw, cx - hw, n), np.full(n, cy - hh)])
+        left   = np.column_stack([np.full(n, cx - hw), np.linspace(cy - hh, cy + hh, n)])
+        return np.vstack([top, right, bottom, left])
+
     elif shape_type == 'heart':
         # Parametric equation of the heart
         x = 16 * np.sin(t)**3

@@ -48,6 +48,32 @@ Each stage is defined by a single interface. Swapping an implementation only req
 
 ---
 
+## Closed-state inverse design
+
+The same pipeline runs *in reverse*. Instead of closing an open Kirigami onto a target, it starts from a **flat closed sheet** (the Dang et al. 2021 RDPQK construction) and **deploys it with the physics solver** to match a target shape. Stage 1 is bypassed: the design parameterisation — per-cut aspect ratios plus ordered boundary sliders — is a Tutte embedding, so every design is non-self-intersecting by construction. The design variables are optimised end-to-end *through* the Stage-2 deployment.
+
+The example below is a half-tile A4 beam (17 × 12 = 204 panels) loaded as a cantilever: the left edge is clamped, the whole right edge is pulled, and a downward load is applied near the top-right corner. Over training, the flat cut pattern reorganises so the physics-deployed sheet fills its target rectangle.
+
+<p align="center">
+  <img src="docs/assets/closed_a4_training_evolution.gif" width="760" alt="Training evolution of a closed-state A4 cantilever beam: the flat cut pattern reorganises so the physics-deployed sheet fills its target rectangle"/>
+</p>
+<p align="center"><em>Training evolution — the flat closed design (left) reorganises so the physics-deployed sheet (right) fills its target rectangle.</em></p>
+
+<p align="center">
+  <img src="docs/assets/closed_a4_deploy.gif" width="460" alt="The trained closed-state design deploying from flat to its loaded equilibrium"/>
+</p>
+<p align="center"><em>The trained design deploying from the flat sheet to its loaded equilibrium.</em></p>
+
+```bash
+# Closed-state runs use run_closed.py (forces float64), not train.py
+JAX_PLATFORMS=cpu python nff/scripts/run_closed.py \
+    --config-name rect_a4_beam_half_f200_below --every 8
+```
+
+Every visual lands in a single `data/outputs/runs/run_<timestamp>_<config>/` folder. Configs live in `data/configs/closed/`.
+
+---
+
 ## Installation
 
 ```bash
