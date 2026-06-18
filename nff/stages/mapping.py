@@ -23,6 +23,9 @@ from typing import Callable, Any, Union, Dict
 from nff.stages.state import CentroidalState
 from nff.stages.geometry import reconstruct_vertices
 from nff.config.targets import get_target_points
+from nff.topology.closed_builder_jax import (
+    solve_cut_vertices_jax, boundary_flat_from_logits,
+)
 
 def preprocess_to_complex(p_restricted, context, params=None):
     """Normalization and Shirley-Chiu projection."""
@@ -399,6 +402,46 @@ def apply_direct_mapping(state: CentroidalState, map_params: dict) -> Centroidal
         face_centroids=map_params['face_centroids'],
         centroid_node_vectors=map_params['centroid_node_vectors'],
     )
+
+
+def apply_closed_les_mapping(state: CentroidalState, map_params: dict,
+                             static_features: dict) -> CentroidalState:
+    """Stage 0 for the closed-state RDPQK builder.
+
+    Builds the flat closed-sheet geometry from the design parameters via the
+    differentiable collinearity LES, replacing only the optimizable fields. All
+    topology (hinges, BCs, boundary ids, stiffnesses) is carried unchanged from
+    ``state``. Gradients flow back to the design parameters through the linear
+    solve and the boundary-slider parameterization.
+
+    Validity is guaranteed by construction: r = sigmoid(z) in (0, 1) gives
+    positive barycentric weights, and the boundary logits keep the edge sliders
+    strictly ordered (convex boundary) — together the Tutte-embedding conditions,
+    so the flat tessellation is non-self-intersecting with no validity penalty.
+
+    Args:
+        state: CentroidalState carrying the static topology (built once from the
+            closed tessellation).
+        map_params: {'z': (rows, cols), 'bnd_logits': (n_logits,)} — design vars.
+            Aspect ratios r = sigmoid(z) in (0, 1); boundary positions from
+            per-edge cumulative-softmax of bnd_logits.
+        static_features: {'struct': build_deploy_structure(...),
+            'sliders': build_boundary_edges(...)}.
+
+    Returns:
+        CentroidalState with flat geometry from the current design parameters.
+    """
+    struct = static_features['struct']
+    sliders = static_features['sliders']
+
+    r = jax.nn.sigmoid(map_params['z'])
+    boundary_flat = boundary_flat_from_logits(sliders, map_params['bnd_logits'])
+    coords = solve_cut_vertices_jax(struct, boundary_flat, r)      # (P, 2) flat
+    panel_flat = coords[struct['corner_pid']]                      # (n_faces, 4, 2)
+    face_centroids = panel_flat.mean(axis=1)
+    cnv = panel_flat - face_centroids[:, None, :]
+
+    return state._replace(face_centroids=face_centroids, centroid_node_vectors=cnv)
 
 
 def init_direct_vertices_params(state: CentroidalState, target_params: dict) -> dict:

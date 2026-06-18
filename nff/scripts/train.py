@@ -26,6 +26,7 @@ import numpy as np
 
 from nff.topology.builder import build_tessellation
 from nff.config.conditions import configure_tessellation
+from nff.scripts.closed_setup import build_closed_initial_state, init_closed_les_params
 from nff.config.experiment import (
     load_and_parse_config,
     load_arch_config,
@@ -45,6 +46,11 @@ from nff.utils.pipeline_viz import visualize_pipeline_results, plot_loss_history
 def _build_initial_state(config):
     """Build tessellation and CentroidalState from a parsed config."""
     topo = config.topology
+
+    # Closed-state RDPQK builder: flat sheet deployed by Stage-2 physics.
+    if topo.get('tessellation_type') == 'closed_rdpqk':
+        return build_closed_initial_state(config)
+
     topo_obj = SimpleNamespace(**topo)
 
     tessellation = build_tessellation(
@@ -106,6 +112,8 @@ def _init_gnn_params(config, initial_state):
 
 def _init_map_params(config, initial_state):
     """Initialise mapping parameters (GNN, direct_vertices, or analytical)."""
+    if config.mapping.type == 'closed_les':
+        return init_closed_les_params(config)
     if config.mapping.type.startswith('gnn_'):
         params, static_features = _init_gnn_params(config, initial_state)
         return params, static_features
@@ -198,6 +206,25 @@ def _run_one_problem(config, problem_label, run_dir):
             'center': config.target.center,
             'radius': config.target.radius,
         }
+        # For circle_fit the target is size-adaptive: show the circle actually
+        # fit to the deployed boundary, not the fixed config placeholder.
+        if getattr(config.training, 'geometric_loss_type', '') == 'circle_fit':
+            vs = result['valid_state']
+            disp = np.asarray(result['solution'].fields[-1])
+            b = np.asarray(vs.boundary_face_node_ids)
+            fc = np.asarray(vs.face_centroids) + disp[:, :2]
+            th = disp[:, 2]
+            cnv = np.asarray(vs.centroid_node_vectors)
+            bf, bl = b[:, 0], b[:, 1]
+            vec = cnv[bf, bl]
+            ct, st = np.cos(th[bf]), np.sin(th[bf])
+            cloud = fc[bf] + np.stack(
+                [ct * vec[:, 0] - st * vec[:, 1], st * vec[:, 0] + ct * vec[:, 1]], axis=-1)
+            A = np.concatenate([2.0 * cloud, np.ones((cloud.shape[0], 1))], axis=1)
+            cx, cy, cc = np.linalg.solve(A.T @ A + 1e-8 * np.eye(3), A.T @ np.sum(cloud ** 2, axis=1))
+            target_params = {'type': 'circle', 'center': [float(cx), float(cy)],
+                             'radius': float(np.sqrt(max(cc + cx * cx + cy * cy, 1e-12)))}
+
         visualize_pipeline_results(
             result, tessellation, config, target_params,
             problem_label + "_trained", run_dir=prob_dir,

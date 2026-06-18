@@ -24,6 +24,27 @@ def reconstruct_vertices(face_centroids, centroid_node_vectors):
     return face_centroids[:, None, :] + centroid_node_vectors
 
 
+def deformed_vertices(state, displacement):
+    """Apply a per-face rigid-body displacement to the panel vertices.
+
+    Used to reconstruct deployed geometry from a Stage-2 solution (each face
+    translates by [dx, dy] and rotates by dtheta about its centroid).
+
+    Args:
+        state: reference CentroidalState.
+        displacement: (n_faces, 3) = [dx, dy, dtheta] per face.
+
+    Returns:
+        (n_faces, max_nodes, 2) deformed node positions.
+    """
+    centroids = state.face_centroids + displacement[:, :2]
+    c, s = jnp.cos(displacement[:, 2]), jnp.sin(displacement[:, 2])
+    rot = jnp.stack([jnp.stack([c, -s], axis=-1),
+                     jnp.stack([s, c], axis=-1)], axis=-2)        # (n_faces, 2, 2)
+    rotated = jnp.einsum("fij,fnj->fni", rot, state.centroid_node_vectors)
+    return centroids[:, None, :] + rotated
+
+
 def hinge_vertex_positions(face_centroids, cnv, hinge_node_pairs):
     """Compute positions of shared vertices at hinges for both faces.
 
