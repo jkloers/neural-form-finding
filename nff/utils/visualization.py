@@ -2,6 +2,7 @@ import numpy as np
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon, FancyArrowPatch, Circle, Rectangle
+from matplotlib.ticker import FuncFormatter
 import matplotlib.animation as animation
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
@@ -27,6 +28,9 @@ def plot_cut_pattern(coords, T, cols, ax=None, filepath=None, hinge_margin=0.06,
         cols: number of cut-grid columns (T.shape[1]).
         hinge_margin: uncut ligament length left at each interior cut end.
     """
+    # Imported here (not at module level) so that importing this module for the
+    # standard pipeline plots does not require shapely — only the closed-state
+    # cut-pattern figure needs it.
     from shapely.geometry import MultiPoint
     coords = np.asarray(coords)
     rows = T.shape[0]
@@ -82,6 +86,10 @@ def write_deformed_into(tessellation, node_positions):
         tessellation: reference Tessellation.
         node_positions: (n_faces, max_nodes, 2) per-face deformed node positions
             (e.g. from ``deformed_vertices``).
+
+    Returns:
+        A copy of ``tessellation`` with its global vertices set to the deformed
+        positions.
     """
     deformed = tessellation.copy()
     new_vertices = np.array(deformed.vertices, dtype=float)
@@ -100,6 +108,13 @@ def plot_loading_diagram(tessellation, clamped_faces, load_specs, filepath,
     pull (dof 0) is drawn as a comb of uniform arrows just outside the loaded edge;
     point loads (dof 1) are single bold arrows at the loaded tile. No per-face arrow
     clutter — exactly one legible loading picture.
+
+    Args:
+        tessellation: the tessellation to draw (typically the deployed state).
+        clamped_faces: face indices held by the clamp.
+        load_specs: list of {face, dof, value} load dicts.
+        filepath: output PNG path.
+        title: figure title.
     """
     clamped = {int(f) for f in (clamped_faces or [])}
     colors = ["#9AA3AB" if i in clamped else "#F7C59F" for i in range(len(tessellation.faces))]
@@ -166,8 +181,8 @@ def plot_area_change(tess_flat, tess_deployed, rel, filepath,
         tess_flat, tess_deployed: trained-design tessellations (flat / deployed).
         rel: (n_faces,) relative area change (trained / initial - 1).
         filepath: output PNG path.
+        titles: (flat, deployed) panel titles.
     """
-    from matplotlib.ticker import FuncFormatter
     cmap = plt.get_cmap("coolwarm")          # blue = shrunk, red = enlarged
     norm = mcolors.TwoSlopeNorm(vmin=min(float(rel.min()), -1e-3), vcenter=0.0,
                                 vmax=max(float(rel.max()), 1e-3))
