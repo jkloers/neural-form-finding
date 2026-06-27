@@ -267,6 +267,54 @@ def compute_hinge_geometry(
 
 # ── main builder ──────────────────────────────────────────────────────────────
 
+def _extract_nodes_and_tets(gmsh) -> tuple:
+    """Pull node coordinates and 3D elements from a meshed gmsh model.
+
+    Prisms (6-node, from extruded triangles) are split into tets; native
+    tets (4-node) pass through.
+
+    Returns:
+        (coords (N, 3) float64, tets (M, 4) int32)
+    """
+    node_tags, coords, _ = gmsh.model.mesh.getNodes()
+    coords = np.array(coords, dtype=np.float64).reshape(-1, 3)
+    tag_to_idx = {int(t): i for i, t in enumerate(node_tags)}
+
+    etypes, _, enode_tags_list = gmsh.model.mesh.getElements(dim=3)
+    el_nodes_per_type = {4: 4, 6: 6}
+    tet_blocks = []
+    for etype, enodes in zip(etypes, enode_tags_list):
+        npe = el_nodes_per_type.get(int(etype))
+        if npe is None:
+            continue
+        rows = np.array(enodes, dtype=np.int64).reshape(-1, npe)
+        idx  = np.array([[tag_to_idx[int(t)] for t in r] for r in rows], np.int32)
+        tet_blocks.append(_prisms_to_tets(idx) if npe == 6 else idx)
+
+    if not tet_blocks:
+        raise RuntimeError("gmsh produced no 3D elements.")
+    return coords, np.vstack(tet_blocks).astype(np.int32)
+
+
+def _compute_bc_masks(coords, face_polys_2d, clamped_faces, loaded_faces) -> dict:
+    """Classify mesh nodes into clamped/loaded by point-in-face-polygon test.
+
+    Geometric (not index-based), so it stays correct even though the mesh is
+    rebuilt from scratch on every call.
+    """
+    bc_masks = {
+        'clamped': np.zeros(coords.shape[0], bool),
+        'loaded':  np.zeros(coords.shape[0], bool),
+    }
+    for fi_idx, poly_xy in enumerate(face_polys_2d):
+        mask = _nodes_in_polygon(coords, poly_xy)
+        if fi_idx in clamped_faces:
+            bc_masks['clamped'] |= mask
+        if fi_idx in loaded_faces:
+            bc_masks['loaded'] |= mask
+    return bc_masks
+
+
 def build_mesh_gmsh(
     cs,
     gap: float = 0.003,
@@ -485,40 +533,11 @@ def build_mesh_gmsh(
     gmsh.model.geo.synchronize()
     gmsh.model.mesh.generate(3)
 
-    # ── 9. Extract nodes ──────────────────────────────────────────────────────
-    node_tags, coords, _ = gmsh.model.mesh.getNodes()
-    coords = np.array(coords, dtype=np.float64).reshape(-1, 3)
-    tag_to_idx = {int(t): i for i, t in enumerate(node_tags)}
-    n_nodes = len(node_tags)
-
-    # ── 10. Extract 3D elements → tets ───────────────────────────────────────
-    etypes, _, enode_tags_list = gmsh.model.mesh.getElements(dim=3)
-    tet_blocks = []
-    el_nodes_per_type = {4: 4, 6: 6}
-    for etype, enodes in zip(etypes, enode_tags_list):
-        npe = el_nodes_per_type.get(int(etype))
-        if npe is None:
-            continue
-        rows = np.array(enodes, dtype=np.int64).reshape(-1, npe)
-        idx  = np.array([[tag_to_idx[int(t)] for t in r] for r in rows], np.int32)
-        tet_blocks.append(_prisms_to_tets(idx) if npe == 6 else idx)
-
-    if not tet_blocks:
-        raise RuntimeError("gmsh produced no 3D elements.")
-    tets = np.vstack(tet_blocks).astype(np.int32)
-
+    # ── 9-10. Extract nodes + 3D elements (prisms split into tets) ────────────
+    coords, tets = _extract_nodes_and_tets(gmsh)
     gmsh.finalize()
 
-    # ── 11. BC masks ──────────────────────────────────────────────────────────
-    bc_masks: dict[str, np.ndarray] = {
-        'clamped': np.zeros(n_nodes, bool),
-        'loaded':  np.zeros(n_nodes, bool),
-    }
-    for fi_idx, poly_xy in enumerate(face_polys_2d):
-        mask = _nodes_in_polygon(coords, poly_xy)
-        if fi_idx in clamped_faces:
-            bc_masks['clamped'] |= mask
-        if fi_idx in loaded_faces:
-            bc_masks['loaded'] |= mask
+    # ── 11. BC masks (geometric: point-in-face-polygon, robust to re-meshing) ─
+    bc_masks = _compute_bc_masks(coords, face_polys_2d, clamped_faces, loaded_faces)
 
     return coords, tets, bc_masks
