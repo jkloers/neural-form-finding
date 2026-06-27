@@ -101,12 +101,20 @@ def _area_grad(params: np.ndarray, cs, eps: float = 1e-5) -> np.ndarray:
 
 
 class _NumpyAdam:
-    """Minimal Adam optimizer in NumPy — no JAX or optax dependency."""
+    """Minimal Adam optimizer in NumPy — no JAX or optax dependency.
+
+    The gradient here is external (finite-differenced server-side by the SOFA
+    oracle plus cheap analytic terms), so there is no JAX autodiff graph for
+    optax to ride on — Adam is then just its short update formula on a flat
+    9-vector. Adam rather than plain SGD because the FD gradient is noisy and the
+    9 knobs span ~50x in scale: the m/v running averages low-pass the noise and
+    adapt the step size per parameter.
+    """
 
     def __init__(self, lr: float, b1: float = 0.9, b2: float = 0.999, eps: float = 1e-8):
         self.lr, self.b1, self.b2, self.eps = lr, b1, b2, eps
-        self.m: np.ndarray | None = None
-        self.v: np.ndarray | None = None
+        self.m: np.ndarray | None = None   # 1st moment: smoothed gradient (direction)
+        self.v: np.ndarray | None = None   # 2nd moment: smoothed squared gradient (scale)
         self.t: int = 0
 
     def update(self, params: np.ndarray, grads: np.ndarray) -> np.ndarray:
@@ -116,6 +124,8 @@ class _NumpyAdam:
         self.t += 1
         self.m = self.b1 * self.m + (1 - self.b1) * grads
         self.v = self.b2 * self.v + (1 - self.b2) * grads ** 2
+        # Bias-correction: m and v start at 0 so they under-estimate early;
+        # dividing by (1 - b**t) cancels that exactly and fades to a no-op as t grows.
         m_hat = self.m / (1 - self.b1 ** self.t)
         v_hat = self.v / (1 - self.b2 ** self.t)
         return params - self.lr * m_hat / (np.sqrt(v_hat) + self.eps)
@@ -262,9 +272,12 @@ def run_optimization(cfg: dict, n_epochs: int, lr: float, tesseract_url: str,
                   "stopping early — keeping the epochs completed so far.")
             break
 
+        # Optimize the SMOOTH (KS-aggregated) strain: the hard max is a sawtooth in
+        # design space (the peak element keeps switching), which wrecks the FD gradient.
+        # true_eps is the honest peak, kept for reporting only.
         max_vm   = tc.decode_scalar(fwd['max_von_mises_stress'])
-        strain   = tc.decode_scalar(fwd['smooth_principal_strain'])   # smooth KS surrogate (design)
-        true_eps = tc.decode_scalar(fwd['max_principal_strain'])      # true peak (reporting only)
+        strain   = tc.decode_scalar(fwd['smooth_principal_strain'])   # design objective
+        true_eps = tc.decode_scalar(fwd['max_principal_strain'])      # reporting only
         area     = _hinge_area(phys, cs_static)
         gp       = phys['gap']
 
@@ -276,23 +289,34 @@ def run_optimization(cfg: dict, n_epochs: int, lr: float, tesseract_url: str,
         l_gap = w_gap * (gp / gap_ref) ** 2
         loss  = l_fat + l_mat + l_gap
 
-        # ── Gradients ─────────────────────────────────────────────────────────
+        # ── Gradients (HYBRID: only the strain term costs SOFA) ───────────────
+        # The loss has three terms but only one needs physics: the strain gradient
+        # comes from the oracle's finite-difference Jacobian (the 54-sim cost),
+        # while material and gap are pure geometry, computed locally for free.
         def _jac_val(output_key, inp_key):
             return tc.decode_scalar(jac[output_key][inp_key]) if output_key in jac else 0.0
         dstrain = np.array([_jac_val('smooth_principal_strain', ki) for ki in tc.PARAM_NAMES])
-        # d(ε_p)/d(param) = dstrain when plastic (strain > yield), else 0.
+
+        # Fatigue term: ε_plastic = max(0, ε − ε_yield) has a kink at yield, so its
+        # subgradient is dstrain while plastic (ε > yield) and 0 below — below yield
+        # the design is fatigue-safe and only material/gap steer it.
         d_fat = (w_fatigue / eps_yield) * (1.0 if strain > eps_yield else 0.0) * dstrain
-        # Material + gap are analytic / cheap-FD (no SOFA). Degeneracy guard: stop the
-        # material pull once the hinge is at the min area (else it collapses).
+
+        # Material term: cheap central-FD on the analytic hinge area (no SOFA).
+        # Degeneracy guard — stop pulling once at the min area, else the hinge collapses.
         n_p   = len(tc.PARAM_NAMES)
         d_mat = (np.zeros(n_p) if area <= area_min
                  else (w_mat / area_ref) * _area_grad(params, cs_static))
+
+        # Gap term: exact analytic derivative of (gap/gap0)^2; touches only the gap knob.
         d_gap = np.zeros(n_p); d_gap[0] = w_gap * 2.0 * gp / gap_ref ** 2
         grad  = d_fat + d_mat + d_gap
 
         optimizer.lr = lr_at(epoch)                              # lr schedule (damps overshoot)
         params = optimizer.update(params, grad)
-        params[pos_mask] = np.maximum(params[pos_mask], floor)   # project to positivity
+        # Keep gap + the four reaches positive by a hard projection to a floor — not
+        # softplus, which froze these knobs ~500x slower than the free control points.
+        params[pos_mask] = np.maximum(params[pos_mask], floor)
 
         # ── Record + save every epoch (a crash never loses everything) ────────
         for name in tc.PARAM_NAMES:
