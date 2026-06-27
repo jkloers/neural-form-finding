@@ -19,13 +19,13 @@ The two never share a process. The client speaks to the oracle only through
    nff/sofa/  (client, no Sofa)                 sofa/  (oracle, imports Sofa)
    ─────────────────────────────                ─────────────────────────────
    tesseract_client.py  ──HTTP──▶  Docker ▶  tesseract_api.py
-   hinge_optimizer.py*               (Tesseract)   │ imports
+   hinge_optimizer.py                (Tesseract)   │ imports
    mesh_builder_gmsh.py  ◀──symlink──────────────  │ simulate_cell.py
    fatigue.py / hinge_viz.py                       │   ├─ scene_builder.py
    config_to_physical.py                           │   └─ materials.py
 ```
-\* `sofa/hinge_optimizer.py` is *client* code that happens to live in `sofa/`; it
-runs in `kgnn_mac` and imports only from `nff.sofa.*`, never `Sofa`.
+`nff/sofa/hinge_optimizer.py` is the optimization driver: client code that runs in
+`kgnn_mac` and imports only from `nff.sofa.*`, never `Sofa`.
 
 ## File responsibilities
 
@@ -37,6 +37,7 @@ runs in `kgnn_mac` and imports only from `nff.sofa.*`, never `Sofa`.
 - `mesh_builder_gmsh.py` — **symlink** to `nff/sofa/mesh_builder_gmsh.py` (one source).
 
 **Client side (`nff/sofa/`)** — importable from `kgnn_mac`, never touches `Sofa`:
+- `hinge_optimizer.py` — the optimization driver (CLI entry point): loss, NumPy Adam, history.
 - `tesseract_client.py` — the single HTTP client: `apply` / `jacobian`,
   `decode_scalar` / `decode_array`, `build_physical_cs`, `build_payload`, `PARAM_NAMES`.
 - `mesh_builder_gmsh.py` — **source of truth** for `CentroidalState → gmsh tet mesh`.

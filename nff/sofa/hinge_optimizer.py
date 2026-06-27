@@ -1,4 +1,4 @@
-"""sofa/hinge_optimizer.py — corner-hinge Bézier optimizer via the Tesseract oracle.
+"""nff/sofa/hinge_optimizer.py — corner-hinge Bézier optimizer via the Tesseract oracle.
 
 Client-side (runs in kgnn_mac; never imports ``Sofa``). Optimizes the 9 hinge
 parameters against the Dockerised SOFA oracle through :mod:`nff.sofa.tesseract_client`.
@@ -22,7 +22,7 @@ analytic client-side FD (no SOFA call).
 Usage
 -----
     docker run -p 8000:8000 nff-sofa-oracle          # start the oracle
-    conda run -n kgnn_mac python sofa/hinge_optimizer.py \\
+    conda run -n kgnn_mac python nff/sofa/hinge_optimizer.py \\
         --config data/configs/sofa/hinge_opt_2face.yaml [--n-epochs 30] [--lr 0.05]
 
 Outputs  ``data/outputs/hinge_opt/<timestamp>_<config>/``
@@ -40,7 +40,7 @@ import numpy as np
 import requests
 import yaml
 
-REPO = pathlib.Path(__file__).resolve().parent.parent
+REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
 from nff.sofa import tesseract_client as tc

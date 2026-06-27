@@ -228,7 +228,7 @@ tesseract build sofa/
 docker run -d -p 8000:8000 -e TESSERACT_RUNTIME_SERVE_HOST=0.0.0.0 nff-sofa-oracle:latest serve
 
 # Optimize a hinge against the oracle
-python sofa/hinge_optimizer.py --config data/configs/sofa/hinge_opt_2face.yaml
+python nff/sofa/hinge_optimizer.py --config data/configs/sofa/hinge_opt_2face.yaml
 ```
 
 The SOFA code is split across two environments by design — `sofa/` runs inside the Docker/SOFA
