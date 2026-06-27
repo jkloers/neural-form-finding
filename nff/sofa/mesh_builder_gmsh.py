@@ -135,9 +135,6 @@ def compute_hinge_geometry(
     cs,
     gap: float = 0.003,
     bezier_params: dict = None,
-    mesh_size_face: float = None,
-    mesh_size_hinge: float = None,
-    mesh_refine: float = 1.0,
 ) -> dict:
     """Resolve face polygons and per-hinge Bézier strip geometry.
 
@@ -156,13 +153,12 @@ def compute_hinge_geometry(
         cs: CentroidalState (or SimpleNamespace) describing faces and hinges.
         gap: rigid face separation along ê_arm [m]. Must be > 0 for corner hinges.
         bezier_params: optional overrides (see ``build_mesh_gmsh``).
-        mesh_size_face: target element size in face bodies [m].
-        mesh_size_hinge: target element size inside the hinge [m].
 
     Returns:
         dict with keys ``face_verts`` (n_faces, 4, 2, after translation),
         ``hinge_data`` (per-hinge anchor/CP dicts), ``clamped_faces``,
-        ``loaded_faces``, ``lc_f``, ``lc_h``.
+        ``loaded_faces``. Mesh element sizing is the caller's concern
+        (``build_mesh_gmsh``), derived from this geometry.
     """
     bp = bezier_params or {}
 
@@ -200,15 +196,6 @@ def compute_hinge_geometry(
 
     clamped_faces = sorted({int(r[0]) for r in np.asarray(cs.constrained_face_DOF_pairs)})
     loaded_faces  = sorted({int(r[0]) for r in np.asarray(cs.loaded_face_DOF_pairs)})
-
-    if mesh_size_face is None:
-        span = float(np.ptp(face_verts.reshape(-1, 2), axis=0).max())
-        mesh_size_face = span / 8.0
-    if mesh_size_hinge is None:
-        mesh_size_hinge = max(gap * 1.5, 1e-5)
-    # mesh_refine > 1 → finer elements (smoother FD gradients, slower sims).
-    r = max(float(mesh_refine), 1e-3)
-    lc_f, lc_h = mesh_size_face / r, mesh_size_hinge / r
 
     hinge_data = []
     for hg in hinges:
@@ -275,7 +262,6 @@ def compute_hinge_geometry(
         'hinge_data': hinge_data,
         'clamped_faces': clamped_faces,
         'loaded_faces': loaded_faces,
-        'lc_f': lc_f, 'lc_h': lc_h,
     }
 
 
@@ -323,16 +309,23 @@ def build_mesh_gmsh(
     import gmsh
 
     # ── 1-3. Face geometry + hinge strip endpoints ───────────────────────────
-    geo = compute_hinge_geometry(
-        cs, gap=gap, bezier_params=bezier_params,
-        mesh_size_face=mesh_size_face, mesh_size_hinge=mesh_size_hinge,
-        mesh_refine=mesh_refine)
+    geo = compute_hinge_geometry(cs, gap=gap, bezier_params=bezier_params)
     face_verts    = geo['face_verts']
     hinge_data    = geo['hinge_data']
     clamped_faces = geo['clamped_faces']
     loaded_faces  = geo['loaded_faces']
-    lc_f, lc_h    = geo['lc_f'], geo['lc_h']
     n_faces       = face_verts.shape[0]
+
+    # Mesh element sizing — a discretization concern, derived from the resolved
+    # geometry: face size from the panel span, hinge size from the gap, both
+    # refined by mesh_refine (>1 → finer elements, smoother FD gradients, slower).
+    if mesh_size_face is None:
+        span = float(np.ptp(face_verts.reshape(-1, 2), axis=0).max())
+        mesh_size_face = span / 8.0
+    if mesh_size_hinge is None:
+        mesh_size_hinge = max(gap * 1.5, 1e-5)
+    r = max(float(mesh_refine), 1e-3)
+    lc_f, lc_h = mesh_size_face / r, mesh_size_hinge / r
 
     # ── 4. gmsh session ───────────────────────────────────────────────────────
     gmsh.initialize()
