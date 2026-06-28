@@ -45,7 +45,7 @@ sys.path.insert(0, str(REPO))
 
 from nff.sofa import tesseract_client as tc
 from nff.sofa.fatigue import cycles_to_failure
-from nff.sofa.mesh_builder_gmsh import compute_hinge_geometry
+from nff.sofa.hinge_geometry import compute_hinge_geometry
 
 OUTPUTS_DIR           = REPO / 'data' / 'outputs' / 'hinge_opt'
 TESSERACT_DEFAULT_URL = tc.DEFAULT_URL
