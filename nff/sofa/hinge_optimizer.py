@@ -1,7 +1,8 @@
 """nff/sofa/hinge_optimizer.py — corner-hinge Bézier optimizer via the Tesseract oracle.
 
 Client-side (runs in kgnn_mac; never imports ``Sofa``). Optimizes the 9 hinge
-parameters against the Dockerised SOFA oracle through :mod:`nff.sofa.tesseract_client`.
+parameters against the Dockerised SOFA oracle. The oracle input dict is assembled by
+:mod:`nff.sofa.oracle_payload`; the HTTP transport is the ``tesseract_core`` SDK.
 All parameters live directly in physical space (metres) and are updated by a NumPy
 Adam step; gap + the four edge reaches are kept positive by projecting to a small
 floor after each step (no softplus — that froze gap/reaches ~500× slower than the
@@ -37,25 +38,25 @@ import shutil
 import sys
 
 import numpy as np
-import requests
 import yaml
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
-from nff.sofa import tesseract_client as tc
+from tesseract_core import Tesseract
+from nff.sofa import oracle_payload as op
 from nff.sofa.fatigue import cycles_to_failure
 from nff.sofa.hinge_geometry import compute_hinge_geometry
 
 OUTPUTS_DIR           = REPO / 'data' / 'outputs' / 'hinge_opt'
-TESSERACT_DEFAULT_URL = tc.DEFAULT_URL
+TESSERACT_DEFAULT_URL = op.DEFAULT_URL
 
 
 # ── Hinge objective helpers (physical-space params, no SOFA) ───────────────────
 
 def _phys(params: np.ndarray) -> dict:
     """Parameter vector → name→value dict (keys == Tesseract schema names)."""
-    return {n: float(v) for n, v in zip(tc.PARAM_NAMES, params)}
+    return {n: float(v) for n, v in zip(op.PARAM_NAMES, params)}
 
 
 def _bezier_from_phys(phys: dict) -> dict:
@@ -164,7 +165,7 @@ def _initial_params(cfg: dict, cs) -> np.ndarray:
             cp[kx], cp[ky] = float(inward[0]), float(inward[1])
 
     free_init = np.array([float(sofa_cfg.get(f'{n}_initial', cp[n]))
-                          for n in tc.FREE_NAMES], dtype=np.float64)
+                          for n in op.FREE_NAMES], dtype=np.float64)
     return np.concatenate([pos_init, free_init]).astype(np.float64)
 
 
@@ -197,12 +198,12 @@ def run_optimization(cfg: dict, n_epochs: int, lr: float, tesseract_url: str,
     loss_cfg = cfg.get('loss', {})
     opt_cfg  = cfg.get('optimization', {})
 
-    cs_static = tc.build_physical_cs(cfg)
+    cs_static = op.build_physical_cs(cfg)
     clamped_faces = sorted({int(f) for f in cs_static.constrained_face_DOF_pairs[:, 0]})
     loaded_faces  = sorted({int(f) for f in cs_static.loaded_face_DOF_pairs[:, 0]})
 
     params   = _initial_params(cfg, cs_static)
-    pos_mask = np.array([n in tc.POS_NAMES for n in tc.PARAM_NAMES])   # gap + 4 reaches
+    pos_mask = np.array([n in op.POS_NAMES for n in op.PARAM_NAMES])   # gap + 4 reaches
     floor    = float(sofa_cfg.get('param_floor', 0.0005))             # 0.5 mm min
 
     # Loss weights + the plasticity / low-cycle-fatigue criterion.
@@ -222,11 +223,12 @@ def run_optimization(cfg: dict, n_epochs: int, lr: float, tesseract_url: str,
     area_ref = max(_hinge_area(_phys(params), cs_static), 1e-12)
     area_min = float(loss_cfg.get('min_hinge_area_m2', 20e-6))        # 20 mm² floor
 
+    oracle = Tesseract.from_url(tesseract_url)   # SDK handle: HTTP + response decoding via tesseract_core
     optimizer = _NumpyAdam(lr)
     lr_at = _lr_schedule_fn(lr, n_epochs, str(opt_cfg.get('lr_schedule', 'cosine')),
                             float(opt_cfg.get('lr_hold_frac', 0.4)))
 
-    history: dict = {k: [] for k in tc.PARAM_NAMES + [
+    history: dict = {k: [] for k in op.PARAM_NAMES + [
         'total_loss', 'loss_fatigue', 'loss_mat', 'loss_gap',
         'max_strain', 'plastic_strain', 'cycles_Nf', 'max_vm_rot', 'hinge_area']}
 
@@ -243,7 +245,7 @@ def run_optimization(cfg: dict, n_epochs: int, lr: float, tesseract_url: str,
     def _save_convergence():
         np.savez(
             str(out_dir / 'convergence.npz'),
-            **{name: np.array(history[name]) for name in tc.PARAM_NAMES},
+            **{name: np.array(history[name]) for name in op.PARAM_NAMES},
             total_loss      = np.array(history['total_loss']),
             loss_fatigue    = np.array(history['loss_fatigue']),
             loss_mat        = np.array(history['loss_mat']),
@@ -261,12 +263,13 @@ def run_optimization(cfg: dict, n_epochs: int, lr: float, tesseract_url: str,
 
     for epoch in range(n_epochs):
         phys    = _phys(params)
-        payload = tc.build_payload(cs_static, phys, cfg, clamped_faces, loaded_faces)
+        payload = op.build_payload(cs_static, phys, cfg, clamped_faces, loaded_faces)
 
         # ── Oracle calls (apply + strain Jacobian) — robust to a hung sim ──────
         try:
-            fwd = tc.apply(tesseract_url, payload)
-            jac = tc.jacobian(tesseract_url, payload, tc.PARAM_NAMES, ['smooth_principal_strain'])
+            fwd = oracle.apply(payload)
+            jac = oracle.jacobian(payload, jac_inputs=op.PARAM_NAMES,
+                                  jac_outputs=['smooth_principal_strain'])
         except Exception as ex:
             print(f"  epoch {epoch+1}: oracle call failed ({type(ex).__name__}: {ex}); "
                   "stopping early — keeping the epochs completed so far.")
@@ -275,9 +278,9 @@ def run_optimization(cfg: dict, n_epochs: int, lr: float, tesseract_url: str,
         # Optimize the SMOOTH (KS-aggregated) strain: the hard max is a sawtooth in
         # design space (the peak element keeps switching), which wrecks the FD gradient.
         # true_eps is the honest peak, kept for reporting only.
-        max_vm   = tc.decode_scalar(fwd['max_von_mises_stress'])
-        strain   = tc.decode_scalar(fwd['smooth_principal_strain'])   # design objective
-        true_eps = tc.decode_scalar(fwd['max_principal_strain'])      # reporting only
+        max_vm   = float(fwd['max_von_mises_stress'])
+        strain   = float(fwd['smooth_principal_strain'])   # design objective
+        true_eps = float(fwd['max_principal_strain'])      # reporting only
         area     = _hinge_area(phys, cs_static)
         gp       = phys['gap']
 
@@ -294,8 +297,8 @@ def run_optimization(cfg: dict, n_epochs: int, lr: float, tesseract_url: str,
         # comes from the oracle's finite-difference Jacobian (the 54-sim cost),
         # while material and gap are pure geometry, computed locally for free.
         def _jac_val(output_key, inp_key):
-            return tc.decode_scalar(jac[output_key][inp_key]) if output_key in jac else 0.0
-        dstrain = np.array([_jac_val('smooth_principal_strain', ki) for ki in tc.PARAM_NAMES])
+            return float(jac[output_key][inp_key]) if output_key in jac else 0.0
+        dstrain = np.array([_jac_val('smooth_principal_strain', ki) for ki in op.PARAM_NAMES])
 
         # Fatigue term: ε_plastic = max(0, ε − ε_yield) has a kink at yield, so its
         # subgradient is dstrain while plastic (ε > yield) and 0 below — below yield
@@ -304,7 +307,7 @@ def run_optimization(cfg: dict, n_epochs: int, lr: float, tesseract_url: str,
 
         # Material term: cheap central-FD on the analytic hinge area (no SOFA).
         # Degeneracy guard — stop pulling once at the min area, else the hinge collapses.
-        n_p   = len(tc.PARAM_NAMES)
+        n_p   = len(op.PARAM_NAMES)
         d_mat = (np.zeros(n_p) if area <= area_min
                  else (w_mat / area_ref) * _area_grad(params, cs_static))
 
@@ -319,7 +322,7 @@ def run_optimization(cfg: dict, n_epochs: int, lr: float, tesseract_url: str,
         params[pos_mask] = np.maximum(params[pos_mask], floor)
 
         # ── Record + save every epoch (a crash never loses everything) ────────
-        for name in tc.PARAM_NAMES:
+        for name in op.PARAM_NAMES:
             history[name].append(phys[name])
         history['total_loss'].append(loss)
         history['loss_fatigue'].append(l_fat)
@@ -349,26 +352,26 @@ def run_optimization(cfg: dict, n_epochs: int, lr: float, tesseract_url: str,
         return history   # search mode: metrics come from convergence.npz; skip the field sim
 
     _capture_final_state(cfg, cs_static, history, clamped_faces, loaded_faces,
-                         tesseract_url, out_dir)
+                         oracle, out_dir)
     return history
 
 
 def _capture_final_state(cfg, cs_static, history, clamped_faces, loaded_faces,
-                         tesseract_url, out_dir) -> None:
+                         oracle, out_dir) -> None:
     """Re-run the oracle at the best design and save the deformed field for viz."""
     best_idx  = int(np.argmin(history['total_loss']))
-    best_phys = {name: float(history[name][best_idx]) for name in tc.PARAM_NAMES}
+    best_phys = {name: float(history[name][best_idx]) for name in op.PARAM_NAMES}
     print(f"\nCapturing final-state field at best design (epoch {best_idx + 1}) ...")
-    payload = tc.build_payload(cs_static, best_phys, cfg, clamped_faces, loaded_faces)
+    payload = op.build_payload(cs_static, best_phys, cfg, clamped_faces, loaded_faces)
     payload['return_fields']        = True
     payload['skip_secondary_modes'] = True   # rotation field only
     try:
-        fwd = tc.apply(tesseract_url, payload)
+        fwd = oracle.apply(payload)
         np.savez(
             str(out_dir / 'final_state.npz'),
-            von_mises_field = tc.decode_array(fwd['von_mises_field']),
-            deformed_nodes  = tc.decode_array(fwd['deformed_nodes']),
-            mesh_tets       = tc.decode_array(fwd['mesh_tets']),
+            von_mises_field = np.asarray(fwd['von_mises_field']),
+            deformed_nodes  = np.asarray(fwd['deformed_nodes']),
+            mesh_tets       = np.asarray(fwd['mesh_tets']),
             best_idx        = np.array(best_idx),
             face_centroids             = cs_static.face_centroids,
             centroid_node_vectors      = cs_static.centroid_node_vectors,
@@ -410,8 +413,8 @@ def main() -> None:
 
     # Verify the server is reachable before committing to a long run.
     try:
-        requests.get(f"{url}/health", timeout=30)
-    except (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout):
+        Tesseract.from_url(url).health()
+    except Exception:
         print(f"ERROR: cannot reach Tesseract server at {url}")
         print("Start it:  docker run -p 8000:8000 -e TESSERACT_RUNTIME_SERVE_HOST=0.0.0.0 nff-sofa-oracle:latest serve")
         raise SystemExit(1)

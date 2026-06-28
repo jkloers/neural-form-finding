@@ -35,7 +35,8 @@ import matplotlib.pyplot as plt
 REPO = pathlib.Path(__file__).parent.parent
 sys.path.insert(0, str(REPO))
 
-from nff.sofa import tesseract_client as tc
+from tesseract_core import Tesseract
+from nff.sofa import oracle_payload as op
 from nff.sofa.hinge_viz import P_BG, P_DARK
 
 OUTPUTS = REPO / 'data' / 'outputs' / 'hinge_opt'
@@ -66,16 +67,16 @@ def _fit_stiffness(x, U):
 def sweep(run_dir, url, rot_deg, disp_mm, n_steps):
     """Sweep the three modes at small magnitudes; return energies per magnitude."""
     cfg = yaml.safe_load(open(run_dir / 'config.yaml'))
-    cs = tc.build_physical_cs(cfg)
+    cs = op.build_physical_cs(cfg)
     conv = np.load(run_dir / 'convergence.npz')
     best = int(np.argmin(conv['total_loss']))
-    best_phys = {n: float(conv[n][best]) for n in tc.PARAM_NAMES}
+    best_phys = {n: float(conv[n][best]) for n in op.PARAM_NAMES}
     clamped = sorted({int(f) for f in cs.constrained_face_DOF_pairs[:, 0]})
     loaded  = sorted({int(f) for f in cs.loaded_face_DOF_pairs[:, 0]})
     print(f'Optimal design = epoch {best + 1} of {run_dir.name}')
-    print(f'  params: ' + '  '.join(f'{n}={best_phys[n]*1000:.2f}mm' for n in tc.PARAM_NAMES[:5]))
+    print(f'  params: ' + '  '.join(f'{n}={best_phys[n]*1000:.2f}mm' for n in op.PARAM_NAMES[:5]))
 
-    base = tc.build_payload(cs, best_phys, cfg, clamped, loaded)
+    base = op.build_payload(cs, best_phys, cfg, clamped, loaded)
     base['skip_secondary_modes'] = False     # run rotation + shear + tension
     base['return_fields'] = False
     base['n_steps'] = int(n_steps)
@@ -84,6 +85,7 @@ def sweep(run_dir, url, rot_deg, disp_mm, n_steps):
     disp_m  = np.asarray(disp_mm) * 1e-3
     rec = {'theta': [], 'E_rot': [], 'u': [], 'E_shear': [], 'E_tension': []}
     n = max(len(rot_rad), len(disp_m))
+    oracle = Tesseract.from_url(url)
     print(f'Sweeping {n} magnitudes (rotation + shear + tension per call) ...')
     for i in range(n):
         th = float(rot_rad[min(i, len(rot_rad) - 1)])
@@ -92,10 +94,10 @@ def sweep(run_dir, url, rot_deg, disp_mm, n_steps):
         p['rotation_angle_deg']     = float(np.degrees(th))
         p['shear_displacement_m']   = u
         p['tension_displacement_m'] = u
-        fwd = tc.apply(url, p)
-        er = tc.decode_scalar(fwd['strain_energy'])
-        es = tc.decode_scalar(fwd['energy_shear'])
-        et = tc.decode_scalar(fwd['energy_tension'])
+        fwd = oracle.apply(p)
+        er = float(fwd['strain_energy'])
+        es = float(fwd['energy_shear'])
+        et = float(fwd['energy_tension'])
         rec['theta'].append(th); rec['E_rot'].append(er)
         rec['u'].append(u); rec['E_shear'].append(es); rec['E_tension'].append(et)
         print(f'  θ={np.degrees(th):4.1f}°  E_rot={er:.3e} J   '
