@@ -1,24 +1,22 @@
-"""nff/sofa/tesseract_client.py — typed HTTP client for the SOFA Tesseract oracle.
+"""nff/sofa/oracle_payload.py — payload builder for the SOFA Tesseract oracle.
 
-Client-side (kgnn_mac); never imports ``Sofa``. This is the single, public bridge
-between the JAX world and the Dockerised SOFA oracle:
+Client-side (kgnn_mac); never imports ``Sofa``. Builds the inputs the oracle
+expects. The HTTP transport itself is handled by the official ``tesseract_core``
+SDK (``Tesseract.from_url(url).apply(...)`` / ``.jacobian(...)``), which also
+decodes the responses — so no hand-rolled requests/JSON layer lives here.
 
-  * ``apply`` / ``jacobian``       — the two oracle endpoints,
-  * ``decode_scalar`` / ``decode_array`` — un-wrap Tesseract's JSON output values,
-  * ``build_physical_cs``          — Tessellation → SI-unit CentroidalState fields,
-  * ``build_payload``              — assemble the InputSchema dict.
+  * ``build_physical_cs``  — Tessellation → SI-unit CentroidalState fields,
+  * ``build_payload``      — assemble the InputSchema dict,
+  * ``PARAM_NAMES``        — canonical ordering of the 9 design knobs.
 
-Every consumer (the hinge optimizer and the viz scripts) goes through this module,
-so the payload format and the output decoders are defined exactly once.
+Every consumer goes through this module, so the payload format is defined once.
 """
 from __future__ import annotations
 
-import base64
 import pathlib
 import types
 
 import numpy as np
-import requests
 
 # JAX (CPU, x64) is needed only by build_physical_cs → CentroidalState.from_tessellation.
 import os
@@ -38,59 +36,6 @@ DEFAULT_URL    = 'http://localhost:8000'
 POS_NAMES   = ['gap', 's0_top', 's0_bot', 's1_top', 's1_bot']   # positive, floored
 FREE_NAMES  = ['bcu_x', 'bcu_y', 'bcl_x', 'bcl_y']              # one CP per arc
 PARAM_NAMES = POS_NAMES + FREE_NAMES                            # 9, == Jacobian inputs
-
-
-# ── Output decoders ────────────────────────────────────────────────────────────
-
-def decode_scalar(value) -> float:
-    """Un-wrap a Tesseract scalar output (``{'data':{'buffer':…}}`` / ``{'value':…}``)."""
-    if isinstance(value, dict):
-        if 'data' in value and 'buffer' in value['data']:
-            return float(value['data']['buffer'])
-        if 'value' in value:
-            return float(value['value'])
-    return float(value)
-
-
-def decode_array(value) -> np.ndarray:
-    """Un-wrap a Tesseract array output (base64 or plain list) into a NumPy array."""
-    if isinstance(value, dict) and value.get('object_type') == 'array':
-        shape, dtype, data = tuple(value['shape']), value['dtype'], value['data']
-        if data.get('encoding') == 'base64':
-            buf = base64.b64decode(data['buffer'])
-            return np.frombuffer(buf, dtype=dtype).reshape(shape).copy()
-        return np.asarray(data['buffer'], dtype=dtype).reshape(shape)
-    return np.asarray(value)
-
-
-# ── Endpoints ──────────────────────────────────────────────────────────────────
-
-def apply(url: str, payload: dict, timeout: float = 600.0) -> dict:
-    """POST /apply and return the OutputSchema as a plain dict."""
-    return _post(url, 'apply', {'inputs': payload}, timeout)
-
-
-def jacobian(url: str, payload: dict, jac_inputs: list[str],
-             jac_outputs: list[str], timeout: float = 1800.0) -> dict:
-    """POST /jacobian and return ``{output: {input: value}}``."""
-    body = {'inputs': payload, 'jac_inputs': jac_inputs, 'jac_outputs': jac_outputs}
-    return _post(url, 'jacobian', body, timeout)
-
-
-def _post(url: str, endpoint: str, body: dict, timeout: float) -> dict:
-    try:
-        resp = requests.post(f"{url}/{endpoint}", json=body, timeout=timeout)
-        resp.raise_for_status()
-        return resp.json()
-    except requests.exceptions.ConnectionError:
-        raise RuntimeError(
-            f"Cannot connect to Tesseract server at {url}.\n"
-            "Start the server: docker run -p 8000:8000 nff-sofa-oracle"
-        )
-    except requests.exceptions.HTTPError as exc:
-        raise RuntimeError(
-            f"Tesseract /{endpoint} failed ({resp.status_code}):\n{resp.text[:800]}"
-        ) from exc
 
 
 # ── CentroidalState → payload ──────────────────────────────────────────────────

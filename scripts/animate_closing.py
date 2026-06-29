@@ -30,7 +30,8 @@ from matplotlib.collections import PolyCollection, LineCollection
 REPO = pathlib.Path(__file__).parent.parent
 sys.path.insert(0, str(REPO))
 
-from nff.sofa import tesseract_client as tc
+from tesseract_core import Tesseract
+from nff.sofa import oracle_payload as op
 from nff.sofa.fatigue import cycles_to_failure
 from nff.sofa.hinge_viz import bottom_tris, edges, P_BG, P_DARK
 
@@ -58,10 +59,10 @@ def _latest_run():
 def capture_closing(run_dir, url, max_angle, frames):
     """Sweep the rotation angle on the run's best design; return per-angle states."""
     cfg = yaml.safe_load(open(run_dir / 'config.yaml'))
-    cs = tc.build_physical_cs(cfg)
+    cs = op.build_physical_cs(cfg)
     conv = np.load(run_dir / 'convergence.npz')
     best = int(np.argmin(conv['total_loss']))
-    best_phys = {n: float(conv[n][best]) for n in tc.PARAM_NAMES}
+    best_phys = {n: float(conv[n][best]) for n in op.PARAM_NAMES}
     clamped = sorted({int(f) for f in cs.constrained_face_DOF_pairs[:, 0]})
     loaded  = sorted({int(f) for f in cs.loaded_face_DOF_pairs[:, 0]})
 
@@ -69,16 +70,17 @@ def capture_closing(run_dir, url, max_angle, frames):
     print(f'Capturing closing 0→{max_angle:.0f}° ({frames} frames) on best design '
           f'(epoch {best + 1}) ...')
     states = []
+    oracle = Tesseract.from_url(url)
     for a in angles:
-        payload = tc.build_payload(cs, best_phys, cfg, clamped, loaded)
+        payload = op.build_payload(cs, best_phys, cfg, clamped, loaded)
         payload['rotation_angle_deg']   = float(a)
         payload['return_fields']        = True
         payload['skip_secondary_modes'] = True
-        fwd = tc.apply(url, payload)
-        nodes = tc.decode_array(fwd['deformed_nodes'])
-        vm    = tc.decode_array(fwd['von_mises_field'])
-        tets  = tc.decode_array(fwd['mesh_tets'])
-        strain = tc.decode_scalar(fwd['max_principal_strain'])
+        fwd = oracle.apply(payload)
+        nodes = np.asarray(fwd['deformed_nodes'])
+        vm    = np.asarray(fwd['von_mises_field'])
+        tets  = np.asarray(fwd['mesh_tets'])
+        strain = float(fwd['max_principal_strain'])
         states.append((nodes, vm, tets, float(a), strain))
         print(f'  {a:5.1f}°  →  max σ = {vm.max()/1e6:6.1f} MPa   ε_max = {strain*100:5.1f} %')
     return states

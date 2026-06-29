@@ -29,7 +29,8 @@ import matplotlib.animation as manim
 from matplotlib.collections import PolyCollection, LineCollection
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
-from nff.sofa.mesh_builder_gmsh import build_mesh_gmsh, compute_hinge_geometry
+from nff.sofa.mesh_builder_gmsh import build_mesh_gmsh
+from nff.sofa.hinge_geometry import compute_hinge_geometry
 from nff.sofa.hinge_viz import (P_ORANGE, P_GRAY, P_EDGE, P_DARK, P_BG, ARROW_RED,
                                 GREEN_UP, GREEN_LO, CP_COL,
                                 bottom_tris, edges, quad_bezier, draw_bezier_arcs, hide_axes)

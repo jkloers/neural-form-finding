@@ -41,7 +41,7 @@ Tesseract** supplies the one missing piece. `/apply` runs SOFA; `/jacobian` retu
 
 ```python
 # ── The differentiable design loop: client → oracle → gradient step ───────────
-#    sofa/hinge_optimizer.py  (calls it all through nff/sofa/tesseract_client.py as `tc`)
+#    nff/sofa/hinge_optimizer.py  (builds payloads via nff/sofa/oracle_payload.py; calls the oracle via the tesseract_core SDK)
 
 params = initial_bezier_params()
 for epoch in range(n_epochs):

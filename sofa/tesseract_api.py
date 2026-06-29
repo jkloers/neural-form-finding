@@ -82,16 +82,16 @@ class InputSchema(BaseModel):
 
     # ── CS topology (non-differentiable) ──────────────────────────────────────
 
-    face_centroids: list = Field(
+    face_centroids: Array[(None, 2), Float64] = Field(
         description="(n_faces, 2) float — face centroid XY positions [m].",
     )
-    centroid_node_vectors: list = Field(
+    centroid_node_vectors: Array[(None, None, 2), Float64] = Field(
         description="(n_faces, max_nodes, 2) float — node offset vectors from centroid [m].",
     )
-    hinge_node_pairs: list = Field(
+    hinge_node_pairs: Array[(None, 2, 2), Int32] = Field(
         description="(n_hinges, 2, 2) int — [[face_i, local_i], [face_k, local_k]] per hinge.",
     )
-    hinge_adj_info: list = Field(
+    hinge_adj_info: Array[(None, 5), Int32] = Field(
         description=(
             "(n_hinges, 5) int — [face_i, face_k, pivot_local_i, adj_local_i, adj_local_k]. "
             "pivot_local_i: local node index of the hinge pivot in face_i. "
@@ -488,6 +488,7 @@ def abstract_eval(abstract_inputs: InputSchema) -> dict[str, Any]:
         "max_z_displacement":   scalar,
         "first_yield_fraction": scalar,
         "max_principal_strain": scalar,
+        "smooth_principal_strain": scalar,
         "energy_shear":         scalar,
         "energy_tension":       scalar,
         "von_mises_field":      ShapeDType(shape=(None,),    dtype="Float64"),

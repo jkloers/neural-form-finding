@@ -45,6 +45,7 @@ build_config:
   package_data:
     - ["simulate_cell.py",      "simulate_cell.py"]
     - ["mesh_builder_gmsh.py",  "mesh_builder_gmsh.py"]
+    - ["hinge_geometry.py",     "hinge_geometry.py"]
     - ["materials.py",          "materials.py"]
     - ["scene_builder.py",      "scene_builder.py"]
 

@@ -30,7 +30,8 @@ arm    = 0.003
 
 # ── build mesh ────────────────────────────────────────────────────────────────
 sys.path.insert(0, 'sofa')
-from nff.sofa.mesh_builder_gmsh import build_mesh_gmsh, compute_hinge_geometry
+from nff.sofa.mesh_builder_gmsh import build_mesh_gmsh
+from nff.sofa.hinge_geometry import compute_hinge_geometry
 from nff.sofa.hinge_viz import quad_bezier
 
 cs = types.SimpleNamespace(

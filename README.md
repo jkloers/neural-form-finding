@@ -163,9 +163,9 @@ nff/
 │   └── pipeline_viz.py     Per-stage visualisation, loss curves
 │
 └── sofa/                   JAX-side bridge to the SOFA oracle (kgnn_mac, no Sofa import)
-    ├── tesseract_client.py Typed Tesseract HTTP client (apply / jacobian / decode)
+    ├── oracle_payload.py   Builds the oracle input dict (build_payload / PARAM_NAMES; SDK transport)
     ├── mesh_builder_gmsh.py CentroidalState → gmsh tet mesh (source of truth)
-    ├── config_to_physical.py YAML → physical CS namespace
+    ├── hinge_geometry.py   compute_hinge_geometry (faces + Bézier arcs; shared)
     ├── fatigue.py          Coffin–Manson cycles-to-failure
     └── hinge_viz.py        Shared Princeton palette + hinge plotting helpers
 ```
@@ -228,7 +228,7 @@ tesseract build sofa/
 docker run -d -p 8000:8000 -e TESSERACT_RUNTIME_SERVE_HOST=0.0.0.0 nff-sofa-oracle:latest serve
 
 # Optimize a hinge against the oracle
-python sofa/hinge_optimizer.py --config data/configs/sofa/hinge_opt_2face.yaml
+python nff/sofa/hinge_optimizer.py --config data/configs/sofa/hinge_opt_2face.yaml
 ```
 
 The SOFA code is split across two environments by design — `sofa/` runs inside the Docker/SOFA
