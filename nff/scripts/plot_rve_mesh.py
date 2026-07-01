@@ -10,9 +10,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.tri import Triangulation
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
-from nff.rve.geometry import RVEParams
+from nff.rve.geometry import RVEParams, build_rve_domain, classify_boundary
 from nff.rve.mesh import build_rve_mesh
 
 RED, BLUE, TEAL, STEEL = "#D62828", "#1f6feb", "#2A9D8F", "#C6CAD1"
@@ -44,43 +43,36 @@ def _extract(path):
 
 
 def main(out="data/outputs/rve_mesh.png"):
-    p = RVEParams(w_lig=8.0, w_c=0.6, alpha_deg=90.0, rho=0.8, thickness=1.0, r_win=20.0)
+    p = RVEParams()                       # rounded Saint-Venant half-disk, coherent with the viz
     path = "/tmp/_rve_view.msh"
     stats = build_rve_mesh(p, path, n_through=3)
     X, groups = _extract(path)
 
-    fig = plt.figure(figsize=(15, 6.5))
-    axA = fig.add_subplot(1, 2, 1)
-    axB = fig.add_subplot(1, 2, 2, projection="3d")
+    fig, (axA, axB) = plt.subplots(1, 2, figsize=(14, 6.5))
 
     # ── in-plane grading: the top-cap triangles (all nodes at z = t) ──
     tmax = X[:, 2].max()
     cap = np.array([tri for tri in groups["free"]
                     if np.all(np.abs(X[tri, 2] - tmax) < 1e-6)])
-    tri2d = Triangulation(X[:, 0], X[:, 1], cap)
-    axA.triplot(tri2d, color="#333333", lw=0.4)
+    axA.triplot(Triangulation(X[:, 0], X[:, 1], cap), color="#333333", lw=0.4)
     axA.set_aspect("equal"); axA.set_xlabel("mm"); axA.set_ylabel("mm")
-    axA.set_title(f"in-plane mesh (graded at the neck) — {stats['n_cells']} tets")
+    axA.set_title(f"in-plane mesh, graded at the neck — {stats['n_cells']} tets, "
+                  f"{stats['n_z_levels']-1} layers through t")
 
-    # ── 3D boundary mesh coloured by tag ──
-    def polys(tris):
-        return [X[t] for t in tris]
-    # caps (z const) shown as the steel faces; slit part of 'free' shown teal
-    free = groups["free"]
-    is_cap = np.array([np.ptp(X[t, 2]) < 1e-6 for t in free]) if len(free) else np.zeros(0, bool)
-    caps, slit = free[is_cap], free[~is_cap]
-    for tris, col, a in [(caps, STEEL, 0.55), (slit, TEAL, 0.9),
-                         (groups["rigid_A"], RED, 0.9), (groups["rigid_B"], BLUE, 0.9)]:
-        if len(tris):
-            axB.add_collection3d(Poly3DCollection(polys(tris), facecolor=col,
-                                                  edgecolor="#333333", linewidths=0.2, alpha=a))
-    axB.set_xlim(-p.r_win, p.r_win); axB.set_ylim(-p.r_win, p.r_win); axB.set_zlim(-p.r_win, p.r_win)
-    axB.set_box_aspect((2, 2, 0.6)); axB.view_init(elev=28, azim=-60)
-    axB.set_xlabel("x"); axB.set_ylabel("y"); axB.set_zlabel("z")
-    for c, lb in [(RED, "rigid_A"), (BLUE, "rigid_B"), (TEAL, "free (cuts)"), (STEEL, "sheet faces")]:
-        axB.plot([], [], color=c, lw=6, label=lb)
-    axB.legend(loc="upper left", fontsize=9)
-    axB.set_title(f"RVE boundary tags — {stats['n_z_levels']-1} layers through t")
+    # ── boundary tags on the rounded RVE (2D plan) ──
+    dom = build_rve_domain(p)
+    axB.fill(*dom.exterior.xy, facecolor="#EDEEF0", edgecolor="none", zorder=0)
+    cols = {"rigid_A": RED, "rigid_B": BLUE, "free": TEAL}
+    for tag, segs in classify_boundary(dom, p).items():
+        for (a, b) in segs:
+            axB.plot([a[0], b[0]], [a[1], b[1]], color=cols[tag], lw=3.5,
+                     solid_capstyle="round", zorder=3)
+    for tag, c in [("rigid_A (tile-A handle)", RED), ("rigid_B (tile-B handle)", BLUE),
+                   ("free (secondary + main cut)", TEAL)]:
+        axB.plot([], [], color=c, lw=4, label=tag)
+    axB.set_aspect("equal"); axB.set_xlabel("mm"); axB.set_ylabel("mm")
+    axB.legend(loc="lower center", fontsize=9)
+    axB.set_title("boundary tags — imposed (a, s, θ) on the two arc handles")
 
     os.makedirs(os.path.dirname(out), exist_ok=True)
     fig.savefig(out, dpi=150, bbox_inches="tight")

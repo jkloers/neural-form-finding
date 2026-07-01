@@ -16,10 +16,11 @@ def test_domain_is_single_positive_polygon():
     assert dom.geom_type == "Polygon"
     assert dom.is_valid
     assert dom.area > 0.0
-    # area is close to the full window minus a thin slit
+    # area is close to the Saint-Venant half-disk minus a thin slit
     p = RVEParams()
-    assert dom.area < (2 * p.r_win) * p.r_win                      # less than the full box
-    assert dom.area > 0.9 * (2 * p.r_win) * p.r_win                # slit removes only a little
+    half_disk = 0.5 * np.pi * p.r_win ** 2
+    assert dom.area < half_disk                                    # less than the full half-disk
+    assert dom.area > 0.9 * half_disk                              # slit removes only a little
 
 
 def test_ligament_present_when_retracted():

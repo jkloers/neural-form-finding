@@ -25,13 +25,17 @@ from shapely.ops import unary_union
 
 @dataclass(frozen=True)
 class RVEParams:
-    """Single-hinge RVE parameters [mm] (+ angle in degrees)."""
-    w_lig: float = 8.0          # ligament gap (main-cut tip -> secondary cut)
-    w_c: float = 0.2            # cut width (kerf) — standard laser value
+    """Single-hinge RVE parameters [mm] (+ angle in degrees).
+
+    The meshed region is the SAME rounded Saint-Venant half-disk shown as the green
+    strip on the tessellation and in the engineering drawing.
+    """
+    w_lig: float = 10.0         # ligament gap (main-cut tip -> secondary cut)
+    w_c: float = 0.4            # cut width (kerf)
     alpha_deg: float = 90.0     # angle between the two cuts
     rho: float = 0.5            # fillet radius at the main-cut tip
     thickness: float = 1.0      # sheet thickness (for the 3D extrusion)
-    r_win: float = 20.0         # Saint-Venant window half-size
+    r_win: float = 24.0         # Saint-Venant disk radius (~2.4 * w_lig)
 
     def main_cut_dir(self) -> np.ndarray:
         a = np.radians(self.alpha_deg)
@@ -40,13 +44,15 @@ class RVEParams:
 
 
 def build_rve_domain(p: RVEParams) -> Polygon:
-    """2D RVE domain: the window minus the main-cut slit (filleted, retracted w_lig)."""
-    W = H = p.r_win
+    """2D RVE domain: the rounded Saint-Venant HALF-DISK (radius r_win, below the
+    secondary cut at y=0) minus the main-cut slit (filleted, retracted by w_lig)."""
+    half = Point(0.0, 0.0).buffer(p.r_win, quad_segs=72).intersection(
+        box(-p.r_win, -p.r_win, p.r_win, 0.0))
     um = p.main_cut_dir()
     tip = np.array([0.0, -p.w_lig])
-    slit = LineString([tip, tip + (H + 2.0 * p.w_lig) * um]).buffer(p.w_c / 2.0, cap_style=2)
+    slit = LineString([tip, tip + (p.r_win + 2.0 * p.w_lig) * um]).buffer(p.w_c / 2.0, cap_style=2)
     slit = unary_union([slit, Point(tip[0], tip[1]).buffer(p.rho, quad_segs=32)])
-    dom = box(-W, -H, W, 0.0).difference(slit)
+    dom = half.difference(slit)
     if dom.geom_type != "Polygon":
         dom = max(dom.geoms, key=lambda g: g.area)      # keep the main connected piece
     return dom
@@ -55,16 +61,15 @@ def build_rve_domain(p: RVEParams) -> Polygon:
 def boundary_tag(mx: float, my: float, p: RVEParams, tol: float = 1e-6) -> str:
     """Tag for a boundary point ``(mx, my)`` on the RVE exterior.
 
-    rigid_A : left tile far boundary (x = -W, and the bottom for x < 0)
-    rigid_B : right tile far boundary (x = +W, and the bottom for x > 0)
-    free    : the secondary cut (top, y = 0) and the main-cut slit (incl. fillet)
+    free    : the secondary cut (the top diameter, y = 0) and the main-cut slit
+    rigid_A : the Saint-Venant arc on the left of the main cut (x < 0)  -> tile-A handle
+    rigid_B : the Saint-Venant arc on the right (x > 0)                 -> tile-B handle
     """
-    W = H = p.r_win
-    if abs(mx + W) < tol or (abs(my + H) < tol and mx < 0):
-        return "rigid_A"
-    if abs(mx - W) < tol or (abs(my + H) < tol and mx > 0):
-        return "rigid_B"
-    return "free"
+    if abs(my) < 1e-4:                                   # the secondary cut (top diameter)
+        return "free"
+    if np.hypot(mx, my) > 0.985 * p.r_win and abs(mx) > 1.5 * p.w_c:   # the outer arc handle
+        return "rigid_A" if mx < 0 else "rigid_B"
+    return "free"                                        # the main-cut slit
 
 
 def classify_boundary(dom: Polygon, p: RVEParams, tol: float = 1e-6) -> dict:

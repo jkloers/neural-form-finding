@@ -15,8 +15,7 @@ from nff.rve.mesh import build_rve_mesh                          # noqa: E402
 @pytest.fixture(scope="module")
 def stats(tmp_path_factory):
     path = str(tmp_path_factory.mktemp("rve") / "rve.msh")
-    p = RVEParams(w_lig=8.0, w_c=0.6, alpha_deg=90.0, rho=0.8, thickness=1.0, r_win=20.0)
-    return build_rve_mesh(p, path, n_through=3)
+    return build_rve_mesh(RVEParams(), path, n_through=3)
 
 
 def test_mesh_nonempty_and_written(stats):
