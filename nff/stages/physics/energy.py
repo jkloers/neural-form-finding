@@ -157,6 +157,46 @@ def ligament_energy(nodal_DOFs: Tuple[jnp.ndarray, jnp.ndarray], reference_vecto
     return k_stretch * (axial_strain*l0)**2 / 2 + k_shear * (shear_strain*l0)**2 / 2 + k_rot * dRot**2 / 2
 
 
+def ligament_energy_surrogate(nodal_DOFs: Tuple[jnp.ndarray, jnp.ndarray],
+                              reference_vector: jnp.ndarray = jnp.array([1., 0.]),
+                              alpha: jnp.ndarray = jnp.array(jnp.pi / 2),
+                              w_lig: jnp.ndarray = jnp.array(1.0),
+                              **kwargs):
+    """PLACEHOLDER for the learned condensed hinge energy ``W(a, s, theta; alpha, w_lig)``.
+
+    Drop-in replacement for ``ligament_energy_linearized`` (same bond-energy signature), to be
+    filled once the CalculiX surrogate is trained. Its purpose right now is to pin down the
+    interface — what the surrogate reads and where each input comes from — so the dataset we
+    generate is compatible with what the JAX pipeline can feed it.
+
+    Inputs, per ligament, and their provenance:
+      a, s, theta = ligament_strains(*nodal_DOFs, reference_vector)
+          the 3 frame-invariant deployment strains, from the CURRENT face DOFs relative to the
+          INITIAL ligament reference geometry. MEMORYLESS: only current-vs-initial is used, no
+          path history (valid because deployment is monotonic/proportional -> deformation-theory
+          single-valued W).
+      alpha : the cut angle — a per-hinge CONSTANT fixed by the initial design (a function of the
+          r's). It does NOT change during deployment, so it is carried per bond and READ, never
+          inferred from the deformed state.
+      w_lig : the ligament gap — likewise a per-hinge constant from the initial design; the single
+          stiffness lever.
+
+    Dataset compatibility: the CalculiX dataset imposes relative face motions on the RVE and labels
+    each state with (a, s, theta) computed THE SAME WAY (ligament_strains of the imposed motion)
+    plus (alpha, w_lig). So these inputs match the dataset inputs exactly, and the free reaction
+    forces (envelope theorem) provide the Sobolev gradient labels dW/d(a,s,theta).
+
+    TODO: replace the body with ``W = W_baseline(a, s, theta) + W_NN(a, s, theta, alpha, w_lig)``.
+    For now it returns the existing quadratic form so the pipeline runs unchanged.
+    """
+    axial_strain, shear_strain, dRot = ligament_strains(
+        *nodal_DOFs, reference_vector=reference_vector)
+    l0 = jnp.linalg.norm(reference_vector, axis=-1)
+    # --- surrogate goes here: W = W_baseline(a,s,theta) + W_NN(a,s,theta,alpha,w_lig) ---
+    W_placeholder = (axial_strain * l0) ** 2 / 2 + (shear_strain * l0) ** 2 / 2 + dRot ** 2 / 2
+    return W_placeholder
+
+
 def strain_energy_bond(bond_connectivity: jnp.ndarray, bond_energy_fn: Callable = ligament_energy_linearized):
     """Maps energy functional of a single bond to a set of bonds defined by `bond_connectivity`.
 
