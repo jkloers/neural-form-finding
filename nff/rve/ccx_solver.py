@@ -301,7 +301,9 @@ def deploy(p, angle_deg=60.0, n_steps=15, pivot=None, material=STEEL, imp_amp=No
     lc_min = lc_min if lc_min is not None else max(p.w_c / 2, p.w_lig / 8)
     lc_max = lc_max if lc_max is not None else p.r_win / 4
     imp_amp = imp_amp if imp_amp is not None else 0.3 * p.thickness
-    pivot = pivot if pivot is not None else (0.0, -0.5 * p.w_lig)
+    # default pivot near the primary-cut tip = the energy-minimising rotation centre
+    # (verified by sweep; a per-geometry elastic sweep is the proper choice for the campaign)
+    pivot = pivot if pivot is not None else (0.0, -0.85 * p.w_lig)
     os.makedirs(workdir, exist_ok=True)
     job = os.path.join(workdir, "hinge")
     xyz, conn, arcA, arcB = _build_mesh(p, pivot, imp_amp, n_through, lc_min, lc_max)
