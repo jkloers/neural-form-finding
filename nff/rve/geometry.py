@@ -68,7 +68,11 @@ def boundary_tag(mx: float, my: float, p: RVEParams, tol: float = 1e-6) -> str:
     if abs(my) < 1e-4:                                   # the secondary cut (top diameter)
         return "free"
     if np.hypot(mx, my) > 0.985 * p.r_win and abs(mx) > 1.5 * p.w_c:   # the outer arc handle
-        return "rigid_A" if mx < 0 else "rigid_B"
+        # split the two tile handles by the side of the MAIN-CUT AXIS (through the tip along u_m),
+        # not by x=0 -- the two tiles are separated by the cut, which is tilted for alpha != 90.
+        um = p.main_cut_dir()
+        side = um[0] * (my + p.w_lig) - um[1] * mx       # z of u_m x (point - tip)
+        return "rigid_A" if side < 0 else "rigid_B"
     return "free"                                        # the main-cut slit
 
 

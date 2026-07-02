@@ -8,6 +8,7 @@ scalar labels (energy, forces, buckle, plastic strain).
 """
 
 import os
+import subprocess
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -36,6 +37,8 @@ def run_batch(jobs, n_parallel=8, timeout=1800):
             return None
         try:
             return solve_job(m, ncpus=1, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return None                                          # parse partial .frd/.dat anyway
         except Exception as e:
             m["error"] = f"solve: {type(e).__name__}: {e}"
             return None

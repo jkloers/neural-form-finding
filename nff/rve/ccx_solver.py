@@ -51,15 +51,17 @@ def _build_mesh(p: RVEParams, pivot, imp_amp, n_through, lc_min, lc_max):
                                      numElements=[n_through], recombine=True)   # -> prisms
         gmsh.model.geo.synchronize()
         vol = next(e for e in ext if e[0] == 3)
-        gmsh.model.mesh.field.add("Distance", 1)
-        gmsh.model.mesh.field.setNumbers(1, "CurvesList", slit)
-        gmsh.model.mesh.field.add("Threshold", 2)
-        gmsh.model.mesh.field.setNumber(2, "InField", 1)
-        gmsh.model.mesh.field.setNumber(2, "SizeMin", lc_min)
-        gmsh.model.mesh.field.setNumber(2, "SizeMax", lc_max)
-        gmsh.model.mesh.field.setNumber(2, "DistMin", 0.6 * p.w_lig)
-        gmsh.model.mesh.field.setNumber(2, "DistMax", 2.5 * p.w_lig)
-        gmsh.model.mesh.field.setAsBackgroundMesh(2)
+        # refine ONLY the uncut ligament strip (fillet-top -> secondary cut) -- the sole
+        # deforming region. The free main cut below/beside the fillet stays coarse.
+        gmsh.model.mesh.field.add("Ball", 1)
+        gmsh.model.mesh.field.setNumber(1, "XCenter", 0.0)
+        gmsh.model.mesh.field.setNumber(1, "YCenter", -0.5 * p.w_lig)   # mid-ligament
+        gmsh.model.mesh.field.setNumber(1, "ZCenter", 0.5 * p.thickness)
+        gmsh.model.mesh.field.setNumber(1, "Radius", 0.75 * p.w_lig)    # covers fillet + strip + secondary
+        gmsh.model.mesh.field.setNumber(1, "Thickness", 0.75 * p.w_lig)  # transition to coarse
+        gmsh.model.mesh.field.setNumber(1, "VIn", lc_min)
+        gmsh.model.mesh.field.setNumber(1, "VOut", lc_max)
+        gmsh.model.mesh.field.setAsBackgroundMesh(1)
         gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
         gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 0)
         gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 0)
@@ -200,8 +202,10 @@ def _write_deck(path, xyz, conn, arcA, arcB, pivot, mat, states, elastic_only, f
         L.append(f"{mat['sigma_y'] + mat['Et'] * 0.5:.1f}, 0.5")
     L.append("*SOLID SECTION, ELSET=EALL, MATERIAL=STEEL")
     stat = "*STATIC" + (f", SOLVER={solver}" if solver else "")
+    # min increment 1e-3: the solver bails (ends the job) once it needs tiny steps -- which is
+    # exactly the deep-plastic grind past rupture -> natural stop-at-fracture, no endless cutbacks.
     for k, (a, s, th) in enumerate(states):
-        L.append(f"*STEP, NLGEOM, INC=1000\n{stat}\n0.25, 1.0, 1e-5, 1.0\n*BOUNDARY")
+        L.append(f"*STEP, NLGEOM, INC=200\n{stat}\n0.25, 1.0, 1e-3, 1.0\n*BOUNDARY")
         if k == 0:
             L.append("ARCA, 1, 3, 0.0")
         ux, uy = _arc_disp(xyz, arcB, pivot, a, s, th)
@@ -347,10 +351,17 @@ def parse_job(meta, stdout=""):
 
 
 def deploy(p, ncpus=1, solver=None, timeout=1800, **kw):
-    """Deploy one hinge (prepare + solve + parse). See prepare_job for kwargs."""
+    """Deploy one hinge (prepare + solve + parse). See prepare_job for kwargs.
+
+    A timeout is tolerated: ccx writes the .frd/.dat incrementally, so we parse whatever
+    increments completed before the kill (partial data up to where it stalled).
+    """
     meta = prepare_job(p, solver=solver, **kw)
-    run = solve_job(meta, ncpus=ncpus, timeout=timeout)
-    return parse_job(meta, run.stdout)
+    try:
+        stdout = solve_job(meta, ncpus=ncpus, timeout=timeout).stdout
+    except subprocess.TimeoutExpired as e:
+        stdout = e.stdout.decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
+    return parse_job(meta, stdout)
 
 
 def _peeq_max(frame):
