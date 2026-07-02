@@ -181,7 +181,8 @@ def _arc_disp(xyz, arcB, pivot, a, s, theta):
     return ux, uy
 
 
-def _write_deck(path, xyz, conn, arcA, arcB, pivot, mat, states, elastic_only, field_every):
+def _write_deck(path, xyz, conn, arcA, arcB, pivot, mat, states, elastic_only, field_every,
+                solver=None):
     """One *STEP per kinematic state (a,s,theta) -> correct arc path; energy+reaction+fields out."""
     L = ["*NODE"]
     for i, (x, y, z) in enumerate(xyz, start=1):
@@ -198,8 +199,9 @@ def _write_deck(path, xyz, conn, arcA, arcB, pivot, mat, states, elastic_only, f
         L.append(f"{mat['sigma_y']:.1f}, 0.0")
         L.append(f"{mat['sigma_y'] + mat['Et'] * 0.5:.1f}, 0.5")
     L.append("*SOLID SECTION, ELSET=EALL, MATERIAL=STEEL")
+    stat = "*STATIC" + (f", SOLVER={solver}" if solver else "")
     for k, (a, s, th) in enumerate(states):
-        L.append("*STEP, NLGEOM, INC=1000\n*STATIC\n0.25, 1.0, 1e-5, 1.0\n*BOUNDARY")
+        L.append(f"*STEP, NLGEOM, INC=1000\n{stat}\n0.25, 1.0, 1e-5, 1.0\n*BOUNDARY")
         if k == 0:
             L.append("ARCA, 1, 3, 0.0")
         ux, uy = _arc_disp(xyz, arcB, pivot, a, s, th)
@@ -267,7 +269,8 @@ def _parse_frd(path):
         elif tag == " -2" and field and data:
             data[-1].extend(float(x) for x in _FRD_FLOAT.findall(ln[3:]))
         elif tag == " -3" and field:
-            arr = np.array([v[:ncomp] for v in data]) if data else np.zeros((0, ncomp))
+            arr = (np.array([(v + [0.0] * ncomp)[:ncomp] for v in data])
+                   if data else np.zeros((0, ncomp)))     # pad/truncate rows to ncomp
             if field == "DISP":
                 if cur:
                     frames.append(cur)
@@ -290,31 +293,41 @@ def _principal_strain_max(tostrain):
     return out
 
 
-def deploy(p, angle_deg=60.0, n_steps=15, pivot=None, material=STEEL, imp_amp=None,
-           elastic_only=False, n_through=1, lc_min=None, lc_max=None, field_every=1,
-           a=0.0, s=0.0, workdir="/tmp/ccx_job"):
-    """Deploy one hinge along a (a, s, theta) ray via CalculiX; return W(theta), forces, fields.
-
-    Returns a dict: theta_deg[], W[], M_theta[], F_a[], F_s[] (per .dat output), plus
-    uz_max[], strain_max[] and the raw frames (for visuals), + mesh (xyz, conn, arcA, arcB).
-    """
+def prepare_job(p, angle_deg=60.0, n_steps=15, pivot=None, material=STEEL, imp_amp=None,
+                elastic_only=False, n_through=1, lc_min=None, lc_max=None, field_every=1,
+                a=0.0, s=0.0, solver=None, workdir="/tmp/ccx_job"):
+    """Build the mesh + write the deck (the gmsh part — NOT thread-safe, run serially)."""
     lc_min = lc_min if lc_min is not None else max(p.w_c / 2, p.w_lig / 8)
     lc_max = lc_max if lc_max is not None else p.r_win / 4
     imp_amp = imp_amp if imp_amp is not None else 0.3 * p.thickness
-    # default pivot near the primary-cut tip = the energy-minimising rotation centre
-    # (verified by sweep; a per-geometry elastic sweep is the proper choice for the campaign)
-    pivot = pivot if pivot is not None else (0.0, -0.85 * p.w_lig)
+    # pivot = the primary-cut tip = the energy-minimising rotation centre (user-locked hypothesis)
+    pivot = pivot if pivot is not None else (0.0, -p.w_lig)
     os.makedirs(workdir, exist_ok=True)
     job = os.path.join(workdir, "hinge")
     xyz, conn, arcA, arcB = _build_mesh(p, pivot, imp_amp, n_through, lc_min, lc_max)
     dth = np.radians(angle_deg) / n_steps
     states = [(a * (k + 1) / n_steps, s * (k + 1) / n_steps, (k + 1) * dth) for k in range(n_steps)]
-    _write_deck(job + ".inp", xyz, conn, arcA, arcB, pivot, material, states, elastic_only, field_every)
-    run = subprocess.run(["ccx", "hinge"], cwd=workdir, capture_output=True, text=True, timeout=1200)
-    ok = "Job finished" in run.stdout
-    dat = _parse_dat(job + ".dat")                                  # {time: {W, rf}}
+    _write_deck(job + ".inp", xyz, conn, arcA, arcB, pivot, material, states, elastic_only,
+                field_every, solver=solver)
+    return dict(job=job, workdir=workdir, xyz=xyz, conn=conn, arcA=arcA, arcB=arcB, pivot=pivot,
+                angle_deg=angle_deg, n_steps=n_steps)
+
+
+def solve_job(meta, ncpus=1, timeout=1800):
+    """Run ccx on a prepared job (subprocess — safe to run many concurrently)."""
+    env = {**os.environ, "OMP_NUM_THREADS": str(ncpus), "CCX_NPROC_EQUATION_SOLVER": str(ncpus)}
+    return subprocess.run(["ccx", "hinge"], cwd=meta["workdir"], capture_output=True, text=True,
+                          timeout=timeout, env=env)
+
+
+def parse_job(meta, stdout=""):
+    """Read energy / forces / fields from a solved job."""
+    job, xyz, pivot = meta["job"], meta["xyz"], meta["pivot"]
+    angle_deg, n_steps = meta["angle_deg"], meta["n_steps"]
+    ok = "Job finished" in stdout
+    dat = _parse_dat(job + ".dat")
     times = sorted(dat)
-    theta_deg = np.array([t * angle_deg / n_steps for t in times])  # total time -> fold angle
+    theta_deg = np.array([t * angle_deg / n_steps for t in times])
     W = np.array([dat[t].get("W", np.nan) for t in times])
     Fa, Fs, Mt = [], [], []
     for t in times:
@@ -326,9 +339,23 @@ def deploy(p, angle_deg=60.0, n_steps=15, pivot=None, material=STEEL, imp_amp=No
     uz_max = np.array([np.abs(f["DISP"][:, 2]).max() for f in frames])
     strain_max = np.array([_principal_strain_max(f["TOSTRAIN"]).max()
                            for f in frames if "TOSTRAIN" in f])
-    return dict(ok=ok, returncode=run.returncode, stdout=run.stdout[-1500:],
-                theta_deg=theta_deg, W=W, M_theta=np.array(Mt),
-                F_a=np.array(Fa), F_s=np.array(Fs),
-                uz_max=uz_max, strain_max=strain_max, frames=frames,
-                xyz=xyz, conn=conn, arcA=arcA, arcB=arcB, pivot=pivot,
-                n_nodes=len(xyz), n_elems=len(conn), job=job)
+    peeq_max = np.array([_peeq_max(f) for f in frames])
+    return dict(ok=ok, stdout=stdout[-1500:], theta_deg=theta_deg, W=W, M_theta=np.array(Mt),
+                F_a=np.array(Fa), F_s=np.array(Fs), uz_max=uz_max, strain_max=strain_max,
+                peeq_max=peeq_max, frames=frames, xyz=xyz, conn=meta["conn"], arcA=meta["arcA"],
+                arcB=meta["arcB"], pivot=pivot, n_nodes=len(xyz), n_elems=len(meta["conn"]), job=job)
+
+
+def deploy(p, ncpus=1, solver=None, timeout=1800, **kw):
+    """Deploy one hinge (prepare + solve + parse). See prepare_job for kwargs."""
+    meta = prepare_job(p, solver=solver, **kw)
+    run = solve_job(meta, ncpus=ncpus, timeout=timeout)
+    return parse_job(meta, run.stdout)
+
+
+def _peeq_max(frame):
+    """Robust max equivalent plastic strain (PEEQ) for the failure flag; NaN if absent."""
+    for k in ("PE", "PEEQ"):
+        if k in frame and frame[k].size:
+            return float(np.abs(frame[k]).max())
+    return np.nan
