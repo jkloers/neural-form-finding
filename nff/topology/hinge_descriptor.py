@@ -235,11 +235,16 @@ def compute_hinge_descriptors(
     cos_a = jnp.sum(e1 * e2, axis=1) / (n1 * n2 + 1e-12)
     alpha = jnp.arccos(jnp.clip(cos_a, -1.0, 1.0))              # (H,)
 
-    # Cut lengths (full collinear slit spans).
+    # Cut lengths (full collinear slit spans) and their unit directions.
     main_vec = coords[hstruct["main_end_pid"][:, 1]] - coords[hstruct["main_end_pid"][:, 0]]
     sec_vec = coords[hstruct["sec_end_pid"][:, 1]] - coords[hstruct["sec_end_pid"][:, 0]]
     L_main = jnp.linalg.norm(main_vec, axis=1)                 # (H,)
     L_sec = jnp.linalg.norm(sec_vec, axis=1)
+    # Unit cut frame (for the Phase-3 point-ROM <-> physical-hinge bridge). The RVE defines the
+    # axial DOF ``a`` as translation ALONG the secondary cut, so ``sec_dir`` is the reference-bond
+    # (axial) direction each closed hinge must carry; ``main_dir`` is the shear axis.
+    sec_dir = sec_vec / (L_sec[:, None] + 1e-12)               # (H, 2)  -> axial ``a``
+    main_dir = main_vec / (L_main[:, None] + 1e-12)            # (H, 2)  -> shear ``s``
 
     lig = manufacturing.ligament_width
     wc = manufacturing.kerf_width
@@ -263,6 +268,9 @@ def compute_hinge_descriptors(
         "descriptor": descriptor,
         "L_main": L_main,
         "alpha": alpha,
+        "pivots": pivots,
+        "sec_dir": sec_dir,
+        "main_dir": main_dir,
         "min_gap": min_gap,
         "crowded": crowded,
         "is_interior": jnp.asarray(hstruct["is_interior"]),
