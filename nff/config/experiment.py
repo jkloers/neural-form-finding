@@ -195,6 +195,40 @@ class VisualizationConfig(eqx.Module):
         self.show_kinematic_blocks = show_kinematic_blocks
 
 
+class HingeModelConfig(eqx.Module):
+    """Which hinge energy the Stage-2 solver uses (config-selectable), + its material context.
+
+    ``type``: ``'rom'`` (linear-spring ligament energy — the default, so existing configs are
+    unchanged) or ``'surrogate'`` (the learned condensed hinge energy). For the surrogate, the
+    material / thickness / kerf are what it was TRAINED for — declarative oversight (and a guard):
+    changing them in config does NOT retrain it. ``w_lig_mm`` IS a real manufacturing choice within
+    the trained range [1, 10] mm. ``calibrate`` co-solves length/energy scale to the pipeline's
+    k_stretch/k_rot (Gap 2); set ``calibrate: false`` to pin ``length_scale``/``energy_scale``.
+    """
+    type: str
+    checkpoint: str
+    material: str
+    thickness_mm: float
+    w_lig_mm: float
+    calibrate: bool
+    length_scale: float
+    energy_scale: float
+    barrier: float
+
+    def __init__(self, type='rom', checkpoint='data/outputs/hinge_surrogate.pkl', material='S235',
+                 thickness_mm=1.0, w_lig_mm=5.0, calibrate=True, length_scale=0.0,
+                 energy_scale=0.0, barrier=0.05):
+        self.type = type
+        self.checkpoint = checkpoint
+        self.material = material
+        self.thickness_mm = thickness_mm
+        self.w_lig_mm = w_lig_mm
+        self.calibrate = calibrate
+        self.length_scale = length_scale
+        self.energy_scale = energy_scale
+        self.barrier = barrier
+
+
 class ExperimentConfig(eqx.Module):
     topology: dict
     mapping: MappingConfig
@@ -203,10 +237,12 @@ class ExperimentConfig(eqx.Module):
     physics: PhysicsConfig
     training: TrainingConfig
     visualization: VisualizationConfig
+    hinge_model: HingeModelConfig
 
     def __init__(self, topology: dict, mapping: MappingConfig, target: TargetConfig,
                  validity: ValidityConfig, physics: PhysicsConfig,
-                 training: TrainingConfig, visualization: VisualizationConfig):
+                 training: TrainingConfig, visualization: VisualizationConfig,
+                 hinge_model: HingeModelConfig = None):
         self.topology = topology
         self.mapping = mapping
         self.target = target
@@ -214,6 +250,7 @@ class ExperimentConfig(eqx.Module):
         self.physics = physics
         self.training = training
         self.visualization = visualization
+        self.hinge_model = hinge_model if hinge_model is not None else HingeModelConfig()
 
 
 # ── Private parsing helpers ───────────────────────────────────────────────────
@@ -312,6 +349,20 @@ def _parse_physics_config(physics_raw: dict, domain_restriction: float) -> Physi
         solver_maxiter=int(physics_raw.get("solver_maxiter", 1000)),
         solver_tol=float(physics_raw.get("solver_tol", 1e-5)),
         updated_lagrangian=bool(physics_raw.get("updated_lagrangian", False)),
+    )
+
+
+def _parse_hinge_model_config(raw: dict) -> HingeModelConfig:
+    return HingeModelConfig(
+        type=str(raw.get("type", "rom")),
+        checkpoint=str(raw.get("checkpoint", "data/outputs/hinge_surrogate.pkl")),
+        material=str(raw.get("material", "S235")),
+        thickness_mm=float(raw.get("thickness_mm", 1.0)),
+        w_lig_mm=float(raw.get("w_lig_mm", 5.0)),
+        calibrate=bool(raw.get("calibrate", True)),
+        length_scale=float(raw.get("length_scale", 0.0)),
+        energy_scale=float(raw.get("energy_scale", 0.0)),
+        barrier=float(raw.get("barrier", 0.05)),
     )
 
 
@@ -422,6 +473,7 @@ def _parse_full_raw(raw: dict, config_dir: str) -> 'ExperimentConfig':
     target_cfg = _parse_target_config(raw.get("target", {}))
     training_cfg = _parse_training_config(raw.get("training", {}), raw.get("loss_weights", {}))
     vis_cfg = _parse_visualization_config(raw.get("visualization", {}))
+    hinge_model_cfg = _parse_hinge_model_config(raw.get("hinge_model", {}))
 
     topo_combined = {
         **topo_raw,
@@ -440,6 +492,7 @@ def _parse_full_raw(raw: dict, config_dir: str) -> 'ExperimentConfig':
         physics=physics_cfg,
         training=training_cfg,
         visualization=vis_cfg,
+        hinge_model=hinge_model_cfg,
     )
 
 

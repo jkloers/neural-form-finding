@@ -126,3 +126,40 @@ def closed_hinge_geometry(state, M, N, r, spacing, w_lig_mm, ref_r=None):
     sec_dir = jnp.asarray(np.asarray(out['sec_dir'])[perm])
     w_lig = jnp.full(len(perm), float(w_lig_mm))
     return alpha, w_lig, sec_dir
+
+
+def build_surrogate_bond_energy(config, state):
+    """Build the Stage-2 hinge-energy override from ``config.hinge_model``; ``None`` for the ROM.
+
+    Config-driven selection (faithful to the project's config-first spirit): reads
+    ``config.hinge_model`` (type / checkpoint / w_lig / scales / barrier), computes per-hinge
+    geometry from the closed design, loads the trained net, calibrates the Gap-2 scales, and
+    returns the injectable ``bond_energy_fn`` for ``forward_pipeline(bond_energy_fn=...)``. Prints a
+    one-line material/model header so every run is self-documenting.
+    """
+    import numpy as np
+    hm = getattr(config, 'hinge_model', None)
+    if hm is None or getattr(hm, 'type', 'rom') != 'surrogate':
+        print("[hinge_model] ROM (linear-spring ligament energy)")
+        return None
+
+    from nff.models.hinge_surrogate import (load_hinge_surrogate, build_hinge_bond_energy_fn,
+                                            calibrate_scales)
+    topo = config.topology
+    M, N = int(topo['M']), int(topo['N'])
+    r = float(topo.get('r_init', 0.45)); spacing = float(topo.get('spacing', 1.0))
+    alpha, w_lig, sec_dir = closed_hinge_geometry(state, M, N, r, spacing, hm.w_lig_mm)
+    net, stats, eps_f = load_hinge_surrogate(hm.checkpoint)
+
+    if hm.calibrate:
+        kst = float(np.mean(np.asarray(state.k_stretch)))
+        krt = float(np.mean(np.asarray(state.k_rot)))
+        ls, es = calibrate_scales(net, stats, alpha=alpha, w_lig=w_lig, k_stretch=kst, k_rot=krt)
+    else:
+        ls, es = hm.length_scale, hm.energy_scale
+
+    print(f"[hinge_model] SURROGATE  material={hm.material} t={hm.thickness_mm}mm "
+          f"w_lig={hm.w_lig_mm}mm eps_f={eps_f}  |  {len(alpha)} hinges  "
+          f"length_scale={ls:.3g}mm/u  energy_scale={es:.3g}  barrier={hm.barrier}")
+    return build_hinge_bond_energy_fn(net, stats, alpha=alpha, w_lig=w_lig, sec_dir=sec_dir,
+                                      length_scale=ls, energy_scale=es, barrier=hm.barrier)
