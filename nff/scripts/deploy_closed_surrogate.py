@@ -66,9 +66,15 @@ def main():
     ap.add_argument("--length-scale", dest="length_scale", type=float, default=None)
     ap.add_argument("--energy-scale", dest="energy_scale", type=float, default=None)
     ap.add_argument("--barrier", type=float, default=0.05, help="OOD-barrier stiffness (0=off)")
+    ap.add_argument("--load-scale", dest="load_scale", type=float, default=1.0)
     args = ap.parse_args()
 
     config = load_and_parse_config(f"data/configs/{args.config_dir}/{args.config_name}.yaml")
+    if args.load_scale != 1.0:                          # sub-yield: scale BEFORE the state bakes it
+        for s in config.topology.get('loads', []):
+            for k in ('value', 'magnitude'):
+                if k in s:
+                    s[k] *= args.load_scale
     load_specs = config.topology.get('loads', [])
     initial_state, _ = build_closed_initial_state(config)
     params, static_features = init_closed_les_params(config)
