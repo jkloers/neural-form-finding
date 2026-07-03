@@ -1,0 +1,92 @@
+# Closed-state RDPQK kirigami — moment-actuated deployment, driven by the LEARNED hinge-energy
+# SURROGATE (physical S235 steel) instead of the linear-spring ROM.
+#
+# Same mechanism as circle_4x4_moment; the only difference is the hinge_model block below and a
+# smaller (sub-yield) moment. Steel yields by ~0.6deg and softens plastically, so a super-yield
+# load makes the surrogate plastic-run-away to the validity boundary (the barrier bounds it). Keep
+# the moment small for a clean in-domain deployment; raise `value` to explore plastic behavior.
+#
+# Flip to the ROM by setting hinge_model.type: rom (or deleting the block).
+
+tessellation:
+  tessellation_type: closed_rdpqk
+  M: 4
+  N: 4
+  r_init: 0.45
+  spacing: 1.0
+
+mapping:
+  map_type: closed_les
+
+optimization_weights:
+  validity_method: none
+
+# ── Hinge energy: the config switch (ROM vs learned surrogate) ──
+hinge_model:
+  type: surrogate                 # rom | surrogate
+  checkpoint: data/outputs/hinge_surrogate.pkl
+  material: S235                   # oversight: E=210 GPa, sigma_y=235 MPa, eps_f=0.25 (what it was trained for)
+  thickness_mm: 1.0               # fixed by the surrogate
+  w_lig_mm: 5.0                   # manufacturing choice, in [1, 10] mm
+  calibrate: true                 # auto Gap-2 scale to k_stretch/k_rot
+  barrier: 0.05                   # OOD validity barrier
+
+physics:
+  use_contact: false
+  linearized_strains: true
+  incremental: true
+  num_load_steps: 12
+  solver_maxiter: 1000
+  solver_tol: 1.0e-5
+  updated_lagrangian: false
+
+material:
+  k_stretch: 1000.0
+  k_shear: 1000.0
+  k_rot: 0.5
+  density: 1.0
+
+boundary_conditions:
+  clamped_faces: [5]
+
+loads:
+  - face: 6
+    dof: 2                        # moment (Mz, CCW +)
+    value: 0.3                    # sub-yield (circle_4x4_moment uses 2.0 = super-yield for the surrogate)
+
+target:
+  type: circle
+  center: [2.0, 2.0]
+  radius: 2.5
+
+loss_weights:
+  chamfer: 1.0
+  coverage: 0.5
+  stretching: 0.01
+  shearing: 0.01
+  bending: 0.001
+  contact: 0.0
+  material_area: 0.0
+  hinge_gap: 0.0
+  openness: 0.0
+  deformation: 0.0
+  void_closure: 0.0
+  closure_delta: 0.0
+  regularization: 1.0e-4
+
+training:
+  num_epochs: 80
+  learning_rate: 0.02
+  optimizer: adam
+  lr_schedule: cosine
+  grad_clip: 1.0
+  geometric_loss_type: boundary_vertices
+
+visualization:
+  stage0: false
+  stage1: false
+  stage2: false
+  energy_plot: false
+  animation: false
+  show_plots: false
+  save_outputs: false
