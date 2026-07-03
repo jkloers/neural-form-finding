@@ -41,7 +41,7 @@ from nff.stages.pipeline import forward_pipeline
 from nff.stages.geometry import reconstruct_vertices, compute_face_areas, deformed_vertices
 from nff.training.trainer import create_train_step, TrainState
 from nff.utils.visualization import (
-    plot_cut_pattern, write_deformed_into, plot_loading_diagram,
+    plot_cut_pattern, render_precise_cut_pattern, write_deformed_into, plot_loading_diagram,
     plot_area_change, animate_closed_evolution,
 )
 from nff.utils.pipeline_viz import visualize_pipeline_results, plot_loss_history
@@ -198,16 +198,31 @@ def main():
     visualize_pipeline_results(result, tessellation, config, target_params,
                                args.config_name, run_dir=run_dir, load_specs=load_specs)
 
-    # ── Cut pattern: slits from hinge to opposite hinge across each void. ──
+    # ── Cut pattern: the PRECISE per-hinge laser geometry (kerf slots + ligaments + fillets),
+    #    sized from the hinge_model manufacturing params (w_lig = 1/10 tile). Falls back to the
+    #    schematic thin-line render if the geometry build fails on a given design. ──
     struct, sliders = static_features['struct'], static_features['sliders']
     cut_coords = np.asarray(solve_cut_vertices_jax(
         struct, boundary_flat_from_logits(sliders, best_params['bnd_logits']),
         jax.nn.sigmoid(best_params['z'])))
-    plot_cut_pattern(cut_coords, struct['T'], struct['cols'],
-                     filepath=os.path.join(run_dir, "cut_pattern.png"),
-                     hinge_margin=max(0.22, 1.6 * float(config.topology.get('hinge_margin', 0.06))),
-                     lw=1.8,
-                     title="Kirigami cut pattern (flat sheet)")
+    hm = config.hinge_model
+    w_lig_mm = float(getattr(hm, 'w_lig_mm', 5.0))
+    spacing = float(config.topology.get('spacing', 1.0))
+    cut_png = os.path.join(run_dir, "cut_pattern.png")
+    try:
+        from nff.topology.cut_pattern import build_cut_geometry
+        geom = build_cut_geometry(
+            cut_coords, np.asarray(struct['T']), struct['cols'],
+            w_c=0.2, w_lig=w_lig_mm, rho=0.16 * w_lig_mm,
+            length_scale=10.0 * w_lig_mm / spacing)     # physical scale: w_lig = 1/10 tile
+        render_precise_cut_pattern(
+            geom, filepath=cut_png,
+            title=f"Precise laser cut pattern — flat sheet ({getattr(hm, 'material', 'S235')})")
+    except Exception as exc:                            # keep the run alive on any geometry hiccup
+        print(f"  [cut_pattern] precise render failed ({exc}); using schematic fallback")
+        plot_cut_pattern(cut_coords, struct['T'], struct['cols'], filepath=cut_png,
+                         hinge_margin=max(0.22, 1.6 * float(config.topology.get('hinge_margin', 0.06))),
+                         lw=1.8, title="Kirigami cut pattern (flat sheet)")
 
     # ── Validity audit + per-panel area change (flat vs deployed). ──
     s0 = write_deformed_into(tessellation, deformed_vertices(vs, jnp.zeros_like(disp)))

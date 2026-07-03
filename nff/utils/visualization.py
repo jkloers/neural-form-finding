@@ -123,10 +123,13 @@ def render_precise_cut_pattern(geom, filepath=None, title=None, paper="#F58025",
     hinges = geom.get("hinges", [])
     if hinges:
         cen = np.array([(x0 + x1) / 2, (y0 + y1) / 2])
-        tip, _ = min(hinges, key=lambda h: np.linalg.norm(np.asarray(h[0]) - cen))
-        tip = np.asarray(tip)
-        d = 2.3 * geom["w_lig"]                             # zoom window ~2 ligaments
-        axins = ax.inset_axes([0.71, 0.035, 0.28, 0.32])   # lower-right, clear of the title
+        tip, hdir = min(hinges, key=lambda h: np.linalg.norm(np.asarray(h[0]) - cen))
+        tip = np.asarray(tip, dtype=float)
+        hdir = np.asarray(hdir, dtype=float); hdir /= (np.linalg.norm(hdir) + 1e-12)
+        perp = np.array([-hdir[1], hdir[0]])               # left of the cut
+        wl, rho, wc = geom["w_lig"], geom["rho"], geom["w_c"]
+        d = 2.4 * wl                                        # zoom window ~2 ligaments
+        axins = ax.inset_axes([0.67, 0.03, 0.32, 0.36])    # lower-right, clear of the title
         _plot_shapely(axins, geom["sheet"], facecolor=paper, edgecolor=ink, lw=1.0)
         _plot_shapely(axins, geom["cuts"], facecolor=ink, edgecolor=ink, lw=0)
         axins.set_xlim(tip[0] - d, tip[0] + d); axins.set_ylim(tip[1] - d, tip[1] + d)
@@ -135,9 +138,22 @@ def render_precise_cut_pattern(geom, filepath=None, title=None, paper="#F58025",
         for s in axins.spines.values():
             s.set_edgecolor(accent); s.set_linewidth(1.4)
         ax.indicate_inset_zoom(axins, edgecolor=accent, lw=1.2, alpha=0.8)
-        # engineering caption (dims are the point of a cut drawing)
-        axins.text(0.5, -0.10, f"hinge detail  |  $w_{{lig}}$={geom['w_lig']:.1f} mm   "
-                   r"$\rho$" f"={geom['rho']:.2f} mm   kerf={geom['w_c']:.2f} mm",
+
+        # ── dimension arrows (mm data coords) ──
+        dim = dict(arrowstyle="<|-|>", color=accent, lw=1.3, mutation_scale=8)
+        off = 1.4 * wc + 0.22 * wl                          # ligament dim line, offset to the side
+        a0, a1 = tip + off * perp, (tip - wl * hdir) + off * perp
+        axins.annotate("", a1, a0, arrowprops=dim)
+        axins.plot(*zip(tip, tip + off * perp), color=accent, lw=0.6)          # witness lines
+        axins.plot(*zip(tip - wl * hdir, tip - wl * hdir + off * perp), color=accent, lw=0.6)
+        axins.text(*(0.5 * (a0 + a1) + 0.22 * wl * perp), r"$w_{lig}$", color=ink,
+                   fontsize=9, ha="center", va="bottom")
+        axins.annotate("", tip - rho * perp, tip,                              # fillet radius
+                       arrowprops=dict(arrowstyle="<|-", color=accent, lw=1.1, mutation_scale=7))
+        axins.text(*(tip - 1.9 * rho * perp), r"$\rho$", color=ink, fontsize=9, ha="center", va="center")
+
+        axins.text(0.5, -0.09, f"hinge detail  ·  $w_{{lig}}$={wl:.1f} mm   "
+                   r"$\rho$" f"={rho:.2f} mm   kerf={wc:.2f} mm",
                    transform=axins.transAxes, ha="center", va="top", fontsize=8.5, color=ink)
 
     if title:
