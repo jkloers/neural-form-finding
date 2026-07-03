@@ -30,6 +30,8 @@ barrier), kept distinct so the hard failure boundary does not distort the smooth
 Follows the repo ``init_*`` / ``apply_*`` raw-JAX convention (no flax), float64.
 """
 
+import pickle
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -121,6 +123,59 @@ def build_hinge_energy_fn(params: dict, stats: dict):
     def energy_fn(u, g):
         return apply_hinge_energy(params, u, g, stats)
     return energy_fn
+
+
+def load_hinge_surrogate(path: str):
+    """Load a trained surrogate checkpoint -> (net_params, stats, eps_f)."""
+    with open(path, "rb") as f:
+        ck = pickle.load(f)
+    return ck["params"], ck["stats"], ck.get("eps_f", 0.25)
+
+
+# ── pipeline adapter: the surrogate as a Stage-2 bond energy ───────────────────────
+
+def build_hinge_bond_energy_fn(net_params, stats, *, alpha, w_lig, sec_dir,
+                               length_scale: float = 1.0, energy_scale: float = 1.0):
+    """Wrap the trained surrogate as a bond-energy fn for the Stage-2 solver.
+
+    From the two connected face node-DOFs it (1) forms the relative tile motion, (2) PROJECTS it
+    onto the hinge's cut frame -- axial ``a`` along ``sec_dir``, shear ``s`` perpendicular --
+    COROTATED by the mean face rotation, (3) converts to physical mm via ``length_scale``,
+    (4) evaluates ``W(a, s, theta; w_lig, alpha)`` and rescales to pipeline energy via
+    ``energy_scale``. Linear projection (not ligament_strains' length/angle) matches how the RVE
+    imposed ``(a, s)``. Ignores ``k_stretch/k_shear/k_rot`` -- the surrogate replaces the springs.
+
+    Args:
+        net_params, stats: from ``load_hinge_surrogate``.
+        alpha:      (n_hinges,) cut angle [rad], per-hinge constant (from compute_hinge_descriptors).
+        w_lig:      (n_hinges,) ligament width [mm].
+        sec_dir:    (n_hinges, 2) unit secondary-cut (axial) direction, oriented opening-positive.
+        length_scale: mm per pipeline length-unit (Gap 2).
+        energy_scale: pipeline-energy per N.mm (Gap 2).
+
+    Returns:
+        ``bond_energy(nodal_DOFs, reference_vector=None, **kwargs) -> (n_hinges,)`` [pipeline units].
+    """
+    alpha = jnp.asarray(alpha, dtype=jnp.float64)
+    w_lig = jnp.asarray(w_lig, dtype=jnp.float64)
+    sec = jnp.asarray(sec_dir, dtype=jnp.float64)
+    sec = sec / (jnp.linalg.norm(sec, axis=-1, keepdims=True) + 1e-12)
+
+    def bond_energy(nodal_DOFs, reference_vector=None, **kwargs):
+        DOFs1, DOFs2 = nodal_DOFs
+        dU = DOFs2[..., :2] - DOFs1[..., :2]                    # relative tile translation
+        dRot = DOFs2[..., 2] - DOFs1[..., 2]
+        mean_rot = 0.5 * (DOFs1[..., 2] + DOFs2[..., 2])
+        c, s = jnp.cos(mean_rot), jnp.sin(mean_rot)
+        ux = c * sec[:, 0] - s * sec[:, 1]                      # corotated axial unit
+        uy = s * sec[:, 0] + c * sec[:, 1]
+        a = (dU[..., 0] * ux + dU[..., 1] * uy) * length_scale          # axial [mm]
+        sh = (dU[..., 0] * (-uy) + dU[..., 1] * ux) * length_scale      # shear (perp) [mm]
+        u = jnp.stack([a, sh, dRot], axis=-1)
+        g = jnp.stack([w_lig, alpha], axis=-1)
+        return energy_scale * apply_hinge_energy(net_params, u, g, stats)
+
+    return bond_energy
 
 
 # ── training loss ─────────────────────────────────────────────────────────────────

@@ -75,3 +75,18 @@ def init_closed_les_params(config):
     }
     static_features = {'struct': struct, 'sliders': sliders, 'closed_les': True}
     return params, static_features
+
+
+def surrogate_scales(config):
+    """Gap-2 unit bridges for the closed_les hinge-energy surrogate (from config, with defaults).
+
+    The surrogate is trained in physical units (mm, N.mm) but the closed pipeline runs in abstract
+    units. Two scalars reconcile them at integration:
+      length_scale : mm per pipeline length-unit — pick a physical tile size so w_lig ~ 1/10 tile,
+      energy_scale : pipeline-energy per N.mm — so the surrogate energy is commensurate with the
+                     chamfer loss (neither swamps nor vanishes).
+    Passed to ``nff.models.hinge_surrogate.build_hinge_bond_energy_fn`` at setup.
+    """
+    phys = getattr(config, 'physics', None) or {}
+    get = phys.get if isinstance(phys, dict) else (lambda k, d: getattr(phys, k, d))
+    return float(get('length_scale_mm', 1.0)), float(get('energy_scale', 1.0))

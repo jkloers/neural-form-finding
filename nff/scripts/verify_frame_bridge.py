@@ -72,4 +72,33 @@ check("new vector lies on the given axis (x)", abs(float(rv_new[0, 1])) < 1e-12)
 check("new vector oriented opening-positive face_i->face_k (+x)", float(rv_new[0, 0]) > 0)
 check("new vector has nominal length", abs(float(jnp.linalg.norm(rv_new[0])) - 1e-3) < 1e-9)
 
-print("\n" + ("ALL FRAME-BRIDGE CHECKS PASS" if ok else "SOME CHECKS FAILED"))
+# ── 5. surrogate bond-energy adapter (3.1/3.3/3.4): projection + scale + W(0)=0 ────
+from nff.models.hinge_surrogate import (init_hinge_surrogate, compute_norm_stats,
+    apply_hinge_energy, build_hinge_bond_energy_fn)
+rng = np.random.default_rng(0); nh = 4
+al = jnp.asarray(rng.uniform(0.6, 2.4, nh)); wl = jnp.asarray(rng.uniform(1, 10, nh))
+ang = rng.uniform(0, 2 * np.pi, nh); sec = jnp.stack([jnp.cos(ang), jnp.sin(ang)], -1)
+stats = compute_norm_stats(rng.uniform(-1, 1, 512), rng.uniform(-1, 1, 512), rng.uniform(0, 0.6, 512),
+                           rng.uniform(1, 10, 512), rng.uniform(0.6, 2.4, 512), rng.uniform(0, 2000, 512))
+net = init_hinge_surrogate(jax.random.PRNGKey(1))
+LS, ES = 3.0, 0.5
+be = build_hinge_bond_energy_fn(net, stats, alpha=al, w_lig=wl, sec_dir=sec, length_scale=LS, energy_scale=ES)
+
+print("5. surrogate bond-energy adapter")
+D1 = jnp.asarray(rng.uniform(-1, 1, (nh, 3)))
+Wrig = be((D1, D1))                                          # identical DOFs = rigid => u=0 => W=0
+check("rigid (dU=0, dRot=0) => W = 0", float(jnp.abs(Wrig).max()) < 1e-12)
+delta = 0.07
+D2 = D1.at[:, :2].add(delta * sec).at[:, 2].set(D1[:, 2])   # pure opening along axial, no dRot
+# expected: a = delta*LS (projection is corotated by mean_rot=D1[:,2]; opening is along sec in the
+# ROTATED frame, so displace by delta*R(mean_rot)@sec to be purely axial):
+c_, s_ = jnp.cos(D1[:, 2]), jnp.sin(D1[:, 2])
+rot_sec = jnp.stack([c_ * sec[:, 0] - s_ * sec[:, 1], s_ * sec[:, 0] + c_ * sec[:, 1]], -1)
+D2 = D1.at[:, :2].add(delta * rot_sec)
+u_exp = jnp.stack([jnp.full(nh, delta * LS), jnp.zeros(nh), jnp.zeros(nh)], -1)
+g = jnp.stack([wl, al], -1)
+W_be = be((D1, D2)); W_ref = ES * apply_hinge_energy(net, u_exp, g, stats)
+check("opening projects to a=delta*length_scale, s~0 (matches apply_hinge_energy)",
+      float(jnp.abs(W_be - W_ref).max()) < 1e-9)
+
+print("\n" + ("ALL CHECKS PASS" if ok else "SOME CHECKS FAILED"))
