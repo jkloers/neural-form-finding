@@ -90,3 +90,39 @@ def surrogate_scales(config):
     phys = getattr(config, 'physics', None) or {}
     get = phys.get if isinstance(phys, dict) else (lambda k, d: getattr(phys, k, d))
     return float(get('length_scale_mm', 1.0)), float(get('energy_scale', 1.0))
+
+
+def closed_hinge_geometry(state, M, N, r, spacing, w_lig_mm, ref_r=None):
+    """Per-hinge ``(alpha[rad], w_lig[mm], sec_dir[2])`` in BOND order for a closed design.
+
+    The surrogate adapter needs geometry aligned with the Stage-2 bond order. The analytic hinge
+    descriptor is computed in its own hinge order; we align it to the bonds by POSITION-matching
+    each state hinge-vertex to the nearest descriptor pivot (verified: same count, identity order,
+    face-pairs agree — but we match + assert to stay robust to any config). ``alpha`` and
+    ``sec_dir`` are scale-free so they transfer directly; ``w_lig`` is a manufacturing constant [mm].
+    """
+    import numpy as np
+    from nff.stages.geometry import hinge_vertex_positions
+    from nff.topology.hinge_descriptor import (build_hinge_descriptor_structure,
+                                               hinge_descriptors_from_design)
+    from nff.topology.closed_builder_jax import boundary_points_flat, solve_cut_vertices_jax
+
+    hs = build_hinge_descriptor_structure(M, N, ref_r=ref_r if ref_r is not None else r)
+    ds = hs['deploy_struct']
+    bf = jnp.asarray(boundary_points_flat(ds, spacing))
+    r_arr = jnp.full((ds['rows'], ds['cols']), r)
+    out = hinge_descriptors_from_design(hs, bf, r_arr)
+    coords = np.asarray(solve_cut_vertices_jax(ds, bf, r_arr))
+    piv_desc = coords[np.asarray(hs['pivot_pid'])]                          # (H, 2)
+
+    p1, _ = hinge_vertex_positions(state.face_centroids, state.centroid_node_vectors,
+                                   state.hinge_node_pairs)
+    D = np.linalg.norm(np.asarray(p1)[:, None, :] - piv_desc[None, :, :], axis=-1)
+    perm = D.argmin(1)
+    max_dist = float(D[np.arange(len(perm)), perm].max())
+    assert max_dist < 1e-3, f'descriptor<->bond alignment failed (max {max_dist:.2e})'
+
+    alpha = jnp.asarray(np.asarray(out['alpha'])[perm])
+    sec_dir = jnp.asarray(np.asarray(out['sec_dir'])[perm])
+    w_lig = jnp.full(len(perm), float(w_lig_mm))
+    return alpha, w_lig, sec_dir
