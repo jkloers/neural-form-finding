@@ -111,6 +111,8 @@ class LigamentParams(NamedTuple):
     k_shear: Any
     k_rot: Any
     reference_vector: Any
+    w_lig: Any = None       # (n_hinges,) ligament width [mm] for the surrogate; None -> not threaded
+                            # (spring energy ignores it via **kwargs; surrogate falls back to closure)
 
 
 BondParams = LigamentParams
@@ -185,7 +187,8 @@ def build_control_params(geometry: ReferenceGeometry,
                          k_contact: float = 1.0,
                          min_angle: float = 0.0,
                          cutoff_angle: float = 0.1,
-                         use_contact: bool = True) -> ControlParams:
+                         use_contact: bool = True,
+                         w_lig: Any = None) -> ControlParams:
     """Assembles ControlParams from explicit parameters.
 
     Takes the geometry container and all mechanical properties as direct
@@ -213,6 +216,7 @@ def build_control_params(geometry: ReferenceGeometry,
                 k_shear=k_shear,
                 k_rot=k_rot,
                 reference_vector=geometry.reference_bond_vectors,
+                w_lig=w_lig,
             ),
             density=density,
             contact_params=ContactParams(

@@ -141,7 +141,7 @@ def build_surrogate_bond_energy(config, state):
     hm = getattr(config, 'hinge_model', None)
     if hm is None or getattr(hm, 'type', 'rom') != 'surrogate':
         print("[hinge_model] ROM (linear-spring ligament energy)")
-        return None, None
+        return None, None, None
 
     from nff.models.hinge_surrogate import (load_hinge_surrogate, build_hinge_bond_energy_fn,
                                             build_hinge_stability_fn, calibrate_scales)
@@ -161,18 +161,34 @@ def build_surrogate_bond_energy(config, state):
     print(f"[hinge_model] SURROGATE  material={hm.material} t={hm.thickness_mm}mm "
           f"w_lig={hm.w_lig_mm}mm eps_f={eps_f}  |  {len(alpha)} hinges  "
           f"length_scale={ls:.3g}mm/u  energy_scale={es:.3g}  barrier={hm.barrier}")
-    bond_energy_fn = build_hinge_bond_energy_fn(net, stats, alpha=alpha, w_lig=w_lig, sec_dir=sec_dir,
-                                                length_scale=ls, energy_scale=es, barrier=hm.barrier)
-
     # Physical-stability design-loss term (failure-margin + OOD), so the chamfer-only objective
     # stops trading structural safety for shape. None unless a weight is set.
     w_fail = float(getattr(hm, 'w_fail', 0.0))
     w_ood = float(getattr(hm, 'w_ood', 0.0))
     m_safe = float(getattr(hm, 'm_safe', 0.8))
-    stability_fn = build_hinge_stability_fn(
-        net, stats, alpha=alpha, w_lig=w_lig, sec_dir=sec_dir,
-        bond_pairs=np.asarray(state.bond_connectivity),
-        length_scale=ls, w_fail=w_fail, w_ood=w_ood, m_safe=m_safe)
+    bond_pairs = np.asarray(state.bond_connectivity)
+
+    def _build(w_lig_arr):
+        """Bond energy + stability fn for a given per-hinge ligament width [mm] (scales fixed)."""
+        bond = build_hinge_bond_energy_fn(net, stats, alpha=alpha, w_lig=w_lig_arr, sec_dir=sec_dir,
+                                          length_scale=ls, energy_scale=es, barrier=hm.barrier)
+        stab = build_hinge_stability_fn(net, stats, alpha=alpha, w_lig=w_lig_arr, sec_dir=sec_dir,
+                                        bond_pairs=bond_pairs, length_scale=ls,
+                                        w_fail=w_fail, w_ood=w_ood, m_safe=m_safe)
+        return bond, stab
+
+    bond_energy_fn, stability_fn = _build(jnp.asarray(w_lig))
     if stability_fn is not None:
         print(f"[hinge_model]   + stability loss  w_fail={w_fail}  w_ood={w_ood}  m_safe={m_safe}")
-    return bond_energy_fn, stability_fn
+
+    # Optional per-hinge LEARNABLE ligament width (option A): w_lig = 1 + 9*sigmoid(logit) in
+    # [1,10]mm flows to the solver as an EXPLICIT control_params input (differentiable via jaxopt
+    # implicit diff), threaded by the loss/pipeline as forward_pipeline(hinge_w_lig=...). Here we
+    # only emit the init logit; the single bond_energy_fn already reads w_lig from control_params
+    # when present (else its fixed closure). length_scale/energy_scale stay at the init calibration.
+    w_lig_logit0 = None
+    if bool(getattr(hm, 'learn_w_lig', False)):
+        frac = np.clip((np.asarray(w_lig) - 1.0) / 9.0, 1e-3, 1.0 - 1e-3)
+        w_lig_logit0 = jnp.asarray(np.log(frac / (1.0 - frac)))
+        print(f"[hinge_model]   + LEARNABLE w_lig (per-hinge, [1,10]mm; init {float(np.mean(w_lig)):.1f}mm)")
+    return bond_energy_fn, stability_fn, w_lig_logit0

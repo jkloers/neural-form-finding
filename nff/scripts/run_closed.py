@@ -107,7 +107,9 @@ def main():
 
     initial_state, tessellation = build_closed_initial_state(config)
     params, static_features = init_closed_les_params(config)
-    bond_energy, stability_fn = build_surrogate_bond_energy(config, initial_state)   # (None, None) for ROM
+    bond_energy, stability_fn, w_lig_logit0 = build_surrogate_bond_energy(config, initial_state)
+    if w_lig_logit0 is not None:                        # learnable per-hinge ligament width (option A)
+        params = {**params, 'w_lig_logit': w_lig_logit0}
 
     # ── Target. circle_fit: size-free (the loss fits its own circle). Otherwise a
     # FIXED target (circle or rectangle) sized to the untrained physics deploy,
@@ -179,11 +181,16 @@ def main():
             print(msg)
     best_params = best[1]
     print(f"  best chamfer={best[0]:.4e}")
+    hinge_w_lig_best = None                  # learned per-hinge width -> final visuals deploy with it
+    if isinstance(best_params, dict) and 'w_lig_logit' in best_params:
+        hinge_w_lig_best = 1.0 + 9.0 / (1.0 + jnp.exp(-best_params['w_lig_logit']))
+        print(f"  learned w_lig [mm]: min={float(hinge_w_lig_best.min()):.2f} "
+              f"mean={float(hinge_w_lig_best.mean()):.2f} max={float(hinge_w_lig_best.max()):.2f}")
 
     result = forward_pipeline(initial_state, config.target, config.validity, config.physics,
                               map_type=config.mapping.type, map_params=best_params,
                               static_features=static_features, load_specs=load_specs,
-                              bond_energy_fn=bond_energy)
+                              bond_energy_fn=bond_energy, hinge_w_lig=hinge_w_lig_best)
 
     # ── Target params for the pretty viz (fitted circle is size-adaptive). ──
     vs, disp = result['valid_state'], result['solution'].fields[-1]
@@ -251,10 +258,12 @@ def main():
     # ── Training-evolution animation. ──
     frames = []
     for ep, p in snaps:
+        hw = (1.0 + 9.0 / (1.0 + jnp.exp(-p['w_lig_logit']))) \
+            if (isinstance(p, dict) and 'w_lig_logit' in p) else None
         res = forward_pipeline(initial_state, config.target, config.validity, config.physics,
                                map_type=config.mapping.type, map_params=p,
                                static_features=static_features, load_specs=load_specs,
-                               bond_energy_fn=bond_energy)
+                               bond_energy_fn=bond_energy, hinge_w_lig=hw)
         m, v = res['mapped_state'], res['valid_state']
         d = res['solution'].fields[-1]
         flat = _global_verts(tessellation, np.asarray(reconstruct_vertices(m.face_centroids, m.centroid_node_vectors)))

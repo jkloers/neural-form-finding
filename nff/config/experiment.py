@@ -217,10 +217,12 @@ class HingeModelConfig(eqx.Module):
     w_fail: float
     w_ood: float
     m_safe: float
+    learn_w_lig: bool
 
     def __init__(self, type='rom', checkpoint='data/outputs/hinge_surrogate.pkl', material='S235',
                  thickness_mm=1.0, w_lig_mm=5.0, calibrate=True, length_scale=0.0,
-                 energy_scale=0.0, barrier=0.05, w_fail=0.0, w_ood=0.0, m_safe=0.8):
+                 energy_scale=0.0, barrier=0.05, w_fail=0.0, w_ood=0.0, m_safe=0.8,
+                 learn_w_lig=False):
         self.type = type
         self.checkpoint = checkpoint
         self.material = material
@@ -235,6 +237,7 @@ class HingeModelConfig(eqx.Module):
         self.w_fail = w_fail
         self.w_ood = w_ood
         self.m_safe = m_safe
+        self.learn_w_lig = learn_w_lig    # per-hinge ligament width as a learnable design DOF
 
 
 class ExperimentConfig(eqx.Module):
@@ -374,6 +377,7 @@ def _parse_hinge_model_config(raw: dict) -> HingeModelConfig:
         w_fail=float(raw.get("w_fail", 0.0)),
         w_ood=float(raw.get("w_ood", 0.0)),
         m_safe=float(raw.get("m_safe", 0.8)),
+        learn_w_lig=bool(raw.get("learn_w_lig", False)),
     )
 
 

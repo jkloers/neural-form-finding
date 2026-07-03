@@ -197,7 +197,14 @@ def compute_end_to_end_loss(
     if target_cloud is None:
         target_params = {'type': target_cfg.type, 'center': target_cfg.center, 'radius': target_cfg.radius}
         target_cloud = jnp.asarray(get_target_points(target_params, n_points=500), dtype=jnp.float64)
-    
+
+    # Learnable ligament width (option A): w_lig = 1 + 9*sigmoid(logit) in [1,10]mm, threaded as an
+    # explicit differentiable solver input via control_params (NOT closed over) so jaxopt's implicit
+    # diff differentiates the deployment w.r.t. it. None -> surrogate uses its fixed closure width.
+    hinge_w_lig = None
+    if isinstance(map_params, dict) and 'w_lig_logit' in map_params:
+        hinge_w_lig = 1.0 + 9.0 / (1.0 + jnp.exp(-map_params['w_lig_logit']))
+
     # 1. Run the forward pipeline
     results = forward_pipeline(
         initial_state=initial_state,
@@ -211,6 +218,7 @@ def compute_end_to_end_loss(
         static_features=static_features,
         load_specs=load_specs,
         bond_energy_fn=bond_energy_fn,
+        hinge_w_lig=hinge_w_lig,
     )
 
     # 2. Evaluate Physical Objective
@@ -351,7 +359,7 @@ def compute_end_to_end_loss(
     stab_loss = jnp.asarray(0.0, dtype=jnp.float64)
     stab_metrics = {}
     if stability_fn is not None:
-        stab_loss, stab_metrics = stability_fn(results['solution'].fields[-1])
+        stab_loss, stab_metrics = stability_fn(results['solution'].fields[-1], hinge_w_lig)
 
     total_loss = (base_loss + material_area_loss + hinge_gap_loss + reg_loss
                   + openness_loss + deformation_loss + void_closure_loss + closure_delta_loss

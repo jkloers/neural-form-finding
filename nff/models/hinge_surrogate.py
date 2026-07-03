@@ -236,21 +236,28 @@ def build_hinge_bond_energy_fn(net_params, stats, *, alpha, w_lig, sec_dir,
         ``bond_energy(nodal_DOFs, reference_vector=None, **kwargs) -> (n_hinges,)`` [pipeline units].
     """
     alpha = jnp.asarray(alpha, dtype=jnp.float64)
-    w_lig = jnp.asarray(w_lig, dtype=jnp.float64)
+    w_lig_fixed = jnp.asarray(w_lig, dtype=jnp.float64)
     sec = jnp.asarray(sec_dir, dtype=jnp.float64)
     sec = sec / (jnp.linalg.norm(sec, axis=-1, keepdims=True) + 1e-12)
 
-    # Geometry g is fixed during a Stage-2 solve -> cache the zero-state embedding h(0, g) once.
-    g_const = jnp.stack([w_lig, alpha], axis=-1)
+    # Fixed-width fast path: geometry g is constant, so cache the zero-state embedding h(0, g) once.
+    g_const = jnp.stack([w_lig_fixed, alpha], axis=-1)
     h0 = _mlp(_features(jnp.zeros((g_const.shape[0], 3), dtype=jnp.float64), g_const, stats),
               net_params["energy"])
 
-    def bond_energy(nodal_DOFs, reference_vector=None, **kwargs):
+    def bond_energy(nodal_DOFs, reference_vector=None, w_lig=None, **kwargs):
+        # ``w_lig`` (if passed by the solver via control_params.bond_params) is the LEARNABLE per-
+        # hinge width; None -> use the fixed-width cached path (identical to before, byte-for-byte).
         a, sh, dRot = hinge_kinematics(nodal_DOFs, sec, length_scale)
         u = jnp.stack([a, sh, dRot], axis=-1)
-        W = energy_scale * apply_hinge_energy(net_params, u, g_const, stats, h0=h0)
+        if w_lig is None:
+            W = energy_scale * apply_hinge_energy(net_params, u, g_const, stats, h0=h0)
+            wl = w_lig_fixed
+        else:                                              # dynamic width: rebuild g (h0 recomputed)
+            W = energy_scale * apply_hinge_energy(net_params, u, jnp.stack([w_lig, alpha], axis=-1), stats)
+            wl = w_lig
         if barrier:
-            W = W + barrier * _domain_barrier(a, sh, dRot, w_lig, domain)
+            W = W + barrier * _domain_barrier(a, sh, dRot, wl, domain)
         return W
 
     return bond_energy
@@ -284,13 +291,17 @@ def build_hinge_stability_fn(net_params, stats, *, alpha, w_lig, sec_dir, bond_p
     fj = jnp.asarray(np.asarray(bond_pairs)[:, 1])
     g = jnp.stack([w_lig, alpha], axis=-1)
 
-    def stability(final_displacements):
+    def stability(final_displacements, w_lig_override=None):
+        # Use the LEARNED width if provided (so the margin reflects thicker hinges -> the failure
+        # penalty drops as the optimizer thickens them); else the fixed manufacturing width.
+        wl = w_lig if w_lig_override is None else jnp.asarray(w_lig_override, dtype=jnp.float64)
+        gg = g if w_lig_override is None else jnp.stack([wl, alpha], axis=-1)
         a, sh, dRot = hinge_kinematics((final_displacements[fi], final_displacements[fj]),
                                        sec, length_scale)
         u = jnp.stack([a, sh, dRot], axis=-1)
-        margin = apply_hinge_failure(net_params, u, g, stats)
+        margin = apply_hinge_failure(net_params, u, gg, stats)
         fail_pen = w_fail * jnp.sum(jax.nn.relu(margin - m_safe) ** 2)   # 0 when safe (margin<=m_safe)
-        ood_pen = w_ood * jnp.sum(_domain_barrier(a, sh, dRot, w_lig, domain))
+        ood_pen = w_ood * jnp.sum(_domain_barrier(a, sh, dRot, wl, domain))
         aux = {"stab_fail": fail_pen, "stab_ood": ood_pen,
                "hinge_max_margin": jnp.max(margin),
                "hinge_n_fail": jnp.sum((margin >= 1.0).astype(jnp.float64)),      # past rupture

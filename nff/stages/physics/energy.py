@@ -60,7 +60,7 @@ def ligament_strains_linearized(DOFs1: jnp.ndarray, DOFs2: jnp.ndarray, referenc
     return axial_strain, shear_strain, dRot
 
 
-def ligament_energy_linearized(nodal_DOFs: Tuple[jnp.ndarray, jnp.ndarray], reference_vector: jnp.ndarray = jnp.array([1., 0.]), k_stretch=1., k_shear=1., k_rot=1.):
+def ligament_energy_linearized(nodal_DOFs: Tuple[jnp.ndarray, jnp.ndarray], reference_vector: jnp.ndarray = jnp.array([1., 0.]), k_stretch=1., k_shear=1., k_rot=1., **kwargs):
     """Computes the strain energy of an elastic ligament using linearized strain measures (suitable for moderate global rotations).
 
     Args:
@@ -136,7 +136,7 @@ def ligament_strains(DOFs1: jnp.ndarray, DOFs2: jnp.ndarray, reference_vector: j
     return axial_strain, shear_strain, dRot
 
 
-def ligament_energy(nodal_DOFs: Tuple[jnp.ndarray, jnp.ndarray], reference_vector: jnp.ndarray = jnp.array([1., 0.]), k_stretch=1., k_shear=1., k_rot=1.):
+def ligament_energy(nodal_DOFs: Tuple[jnp.ndarray, jnp.ndarray], reference_vector: jnp.ndarray = jnp.array([1., 0.]), k_stretch=1., k_shear=1., k_rot=1., **kwargs):
     """Computes the strain energy of an elastic ligament using nonlinear strain measures (suitable for arbitrarily large rotations).
 
     Args:

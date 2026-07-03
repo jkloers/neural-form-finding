@@ -55,7 +55,8 @@ def forward_pipeline(
         strict_boundary_fit: bool = True,
         static_features: Optional[dict] = None,
         load_specs: Optional[list] = None,
-        bond_energy_fn=None) -> dict:
+        bond_energy_fn=None,
+        hinge_w_lig=None) -> dict:
     """Full differentiable pipeline: Initial Mapping → Geometric Validity → Static Equilibrium.
 
     GRADIENT PATH (Reverse-mode AD):
@@ -84,7 +85,7 @@ def forward_pipeline(
     # Forward: valid_state → solution (equilibrium displacements, strain energy)
     # Backward: VJP flows automatically through the physics minimizer
     solution, geometry = _execute_stage2_physics(
-        valid_state, physics_cfg, load_specs, bond_energy_fn=bond_energy_fn
+        valid_state, physics_cfg, load_specs, bond_energy_fn=bond_energy_fn, hinge_w_lig=hinge_w_lig
     )
 
     vertices_ref = reconstruct_vertices(
@@ -174,7 +175,7 @@ def _execute_stage1_validity(mapped_state, target_cfg, validity_cfg):
     return valid_state
 
 
-def _execute_stage2_physics(valid_state, physics_cfg, load_specs, bond_energy_fn=None):
+def _execute_stage2_physics(valid_state, physics_cfg, load_specs, bond_energy_fn=None, hinge_w_lig=None):
     if not getattr(physics_cfg, 'use_stage2', True):
         n_faces = valid_state.face_centroids.shape[0]
         zero_fields = jnp.zeros((1, n_faces, 3), dtype=float)
@@ -223,6 +224,7 @@ def _execute_stage2_physics(valid_state, physics_cfg, load_specs, bond_energy_fn
         min_angle=physics_cfg.min_angle,
         cutoff_angle=physics_cfg.cutoff_angle,
         use_contact=physics_cfg.use_contact,
+        w_lig=hinge_w_lig,          # None -> surrogate uses its fixed closure width (unchanged)
     )
     
     if force_vals_jax is not None:
