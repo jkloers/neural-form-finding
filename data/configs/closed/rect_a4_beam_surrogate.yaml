@@ -32,7 +32,7 @@ optimization_weights:
 
 hinge_model:
   type: surrogate          # rom | surrogate
-  checkpoint: data/outputs/hinge_surrogate_2x64.pkl
+  checkpoint: data/outputs/hinge_surrogate.pkl   # 2x64 lambda=0.65 (energy 1.85% force 5.6% fail 2.5%)
   material: S235           # oversight: E=210 GPa, sigma_y=235 MPa, eps_f=0.25 (trained-for)
   thickness_mm: 1.0
   w_lig_mm: 5.0
@@ -103,11 +103,11 @@ training:
   geometric_loss_type: boundary_vertices
 
 visualization:
-  stage0: false
+  stage0: true
   stage1: false
-  stage2: false
+  stage2: true
   energy_plot: false       # surrogate = single W (no stretch/shear/rot split); dedicated visual TODO
-  animation: false
+  animation: true
   show_plots: false
   save_outputs: true
   show_external_forces: true
