@@ -20,6 +20,7 @@ replaced by a multi-step (cumulative) arc path before large-angle production run
 import os
 import re
 import subprocess
+import time
 
 import numpy as np
 
@@ -317,11 +318,47 @@ def prepare_job(p, angle_deg=60.0, n_steps=15, pivot=None, material=STEEL, imp_a
                 angle_deg=angle_deg, n_steps=n_steps)
 
 
-def solve_job(meta, ncpus=1, timeout=1800):
-    """Run ccx on a prepared job (subprocess — safe to run many concurrently)."""
+def solve_job(meta, ncpus=1, timeout=1800, eps_f=None, fracture_margin=1.1, poll=4.0):
+    """Run ccx on a prepared job (subprocess — safe to run many concurrently).
+
+    stop-at-fracture: if ``eps_f`` is given, poll the incrementally-written .frd and kill ccx
+    once PEEQ p99 >= fracture_margin*eps_f. This skips the deep-plastic grind PAST ductile
+    failure — the dominant cost, since most hinges tear at small angle then ccx crawls to the
+    cap in tiny increments (that data is also unphysical: CalculiX has no element deletion).
+    Returns a CompletedProcess-like object (``.stdout`` = the ccx log).
+    """
     env = {**os.environ, "OMP_NUM_THREADS": str(ncpus), "CCX_NPROC_EQUATION_SOLVER": str(ncpus)}
-    return subprocess.run(["ccx", "hinge"], cwd=meta["workdir"], capture_output=True, text=True,
-                          timeout=timeout, env=env)
+    if eps_f is None:
+        return subprocess.run(["ccx", "hinge"], cwd=meta["workdir"], capture_output=True, text=True,
+                              timeout=timeout, env=env)
+
+    frd, logpath = meta["job"] + ".frd", os.path.join(meta["workdir"], "ccx.log")
+    with open(logpath, "w") as logf:                             # file, not PIPE: no buffer deadlock
+        proc = subprocess.Popen(["ccx", "hinge"], cwd=meta["workdir"], stdout=logf,
+                                stderr=subprocess.STDOUT, text=True, env=env)
+        t0 = time.time()
+        while True:
+            try:
+                proc.wait(timeout=poll)
+                break                                            # ccx finished on its own
+            except subprocess.TimeoutExpired:
+                pass
+            if time.time() - t0 > timeout:
+                proc.terminate(); break
+            try:                                                 # peek the partial .frd for fracture
+                frames = _parse_frd(frd) if os.path.exists(frd) else []
+                if frames and _peeq_pct(frames[-1], 99.0) >= fracture_margin * eps_f:
+                    proc.terminate(); break                      # stop-at-fracture
+            except Exception:
+                pass
+        if proc.poll() is None:
+            try:
+                proc.wait(timeout=20)
+            except Exception:
+                proc.kill()
+    with open(logpath) as f:
+        out = f.read()
+    return subprocess.CompletedProcess(["ccx", "hinge"], proc.returncode or 0, out, "")
 
 
 def parse_job(meta, stdout=""):
@@ -344,29 +381,44 @@ def parse_job(meta, stdout=""):
     strain_max = np.array([_principal_strain_max(f["TOSTRAIN"]).max()
                            for f in frames if "TOSTRAIN" in f])
     peeq_max = np.array([_peeq_max(f) for f in frames])
+    peeq_p99 = np.array([_peeq_pct(f, 99.0) for f in frames])
     return dict(ok=ok, stdout=stdout[-1500:], theta_deg=theta_deg, W=W, M_theta=np.array(Mt),
                 F_a=np.array(Fa), F_s=np.array(Fs), uz_max=uz_max, strain_max=strain_max,
-                peeq_max=peeq_max, frames=frames, xyz=xyz, conn=meta["conn"], arcA=meta["arcA"],
-                arcB=meta["arcB"], pivot=pivot, n_nodes=len(xyz), n_elems=len(meta["conn"]), job=job)
+                peeq_max=peeq_max, peeq_p99=peeq_p99, frames=frames, xyz=xyz, conn=meta["conn"],
+                arcA=meta["arcA"], arcB=meta["arcB"], pivot=pivot, n_nodes=len(xyz),
+                n_elems=len(meta["conn"]), job=job)
 
 
-def deploy(p, ncpus=1, solver=None, timeout=1800, **kw):
+def deploy(p, ncpus=1, solver=None, timeout=1800, eps_f=None, **kw):
     """Deploy one hinge (prepare + solve + parse). See prepare_job for kwargs.
 
-    A timeout is tolerated: ccx writes the .frd/.dat incrementally, so we parse whatever
-    increments completed before the kill (partial data up to where it stalled).
+    ``eps_f`` (ductile fracture strain) enables stop-at-fracture in solve_job. A timeout is
+    tolerated: ccx writes the .frd/.dat incrementally, so we parse whatever increments
+    completed before the kill (partial data up to fracture / where it stalled).
     """
     meta = prepare_job(p, solver=solver, **kw)
     try:
-        stdout = solve_job(meta, ncpus=ncpus, timeout=timeout).stdout
+        stdout = solve_job(meta, ncpus=ncpus, timeout=timeout, eps_f=eps_f).stdout
     except subprocess.TimeoutExpired as e:
         stdout = e.stdout.decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
     return parse_job(meta, stdout)
 
 
 def _peeq_max(frame):
-    """Robust max equivalent plastic strain (PEEQ) for the failure flag; NaN if absent."""
+    """Max equivalent plastic strain (PEEQ) over the frame; NaN if absent.
+
+    NOTE: the raw max is contaminated by the fillet stress singularity -- use
+    ``_peeq_pct(frame, 99)`` for the ductile-failure flag, not this.
+    """
     for k in ("PE", "PEEQ"):
         if k in frame and frame[k].size:
             return float(np.abs(frame[k]).max())
+    return np.nan
+
+
+def _peeq_pct(frame, q=99.0):
+    """Robust (singularity-insensitive) PEEQ percentile for the ductile-failure flag."""
+    for k in ("PE", "PEEQ"):
+        if k in frame and frame[k].size:
+            return float(np.percentile(np.abs(frame[k]), q))
     return np.nan

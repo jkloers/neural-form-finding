@@ -4,6 +4,33 @@
 > HOW: phases, deliverables, decision gates, file/environment touch-points. Approval is
 > required before Phase 3 (touches `nff/stages/physics/energy.py`, a plan-gated file).
 
+## Status (2026-07-03)
+
+- **Phase 0 — DONE**, engine = **CalculiX**, not FEniCSx (FEniCSx abandoned: hand-coded J2
+  intractable). Oracle = `nff/rve/{geometry,ccx_solver,hinge_function}.py`. Fillet `c=0.16`,
+  `n_through=2`, stop-at-fracture.
+- **Phase 1 (data) — DONE.** 1000-hinge campaign (`nff/rve/dataset.py`,
+  `nff/scripts/generate_hinge_dataset.py`): 1000/1000 usable, 0 errored, 63,644 Sobolev samples
+  (`sofa/output/hinge_dataset.npz`).
+- **Phase 2 (surrogate) — DONE.** Squared-form energy `nff/models/hinge_surrogate.py`, trained
+  (`nff/scripts/train_hinge_surrogate.py`): held-out (150 unseen geometries) **energy_rel 1.8%,
+  force_rel 5.9%, fail_rmse 2.5%** (λ=0.9). Params `data/outputs/hinge_surrogate.pkl`.
+- **Phase 3 (integration) — NEXT (this doc's "Known integration gaps").**
+
+## Scientific figures — ongoing workstream
+
+Publication-quality figures are a first-class, recurring deliverable of this program (not an
+afterthought). Every figure:
+- uses the **project charter** (palette from `nff/scripts/validate_hinge.py` —
+  orange `#F58025` / teal `#2A9D8F` / red `#D62828` / grey `#6C757D` / ink `#1A1A1A`; clean 1×N;
+  recessive axes; **never** numeric values in titles; no hardcoded fonts),
+- follows the **dataviz skill** method (pick the form; assign color by job; **run the palette
+  validator**; thin marks; legend for ≥2 series),
+- is **rendered and eyeballed, then iterated** (open the PNG, fix collisions / scale / geometry —
+  do not ship the first render),
+- lives in `nff/scripts/plot_*.py`, modular (separable fit / bin / plot helpers).
+- Reference implementation: `nff/scripts/plot_hinge_energy_regimes.py`.
+
 ## Environment split (no import coupling)
 
 - **FEniCSx process** (new, standalone — like the old SOFA process): builds one hinge RVE,
@@ -114,6 +141,39 @@ coverage.
 
 **Deliverable:** surrogate-backed Stage-2 for `closed_les`, behind a config flag so the
 spring baseline stays available.
+
+### Known integration gaps (surfaced by the 2026-07-02 compatibility trace)
+
+The interface fits: bond energies are evaluated batched, so per-hinge `(alpha, w_lig)` thread
+in by adding two `(n_hinges,)` fields to `LigamentParams` + populating them in
+`build_control_params` (both `params.py`, not gated); `alpha` comes from
+`compute_hinge_descriptors` (differentiable in `r`), `w_lig` is a manufacturing constant; the
+only gated edit is routing `build_potential_energy` to `ligament_energy_surrogate`. Two gaps
+must be closed at integration — **neither corrupts the dataset, both are recoverable, so
+nothing needs fixing before the campaign** — but they are logged here so they are not
+rediscovered:
+
+- **Gap 1 — point-ROM ↔ physical-hinge frame bridge.** The ROM is point-based: for closed
+  hinges `build_reference_bond_vectors` collapses to `~[1e-4, 0]` (`l0≈0`), so
+  `ligament_strains` splits `(a, s)` along an arbitrary (global-x fallback) axis. The RVE
+  dataset defines `(a, s)` in a hinge-local frame tied to the cut (pivot at the main-cut tip,
+  `a` along the secondary cut, `s` perpendicular, `θ = dRot`). `θ` and the coupling are
+  frame-free; the `(a, s)` *decomposition* is not. Fix: give each closed hinge a
+  `reference_bond_vector` carrying the **cut orientation** (`main_vec` from the descriptor ×
+  nominal length) so `ligament_strains` resolves `(a, s)` in the same frame the RVE imposed.
+  This IS the bridge from the finite physical hinge to the point ROM.
+  `build_reference_bond_vectors` is in `geometry.py` (not gated).
+  - REQUIRED NOW (documentation only, not a code fix): the dataset must record its exact
+    kinematic convention (pivot = main-cut tip; `a` along the secondary cut; `s` perpendicular;
+    `θ` = relative rotation; frame set by the secondary-cut orientation) so the bridge is
+    buildable later. Captured in `hinge_function.py`'s module docstring.
+
+- **Gap 2 — length + energy scale.** The surrogate returns physical N·mm at physical mm; the
+  closed pipeline runs in abstract units (target radius 2.5–5, `k=0.5/1000`, `W~0.25`).
+  Integration needs (i) a **length scale** [mm per pipeline-unit] — pick a physical tile size so
+  `w_lig ≈ 1/10` tile — to map the ROM's abstract `dU` into mm, and (ii) an **energy scale** so
+  physical `W` neither swamps nor vanishes against the chamfer loss. Both live in
+  setup/config, not the gated core.
 
 ---
 

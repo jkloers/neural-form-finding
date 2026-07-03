@@ -167,15 +167,23 @@ The truncation boundary is artificial and `W` depends on it.
 
 ## 9. Surrogate model
 
-- **Residual form:** `W_θ = W_baseline(ū; k(geom)) + W_NN(ū; geom)`, with `W_NN`
-  Taylor-residualized at the origin (`W=0, F=0, [H=0]` at `ū=0`) so the elastic small-strain
-  limit is exact **by construction**, and OOD queries degrade gracefully to the baseline.
+- **One new energy network — NOT a correction to the old linear springs.** `W_θ(u; geom)` is
+  a single network trained directly on the FEM data; it **fully replaces**
+  `ligament_energy_linearized` (whose `k = 1000/1000/0.5` are abstract, not steel). There is
+  **no `W_baseline`**: steel yields by ~0.6°, so a linear-elastic anchor would describe almost
+  none of the (plastic + buckling) deployment energy.
+- **Origin-exact by construction:** residualize the network against *itself* —
+  `W(u) = N(u) − N(0) − ∇N(0)·u` — so `W(0)=0, ∇W(0)=0` (rigid-body motion is free) hold
+  exactly, with no external baseline. Constrain `W ≥ 0` (sum-of-squares / softplus output) so
+  the global solver cannot be driven to negative energy out of domain.
 - **C² smooth activations** (softplus/tanh) — the global L-BFGS forward solve and the IFT
   backward solve need a well-behaved tangent stiffness `∇²W`. No ReLU.
-- **Inputs:** 3 dimensionless kinematics + ~7–9 dimensionless geometry.
-  **Outputs:** `W` + validity/failure margin(s).
-- **Sobolev loss:** variance-normalized `energy-MSE + force(∇W)-MSE + validity-margin`
-  loss. Optional 2nd-order (Hessian) term if the FEM emits tangent stiffness cheaply.
+- **Inputs:** 3 kinematics `(a, s, θ)` [mm, mm, rad] + geometry `(w_lig, α)` (`t`, material
+  fixed). **Outputs:** `W` + a validity/failure margin.
+- **OOD handled by the validity margin, not a baseline fallback:** the global loss uses the
+  margin as a soft barrier to keep hinges in the trustworthy domain.
+- **Sobolev loss:** variance-normalized `energy-MSE + force(∇W)-MSE + validity-margin`.
+  Optional 2nd-order (Hessian) term if the FEM emits tangent stiffness cheaply.
 
 ---
 
