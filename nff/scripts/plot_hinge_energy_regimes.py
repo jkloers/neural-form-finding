@@ -9,8 +9,9 @@ generic is hardcoded. Run in an env with matplotlib (e.g. the ``ccx`` env):
 
 The dispersion band is the 10-90th percentile of W across all OTHER variables (geometry w_lig,
 alpha, and the other two kinematics) -- so it is wide, dominated by w_lig. The ROM is the linear
-spring model W ~ k_s a^2 + k_b theta^2 + k_tau s^2, recalibrated on the near-origin (elastic)
-samples; the FEA mean peels BELOW it once plasticity/buckling softens the response.
+spring model W ~ k_s a^2 + k_b theta^2 + k_tau s^2, with coefficients LEAST-SQUARES fit to the full
+FEA energy -- the closest a quadratic form gets to the real hinge energy. The story: even so, the
+linear ROM cannot follow the plastic softening / failure, over- or under-predicting away from fit.
 """
 
 import argparse
@@ -23,7 +24,8 @@ import matplotlib.pyplot as plt
 
 # ── project charter ───────────────────────────────────────────────────────────────
 ORANGE, TEAL, RED, GREY, INK = "#F58025", "#2A9D8F", "#D62828", "#6C757D", "#1A1A1A"
-ZONE = {"elastic": "#EAF2F8", "plastic": "#FCF3E6", "fracture": "#FBEAEA"}   # light, non-obtrusive
+ZONE = {"elastic": "#E7F1ED", "plastic": "#FBEBD3", "fracture": "#F7DEDE"}   # soft tints
+ZONE_LABEL = {"elastic": "Elastic", "plastic": "Plastic", "fracture": "Failure"}
 
 
 def apply_charter():
@@ -45,10 +47,23 @@ AXES = [
 ]
 
 
-def fit_rom(a, s, theta, W, theta_fit=0.05):
-    """Recalibrate W ~ k_s a^2 + k_b theta^2 + k_tau s^2 on small-deformation samples
-    (theta < theta_fit rad, the elastic branch); non-negative stiffnesses."""
-    m = theta < theta_fit
+def _smooth(y, k=3):
+    """NaN-aware centered moving average -- de-noises the per-bin ROM without shifting it."""
+    y = np.asarray(y, float); out = y.copy()
+    for i in range(len(y)):
+        w = y[max(0, i - k // 2): i + k // 2 + 1]
+        w = w[np.isfinite(w)]
+        if w.size:
+            out[i] = w.mean()
+    return out
+
+
+def fit_rom(a, s, theta, W):
+    """Best-fit linear-spring energy W ~ k_s a^2 + k_b theta^2 + k_tau s^2, calibrated by
+    least-squares against the FULL FEA energy (all valid samples) -- i.e. the coefficients are
+    chosen so the linear ROM mimics the real hinge energy as closely as a quadratic form can.
+    Non-negative stiffnesses."""
+    m = np.isfinite(W) & np.isfinite(a) & np.isfinite(s) & np.isfinite(theta)
     A = np.stack([a[m] ** 2, theta[m] ** 2, s[m] ** 2], axis=1)
     k, *_ = np.linalg.lstsq(A, W[m], rcond=None)
     k_s, k_b, k_t = np.clip(k, 0.0, None)
@@ -98,7 +113,7 @@ def plot_axis(ax, b, xform, xlabel, term_key, term_label, sym, rom, eps_f):
     d = np.abs(xc)
     zone = np.where(d < d_y, "elastic", np.where(d < d_f, "plastic", "fracture"))
     for i in range(len(xc)):
-        ax.axvspan(ex[i], ex[i + 1], color=ZONE[zone[i]], alpha=0.6, lw=0, zorder=0)
+        ax.axvspan(ex[i], ex[i + 1], color=ZONE[zone[i]], alpha=0.5, lw=0, zorder=0)
 
     # 2. FEA: 10-90% dispersion band + mean
     ax.fill_between(xc[good], p10[good], p90[good], color=ORANGE, alpha=0.15, lw=0,
@@ -106,35 +121,24 @@ def plot_axis(ax, b, xform, xlabel, term_key, term_label, sym, rom, eps_f):
     ax.plot(xc[good], mean[good], "-", color=ORANGE, lw=2.3, label="FEA mean $W$", zorder=6)
 
     # 3. recalibrated ROM: all terms + the isolated term for this axis
-    rom_full = rom["s"] * b["a2"] + rom["b"] * b["th2"] + rom["t"] * b["s2"]
-    rom_iso = {"s": rom["s"] * b["a2"], "b": rom["b"] * b["th2"], "t": rom["t"] * b["s2"]}[term_key]
+    rom_full = _smooth(rom["s"] * b["a2"] + rom["b"] * b["th2"] + rom["t"] * b["s2"])
+    rom_iso = _smooth({"s": rom["s"] * b["a2"], "b": rom["b"] * b["th2"],
+                       "t": rom["t"] * b["s2"]}[term_key])
     ax.plot(xc[good], rom_full[good], "-", color=TEAL, lw=1.9, label="ROM (all terms)", zorder=4)
     ax.plot(xc[good], rom_iso[good], "--", color=TEAL, lw=1.6, label=f"ROM {term_label}", zorder=4)
 
-    # 4. deviation: first bin (by increasing |x|) where the ROM over-predicts FEA by >10%
-    o = np.argsort(d)
-    fl = 0.03 * np.nanmax(mean[good])
-    cand = [i for i in o if good[i] and mean[i] > fl and rom_full[i] > mean[i] * 1.10]
-    if cand:
-        i = cand[0]
-        for xv in ([xc[i], -xc[i]] if sym else [xc[i]]):
-            ax.axvline(xv, color=RED, ls=":", lw=1.4, zorder=5)
-        ax.plot(xc[i], mean[i], "o", color=RED, ms=6, zorder=7)
-        ax.annotate("FEA departs ROM", (xc[i], mean[i]), textcoords="offset points",
-                    xytext=(10, 12), fontsize=8.5, color=RED, weight="bold", zorder=8)
-
-    # 5. one label per (wide-enough) zone, from the boundaries -- transparent bbox, at the top
+    # 4. one label per (wide-enough) zone, from the boundaries -- transparent bbox, at the top
     xmax = np.abs(xc).max(); span = ex[-1] - ex[0]
     def label_zone(name, xpos, wide):
         if wide > 0.07 * span:
             ax.text(xpos, ycap * 0.955, name, ha="center", va="top", fontsize=9.5, color=GREY,
                     bbox=dict(facecolor="white", alpha=0.65, edgecolor="none", boxstyle="round,pad=0.2"))
-    label_zone("Elastic", 0.0 if sym else d_y / 2, d_y * (1 if not sym else 2))
+    label_zone(ZONE_LABEL["elastic"], 0.0 if sym else d_y / 2, d_y * (1 if not sym else 2))
     if np.isfinite(d_f):
-        label_zone("Plastic", (d_y + d_f) / 2, d_f - d_y)
-        label_zone("Fracture", (d_f + xmax) / 2, xmax - d_f)
+        label_zone(ZONE_LABEL["plastic"], (d_y + d_f) / 2, d_f - d_y)
+        label_zone(ZONE_LABEL["fracture"], (d_f + xmax) / 2, xmax - d_f)
     else:
-        label_zone("Plastic", (d_y + xmax) / 2, xmax - d_y)
+        label_zone(ZONE_LABEL["plastic"], (d_y + xmax) / 2, xmax - d_y)
 
     ax.set_xlabel(xlabel); ax.set_ylabel(r"strain energy $W$ [N$\cdot$mm]")
     ax.set_xlim(ex[0], ex[-1]); ax.set_ylim(0, ycap)
@@ -160,6 +164,10 @@ def main():
     fig.suptitle("Hinge strain energy across kinematic regimes  ·  FEA vs recalibrated linear ROM",
                  fontsize=13, color=INK, y=1.03)
     fig.tight_layout()
+    fig.text(0.5, -0.02, "Regime shading from surface plastic strain (PEEQ$_{p99}$):  "
+             r"Elastic = pre-yield   ·   Plastic = post-yield   ·   "
+             r"Failure = $\varepsilon_p \geq \varepsilon_f$ (ductile rupture)",
+             ha="center", va="top", fontsize=9.5, color=GREY)
     fig.savefig(args.out, dpi=160, bbox_inches="tight")
     print(f"ROM: k_s={rom['s']:.1f}  k_b={rom['b']:.1f}  k_tau={rom['t']:.1f}  ->  {args.out}")
 
