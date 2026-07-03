@@ -88,6 +88,66 @@ def plot_cut_pattern(coords, T, cols, ax=None, filepath=None, hinge_margin=0.06,
         print(f"  Saved cut pattern to {filepath}")
 
 
+def _plot_shapely(ax, geom, **kw):
+    """Fill a Shapely (Multi)Polygon (with holes) on ``ax`` as matplotlib PathPatches."""
+    from matplotlib.path import Path
+    from matplotlib.patches import PathPatch
+    def _ring(r):
+        c = list(r.coords)
+        return c, [Path.MOVETO] + [Path.LINETO] * (len(c) - 2) + [Path.CLOSEPOLY]
+    polys = geom.geoms if geom.geom_type == "MultiPolygon" else ([geom] if geom.geom_type == "Polygon" else [])
+    for p in polys:
+        v, cds = _ring(p.exterior)
+        for hole in p.interiors:
+            hv, hc = _ring(hole)
+            v = v + hv; cds = cds + hc
+        ax.add_patch(PathPatch(Path(v, cds), **kw))
+
+
+def render_precise_cut_pattern(geom, filepath=None, title=None, paper="#F58025", ink="#1A1A1A",
+                               accent="#2A9D8F"):
+    """Render the PRECISE laser-cuttable cut pattern (kerf slots + fillets + ligaments) built by
+    ``nff.topology.cut_pattern.build_cut_geometry`` (mm), with a dimensioned zoom on one hinge.
+
+    The full sheet shows the actual cut-out part (slits are true kerf-width gaps, hinges are the
+    real ``w_lig`` ligament bridges); the inset shows a single hinge's fillet / ligament / kerf.
+    """
+    fig, ax = plt.subplots(figsize=(12, 8.5), facecolor="white")
+    _plot_shapely(ax, geom["sheet"], facecolor=paper, edgecolor=ink, lw=1.0, zorder=1)
+    _plot_shapely(ax, geom["cuts"], facecolor=ink, edgecolor=ink, lw=0, zorder=2)  # removed material
+    x0, y0, x1, y1 = geom["sheet"].bounds
+    mx = 0.04 * (x1 - x0)
+    ax.set_xlim(x0 - mx, x1 + mx); ax.set_ylim(y0 - mx, y1 + mx)
+    ax.set_aspect("equal"); ax.axis("off")
+
+    hinges = geom.get("hinges", [])
+    if hinges:
+        cen = np.array([(x0 + x1) / 2, (y0 + y1) / 2])
+        tip, _ = min(hinges, key=lambda h: np.linalg.norm(np.asarray(h[0]) - cen))
+        tip = np.asarray(tip)
+        d = 2.3 * geom["w_lig"]                             # zoom window ~2 ligaments
+        axins = ax.inset_axes([0.71, 0.035, 0.28, 0.32])   # lower-right, clear of the title
+        _plot_shapely(axins, geom["sheet"], facecolor=paper, edgecolor=ink, lw=1.0)
+        _plot_shapely(axins, geom["cuts"], facecolor=ink, edgecolor=ink, lw=0)
+        axins.set_xlim(tip[0] - d, tip[0] + d); axins.set_ylim(tip[1] - d, tip[1] + d)
+        axins.set_aspect("equal")
+        axins.set_xticks([]); axins.set_yticks([])
+        for s in axins.spines.values():
+            s.set_edgecolor(accent); s.set_linewidth(1.4)
+        ax.indicate_inset_zoom(axins, edgecolor=accent, lw=1.2, alpha=0.8)
+        # engineering caption (dims are the point of a cut drawing)
+        axins.text(0.5, -0.10, f"hinge detail  |  $w_{{lig}}$={geom['w_lig']:.1f} mm   "
+                   r"$\rho$" f"={geom['rho']:.2f} mm   kerf={geom['w_c']:.2f} mm",
+                   transform=axins.transAxes, ha="center", va="top", fontsize=8.5, color=ink)
+
+    if title:
+        ax.set_title(title, fontsize=13, color=ink)
+    if filepath:
+        plt.savefig(filepath, dpi=220, bbox_inches="tight"); plt.close(fig)
+        print(f"  Saved precise cut pattern to {filepath}")
+    return fig
+
+
 # ── Closed-state hinge strips (condensation RVE geometry) ──────────────────────
 # A hinge is the residual uncut steel left where the main cut is retracted. The
 # meshable strip is the two tiles it joins, closed into a `w_lig`-wide ligament
