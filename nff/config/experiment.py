@@ -214,10 +214,13 @@ class HingeModelConfig(eqx.Module):
     length_scale: float
     energy_scale: float
     barrier: float
+    w_fail: float
+    w_ood: float
+    m_safe: float
 
     def __init__(self, type='rom', checkpoint='data/outputs/hinge_surrogate.pkl', material='S235',
                  thickness_mm=1.0, w_lig_mm=5.0, calibrate=True, length_scale=0.0,
-                 energy_scale=0.0, barrier=0.05):
+                 energy_scale=0.0, barrier=0.05, w_fail=0.0, w_ood=0.0, m_safe=0.8):
         self.type = type
         self.checkpoint = checkpoint
         self.material = material
@@ -227,6 +230,11 @@ class HingeModelConfig(eqx.Module):
         self.length_scale = length_scale
         self.energy_scale = energy_scale
         self.barrier = barrier
+        # Physical-stability design-loss weights (0 = off): failure-margin penalty, OOD penalty,
+        # and the safe failure-margin threshold (penalize hinges with margin > m_safe).
+        self.w_fail = w_fail
+        self.w_ood = w_ood
+        self.m_safe = m_safe
 
 
 class ExperimentConfig(eqx.Module):
@@ -363,6 +371,9 @@ def _parse_hinge_model_config(raw: dict) -> HingeModelConfig:
         length_scale=float(raw.get("length_scale", 0.0)),
         energy_scale=float(raw.get("energy_scale", 0.0)),
         barrier=float(raw.get("barrier", 0.05)),
+        w_fail=float(raw.get("w_fail", 0.0)),
+        w_ood=float(raw.get("w_ood", 0.0)),
+        m_safe=float(raw.get("m_safe", 0.8)),
     )
 
 

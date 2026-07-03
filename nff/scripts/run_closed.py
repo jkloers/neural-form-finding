@@ -107,7 +107,7 @@ def main():
 
     initial_state, tessellation = build_closed_initial_state(config)
     params, static_features = init_closed_les_params(config)
-    bond_energy = build_surrogate_bond_energy(config, initial_state)   # None for ROM (config switch)
+    bond_energy, stability_fn = build_surrogate_bond_energy(config, initial_state)   # (None, None) for ROM
 
     # ── Target. circle_fit: size-free (the loss fits its own circle). Otherwise a
     # FIXED target (circle or rectangle) sized to the untrained physics deploy,
@@ -158,7 +158,7 @@ def main():
         initial_state, target_eff, config.validity, config.physics, config.training,
         map_type=config.mapping.type, use_jit=True,
         load_specs=load_specs, static_features=static_features,
-        target_cloud=target_cloud_override, bond_energy_fn=bond_energy)
+        target_cloud=target_cloud_override, bond_energy_fn=bond_energy, stability_fn=stability_fn)
     state = TrainState(params=params, opt_state=optimizer.init(params), rng=jax.random.PRNGKey(0))
 
     history, snaps = [], [(0, state.params)]

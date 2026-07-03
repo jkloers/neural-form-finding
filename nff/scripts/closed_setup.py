@@ -141,10 +141,10 @@ def build_surrogate_bond_energy(config, state):
     hm = getattr(config, 'hinge_model', None)
     if hm is None or getattr(hm, 'type', 'rom') != 'surrogate':
         print("[hinge_model] ROM (linear-spring ligament energy)")
-        return None
+        return None, None
 
     from nff.models.hinge_surrogate import (load_hinge_surrogate, build_hinge_bond_energy_fn,
-                                            calibrate_scales)
+                                            build_hinge_stability_fn, calibrate_scales)
     topo = config.topology
     M, N = int(topo['M']), int(topo['N'])
     r = float(topo.get('r_init', 0.45)); spacing = float(topo.get('spacing', 1.0))
@@ -161,5 +161,18 @@ def build_surrogate_bond_energy(config, state):
     print(f"[hinge_model] SURROGATE  material={hm.material} t={hm.thickness_mm}mm "
           f"w_lig={hm.w_lig_mm}mm eps_f={eps_f}  |  {len(alpha)} hinges  "
           f"length_scale={ls:.3g}mm/u  energy_scale={es:.3g}  barrier={hm.barrier}")
-    return build_hinge_bond_energy_fn(net, stats, alpha=alpha, w_lig=w_lig, sec_dir=sec_dir,
-                                      length_scale=ls, energy_scale=es, barrier=hm.barrier)
+    bond_energy_fn = build_hinge_bond_energy_fn(net, stats, alpha=alpha, w_lig=w_lig, sec_dir=sec_dir,
+                                                length_scale=ls, energy_scale=es, barrier=hm.barrier)
+
+    # Physical-stability design-loss term (failure-margin + OOD), so the chamfer-only objective
+    # stops trading structural safety for shape. None unless a weight is set.
+    w_fail = float(getattr(hm, 'w_fail', 0.0))
+    w_ood = float(getattr(hm, 'w_ood', 0.0))
+    m_safe = float(getattr(hm, 'm_safe', 0.8))
+    stability_fn = build_hinge_stability_fn(
+        net, stats, alpha=alpha, w_lig=w_lig, sec_dir=sec_dir,
+        bond_pairs=np.asarray(state.bond_connectivity),
+        length_scale=ls, w_fail=w_fail, w_ood=w_ood, m_safe=m_safe)
+    if stability_fn is not None:
+        print(f"[hinge_model]   + stability loss  w_fail={w_fail}  w_ood={w_ood}  m_safe={m_safe}")
+    return bond_energy_fn, stability_fn

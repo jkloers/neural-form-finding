@@ -189,6 +189,25 @@ def _domain_barrier(a, sh, dRot, w_lig, dom):
             + r(jnp.abs(dRot) - dom["theta_max"]))
 
 
+def hinge_kinematics(nodal_DOFs, sec, length_scale):
+    """Project the two connected face DOFs -> per-hinge ``(a, s, theta)`` in the COROTATED cut frame.
+
+    Shared by the Stage-2 bond energy and the design-loss stability terms so the ``(a, s, theta)``
+    mapping is byte-identical between the forward solve and the loss. ``sec``: (n, 2) unit axial
+    (secondary-cut) directions; ``length_scale``: mm per pipeline length-unit.
+    """
+    DOFs1, DOFs2 = nodal_DOFs
+    dU = DOFs2[..., :2] - DOFs1[..., :2]
+    dRot = DOFs2[..., 2] - DOFs1[..., 2]
+    mean_rot = 0.5 * (DOFs1[..., 2] + DOFs2[..., 2])
+    c, s = jnp.cos(mean_rot), jnp.sin(mean_rot)
+    ux = c * sec[..., 0] - s * sec[..., 1]                  # corotated axial unit
+    uy = s * sec[..., 0] + c * sec[..., 1]
+    a = (dU[..., 0] * ux + dU[..., 1] * uy) * length_scale          # axial [mm]
+    sh = (dU[..., 0] * (-uy) + dU[..., 1] * ux) * length_scale      # shear (perp) [mm]
+    return a, sh, dRot
+
+
 def build_hinge_bond_energy_fn(net_params, stats, *, alpha, w_lig, sec_dir,
                                length_scale: float = 1.0, energy_scale: float = 1.0,
                                domain: dict = DOMAIN, barrier: float = 0.0):
@@ -227,15 +246,7 @@ def build_hinge_bond_energy_fn(net_params, stats, *, alpha, w_lig, sec_dir,
               net_params["energy"])
 
     def bond_energy(nodal_DOFs, reference_vector=None, **kwargs):
-        DOFs1, DOFs2 = nodal_DOFs
-        dU = DOFs2[..., :2] - DOFs1[..., :2]                    # relative tile translation
-        dRot = DOFs2[..., 2] - DOFs1[..., 2]
-        mean_rot = 0.5 * (DOFs1[..., 2] + DOFs2[..., 2])
-        c, s = jnp.cos(mean_rot), jnp.sin(mean_rot)
-        ux = c * sec[:, 0] - s * sec[:, 1]                      # corotated axial unit
-        uy = s * sec[:, 0] + c * sec[:, 1]
-        a = (dU[..., 0] * ux + dU[..., 1] * uy) * length_scale          # axial [mm]
-        sh = (dU[..., 0] * (-uy) + dU[..., 1] * ux) * length_scale      # shear (perp) [mm]
+        a, sh, dRot = hinge_kinematics(nodal_DOFs, sec, length_scale)
         u = jnp.stack([a, sh, dRot], axis=-1)
         W = energy_scale * apply_hinge_energy(net_params, u, g_const, stats, h0=h0)
         if barrier:
@@ -243,6 +254,47 @@ def build_hinge_bond_energy_fn(net_params, stats, *, alpha, w_lig, sec_dir,
         return W
 
     return bond_energy
+
+
+def build_hinge_stability_fn(net_params, stats, *, alpha, w_lig, sec_dir, bond_pairs,
+                             length_scale: float = 1.0, domain: dict = DOMAIN,
+                             w_fail: float = 0.0, w_ood: float = 0.0, m_safe: float = 0.8):
+    """Physical-stability penalty at the DEPLOYED state, for the design loss:
+
+        w_fail * sum relu(margin_h - m_safe)^2        (hinges past the safe failure-margin line)
+      + w_ood  * sum domain_barrier(u_h)              (hinges leaving the trustworthy training box)
+
+    ``margin`` is the surrogate's failure head (peeq/eps_f) and ``u_h = (a, s, theta)`` is the SAME
+    corotated projection the bond energy uses (via ``hinge_kinematics``). Pure chamfer is blind to
+    physical safety, so the optimizer walks the shape-equivalent set into ill-conditioned/near-
+    failure corners; this term gives the design gradient an explicit "keep hinges safe" component.
+
+    ``bond_pairs`` (n_hinges, 2): the two connected faces per hinge, in the surrogate's hinge order
+    (= Stage-2 bond order), used to gather DOFs from the final displacement field.
+
+    Returns ``fn(final_displacements) -> (penalty, aux)``, or ``None`` if both weights are 0.
+    """
+    if w_fail == 0.0 and w_ood == 0.0:
+        return None
+    alpha = jnp.asarray(alpha, dtype=jnp.float64)
+    w_lig = jnp.asarray(w_lig, dtype=jnp.float64)
+    sec = jnp.asarray(sec_dir, dtype=jnp.float64)
+    sec = sec / (jnp.linalg.norm(sec, axis=-1, keepdims=True) + 1e-12)
+    fi = jnp.asarray(np.asarray(bond_pairs)[:, 0])
+    fj = jnp.asarray(np.asarray(bond_pairs)[:, 1])
+    g = jnp.stack([w_lig, alpha], axis=-1)
+
+    def stability(final_displacements):
+        a, sh, dRot = hinge_kinematics((final_displacements[fi], final_displacements[fj]),
+                                       sec, length_scale)
+        u = jnp.stack([a, sh, dRot], axis=-1)
+        margin = apply_hinge_failure(net_params, u, g, stats)
+        fail_pen = w_fail * jnp.sum(jax.nn.relu(margin - m_safe) ** 2)   # 0 when safe (margin<=m_safe)
+        ood_pen = w_ood * jnp.sum(_domain_barrier(a, sh, dRot, w_lig, domain))
+        aux = {"stab_fail": fail_pen, "stab_ood": ood_pen, "hinge_max_margin": jnp.max(margin)}
+        return fail_pen + ood_pen, aux
+
+    return stability
 
 
 # ── training loss ─────────────────────────────────────────────────────────────────

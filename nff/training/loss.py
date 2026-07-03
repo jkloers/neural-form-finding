@@ -182,6 +182,7 @@ def compute_end_to_end_loss(
         load_specs: Any = None,
         target_cloud: Optional[Float[Array, "n_target 2"]] = None,
         bond_energy_fn=None,
+        stability_fn=None,
 ) -> tuple[Float[Array, ""], dict]:
     """Chains the forward pipeline with the loss, as required by jax.value_and_grad.
 
@@ -344,8 +345,17 @@ def compute_end_to_end_loss(
     squared_params = jax.tree_util.tree_map(lambda x: jnp.sum(x**2), map_params)
     reg_loss = weight_reg * jax.tree_util.tree_reduce(lambda a, b: a + b, squared_params, initializer=0.0)
 
+    # 4. Physical-stability penalty (surrogate failure-margin + OOD), at the DEPLOYED state.
+    # Chamfer is blind to structural safety; this gives the design gradient a component that
+    # resists walking the shape-equivalent set into near-failure / ill-conditioned configs.
+    stab_loss = jnp.asarray(0.0, dtype=jnp.float64)
+    stab_metrics = {}
+    if stability_fn is not None:
+        stab_loss, stab_metrics = stability_fn(results['solution'].fields[-1])
+
     total_loss = (base_loss + material_area_loss + hinge_gap_loss + reg_loss
-                  + openness_loss + deformation_loss + void_closure_loss + closure_delta_loss)
+                  + openness_loss + deformation_loss + void_closure_loss + closure_delta_loss
+                  + stab_loss)
 
     all_metrics = {
         **base_metrics,
@@ -357,6 +367,8 @@ def compute_end_to_end_loss(
         'deformation':            deformation_loss,
         'void_closure':           void_closure_loss,
         'closure_delta':          closure_delta_loss,
+        'comp_stability':         stab_loss,
+        **stab_metrics,
         'loss_total':             total_loss,
         'total':                  total_loss,
     }
