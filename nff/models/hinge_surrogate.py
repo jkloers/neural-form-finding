@@ -95,12 +95,17 @@ def _mlp(x, layers):
 # ── energy + force + failure ──────────────────────────────────────────────────────
 
 def apply_hinge_energy(params: dict, u: Float[Array, "... 3"], g: Float[Array, "... 2"],
-                       stats: dict) -> Float[Array, "..."]:
-    """Condensed energy ``W(u; g)`` [N.mm]. Batched over the leading axes of ``u``/``g``."""
-    z_u = _features(u, g, stats)
-    z_0 = _features(jnp.zeros_like(u), g, stats)            # same geometry, zero motion
-    dh = _mlp(z_u, params["energy"]) - _mlp(z_0, params["energy"])
-    return stats["W_scale"] * jnp.sum(dh ** 2, axis=-1)
+                       stats: dict, h0=None) -> Float[Array, "..."]:
+    """Condensed energy ``W(u; g)`` [N.mm]. Batched over the leading axes of ``u``/``g``.
+
+    ``h0`` optionally supplies the precomputed zero-state embedding ``h(0, g)`` -- constant for a
+    fixed geometry, so a Stage-2 solve can pass it once instead of recomputing it every evaluation
+    (halves the MLP forward passes). ``None`` recomputes it (default, geometry-agnostic callers).
+    """
+    h_u = _mlp(_features(u, g, stats), params["energy"])
+    if h0 is None:
+        h0 = _mlp(_features(jnp.zeros_like(u), g, stats), params["energy"])   # same geometry, zero motion
+    return stats["W_scale"] * jnp.sum((h_u - h0) ** 2, axis=-1)
 
 
 def apply_hinge_force(params, u, g, stats):
@@ -169,14 +174,15 @@ DOMAIN = dict(eta_a_max=1.0, eta_s_max=0.7, theta_max=0.66)   # a/w_lig, s/w_lig
 
 
 def _domain_barrier(a, sh, dRot, w_lig, dom):
-    """One-sided quadratic penalty (0 in-domain) making W COERCIVE outside the training box.
+    """One-sided cubic (C^2) penalty (0 in-domain) making W COERCIVE outside the training box.
 
     The squared-form W saturates (tanh h), so it is not coercive: a load can push hinges out of
     the trustworthy region where W extrapolates arbitrarily and the Stage-2 minimizer runs off to
     infinity. This penalty grows as ||u|| leaves the box, guaranteeing a bounded minimizer AND
     acting as the validity barrier that keeps the solve in the domain (brief section 10). Tension
     only: a < 0 (compression) is out of domain."""
-    r = lambda x: jnp.maximum(x, 0.0) ** 2
+    r = lambda x: jnp.maximum(x, 0.0) ** 3     # C^2 (was **2 = C^1: jump in 2nd deriv at boundary
+                                               # -> stiffness-matrix jumps in the IFT backward solve)
     eta_a, eta_s = a / w_lig, sh / w_lig
     return (r(eta_a - dom["eta_a_max"]) + r(-eta_a)
             + r(jnp.abs(eta_s) - dom["eta_s_max"])
@@ -215,6 +221,11 @@ def build_hinge_bond_energy_fn(net_params, stats, *, alpha, w_lig, sec_dir,
     sec = jnp.asarray(sec_dir, dtype=jnp.float64)
     sec = sec / (jnp.linalg.norm(sec, axis=-1, keepdims=True) + 1e-12)
 
+    # Geometry g is fixed during a Stage-2 solve -> cache the zero-state embedding h(0, g) once.
+    g_const = jnp.stack([w_lig, alpha], axis=-1)
+    h0 = _mlp(_features(jnp.zeros((g_const.shape[0], 3), dtype=jnp.float64), g_const, stats),
+              net_params["energy"])
+
     def bond_energy(nodal_DOFs, reference_vector=None, **kwargs):
         DOFs1, DOFs2 = nodal_DOFs
         dU = DOFs2[..., :2] - DOFs1[..., :2]                    # relative tile translation
@@ -226,8 +237,7 @@ def build_hinge_bond_energy_fn(net_params, stats, *, alpha, w_lig, sec_dir,
         a = (dU[..., 0] * ux + dU[..., 1] * uy) * length_scale          # axial [mm]
         sh = (dU[..., 0] * (-uy) + dU[..., 1] * ux) * length_scale      # shear (perp) [mm]
         u = jnp.stack([a, sh, dRot], axis=-1)
-        g = jnp.stack([w_lig, alpha], axis=-1)
-        W = energy_scale * apply_hinge_energy(net_params, u, g, stats)
+        W = energy_scale * apply_hinge_energy(net_params, u, g_const, stats, h0=h0)
         if barrier:
             W = W + barrier * _domain_barrier(a, sh, dRot, w_lig, domain)
         return W

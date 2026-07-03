@@ -93,6 +93,8 @@ def main():
     ap.add_argument("--batch", type=int, default=1024)
     ap.add_argument("--val-frac", dest="val_frac", type=float, default=0.15)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--hidden", default="64,64",
+                    help="comma-sep hidden widths (default compact 64,64; original was 128,128,128)")
     args = ap.parse_args()
 
     data, eps_f = load_dataset(args.data)
@@ -112,7 +114,8 @@ def main():
     val_batch = _batch(data, va)
 
     key = jax.random.PRNGKey(args.seed)
-    params = init_hinge_surrogate(key)
+    hidden = tuple(int(x) for x in args.hidden.split(","))
+    params = init_hinge_surrogate(key, hidden=hidden)
     steps = max(1, n_tr // args.batch)
     sched = optax.cosine_decay_schedule(args.lr, args.epochs * steps)
     optimizer = optax.adam(sched)
