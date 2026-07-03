@@ -132,18 +132,70 @@ def load_hinge_surrogate(path: str):
     return ck["params"], ck["stats"], ck.get("eps_f", 0.25)
 
 
+def calibrate_scales(net_params, stats, *, alpha, w_lig, k_stretch, k_rot,
+                     a_ref_frac: float = 0.1, theta_ref: float = 0.1):
+    """Gap-2 (length_scale, energy_scale) matching BOTH the pipeline's axial and rotational springs.
+
+    The abstract pipeline is anisotropic (k_stretch >> k_rot enforces near-rigid translations, soft
+    rotation), so one scalar cannot match it — matching only k_rot leaves translations far too soft
+    and they blow out of domain. We co-solve for the two scales from the surrogate's small-strain
+    axial and rotational stiffness at a representative hinge:
+
+        energy_scale * k_theta            = k_rot        (theta is frame-free, no length_scale)
+        energy_scale * length_scale^2 * k_axial = k_stretch
+
+    =>  energy_scale = k_rot / k_theta ,   length_scale = sqrt(k_stretch*k_theta / (k_rot*k_axial)).
+
+    This keeps translations near-rigid (in-domain) while rotation stays the soft deployment mode.
+    ``k_stretch``/``k_rot`` are the pipeline's abstract stiffnesses (e.g. ``valid_state.k_*``).
+    """
+    a_m = float(jnp.mean(jnp.asarray(alpha)))
+    w_m = float(jnp.mean(jnp.asarray(w_lig)))
+    a_ref = a_ref_frac * w_m
+    g = jnp.array([[w_m, a_m]], dtype=jnp.float64)
+    W_th = float(apply_hinge_energy(net_params, jnp.array([[0., 0., theta_ref]]), g, stats)[0])
+    W_ax = float(apply_hinge_energy(net_params, jnp.array([[a_ref, 0., 0.]]), g, stats)[0])
+    k_theta = 2.0 * W_th / (theta_ref ** 2) + 1e-30            # [N.mm/rad]
+    k_axial = 2.0 * W_ax / (a_ref ** 2) + 1e-30               # [N/mm]
+    energy_scale = float(k_rot) / k_theta
+    length_scale = float(jnp.sqrt(k_stretch * k_theta / (k_rot * k_axial)))
+    return length_scale, energy_scale
+
+
 # ── pipeline adapter: the surrogate as a Stage-2 bond energy ───────────────────────
 
+# training-box bounds (from the campaign), in the surrogate's normalized units, for the OOD barrier
+DOMAIN = dict(eta_a_max=1.0, eta_s_max=0.7, theta_max=0.66)   # a/w_lig, s/w_lig, theta [rad]
+
+
+def _domain_barrier(a, sh, dRot, w_lig, dom):
+    """One-sided quadratic penalty (0 in-domain) making W COERCIVE outside the training box.
+
+    The squared-form W saturates (tanh h), so it is not coercive: a load can push hinges out of
+    the trustworthy region where W extrapolates arbitrarily and the Stage-2 minimizer runs off to
+    infinity. This penalty grows as ||u|| leaves the box, guaranteeing a bounded minimizer AND
+    acting as the validity barrier that keeps the solve in the domain (brief section 10). Tension
+    only: a < 0 (compression) is out of domain."""
+    r = lambda x: jnp.maximum(x, 0.0) ** 2
+    eta_a, eta_s = a / w_lig, sh / w_lig
+    return (r(eta_a - dom["eta_a_max"]) + r(-eta_a)
+            + r(jnp.abs(eta_s) - dom["eta_s_max"])
+            + r(jnp.abs(dRot) - dom["theta_max"]))
+
+
 def build_hinge_bond_energy_fn(net_params, stats, *, alpha, w_lig, sec_dir,
-                               length_scale: float = 1.0, energy_scale: float = 1.0):
+                               length_scale: float = 1.0, energy_scale: float = 1.0,
+                               domain: dict = DOMAIN, barrier: float = 0.0):
     """Wrap the trained surrogate as a bond-energy fn for the Stage-2 solver.
 
     From the two connected face node-DOFs it (1) forms the relative tile motion, (2) PROJECTS it
     onto the hinge's cut frame -- axial ``a`` along ``sec_dir``, shear ``s`` perpendicular --
     COROTATED by the mean face rotation, (3) converts to physical mm via ``length_scale``,
     (4) evaluates ``W(a, s, theta; w_lig, alpha)`` and rescales to pipeline energy via
-    ``energy_scale``. Linear projection (not ligament_strains' length/angle) matches how the RVE
-    imposed ``(a, s)``. Ignores ``k_stretch/k_shear/k_rot`` -- the surrogate replaces the springs.
+    ``energy_scale``, (5) adds ``barrier`` * OOD penalty to keep the minimizer in the training
+    domain (set ``barrier > 0`` -- without it the solve can diverge out of domain). Linear
+    projection (not ligament_strains' length/angle) matches how the RVE imposed ``(a, s)``. Ignores
+    ``k_stretch/k_shear/k_rot`` -- the surrogate replaces the springs.
 
     Args:
         net_params, stats: from ``load_hinge_surrogate``.
@@ -152,6 +204,8 @@ def build_hinge_bond_energy_fn(net_params, stats, *, alpha, w_lig, sec_dir,
         sec_dir:    (n_hinges, 2) unit secondary-cut (axial) direction, oriented opening-positive.
         length_scale: mm per pipeline length-unit (Gap 2).
         energy_scale: pipeline-energy per N.mm (Gap 2).
+        domain:     training-box bounds for the OOD barrier (default ``DOMAIN``).
+        barrier:    OOD-barrier stiffness [pipeline energy]. 0 = off.
 
     Returns:
         ``bond_energy(nodal_DOFs, reference_vector=None, **kwargs) -> (n_hinges,)`` [pipeline units].
@@ -173,7 +227,10 @@ def build_hinge_bond_energy_fn(net_params, stats, *, alpha, w_lig, sec_dir,
         sh = (dU[..., 0] * (-uy) + dU[..., 1] * ux) * length_scale      # shear (perp) [mm]
         u = jnp.stack([a, sh, dRot], axis=-1)
         g = jnp.stack([w_lig, alpha], axis=-1)
-        return energy_scale * apply_hinge_energy(net_params, u, g, stats)
+        W = energy_scale * apply_hinge_energy(net_params, u, g, stats)
+        if barrier:
+            W = W + barrier * _domain_barrier(a, sh, dRot, w_lig, domain)
+        return W
 
     return bond_energy
 

@@ -24,7 +24,8 @@ from nff.stages.physics.force_types import (has_geometry_dependent_loads,
                                             build_geometry_dependent_loading)
 from nff.scripts.closed_setup import (build_closed_initial_state, init_closed_les_params,
                                       closed_hinge_geometry, surrogate_scales)
-from nff.models.hinge_surrogate import load_hinge_surrogate, build_hinge_bond_energy_fn
+from nff.models.hinge_surrogate import (load_hinge_surrogate, build_hinge_bond_energy_fn,
+                                        calibrate_scales)
 
 
 def deploy_stage2(valid_state, physics_cfg, load_specs, bond_energy_fn=None):
@@ -64,6 +65,7 @@ def main():
     ap.add_argument("--w-lig-mm", dest="w_lig_mm", type=float, default=5.0)
     ap.add_argument("--length-scale", dest="length_scale", type=float, default=None)
     ap.add_argument("--energy-scale", dest="energy_scale", type=float, default=None)
+    ap.add_argument("--barrier", type=float, default=0.05, help="OOD-barrier stiffness (0=off)")
     args = ap.parse_args()
 
     config = load_and_parse_config(f"data/configs/{args.config_dir}/{args.config_name}.yaml")
@@ -80,11 +82,15 @@ def main():
     alpha, w_lig, sec_dir = closed_hinge_geometry(valid_state, M, N, r, spacing, args.w_lig_mm)
 
     net, stats, _ = load_hinge_surrogate(args.surrogate)
-    ls, es = surrogate_scales(config)
+    ls, es = surrogate_scales(config)                  # Gap-2: co-calibrate both scales to k_*
+    kst = float(np.mean(np.asarray(valid_state.k_stretch)))
+    krt = float(np.mean(np.asarray(valid_state.k_rot)))
+    ls, es = calibrate_scales(net, stats, alpha=alpha, w_lig=w_lig, k_stretch=kst, k_rot=krt)
+    print(f"  calibrated: length_scale={ls:.3g} mm/unit  energy_scale={es:.3e}  (match k_stretch={kst:.3g}, k_rot={krt:.3g})")
     if args.length_scale is not None: ls = args.length_scale
     if args.energy_scale is not None: es = args.energy_scale
     adapter = build_hinge_bond_energy_fn(net, stats, alpha=alpha, w_lig=w_lig, sec_dir=sec_dir,
-                                         length_scale=ls, energy_scale=es)
+                                         length_scale=ls, energy_scale=es, barrier=args.barrier)
 
     print(f"config {args.config_name}: {valid_state.face_centroids.shape[0]} faces, {len(alpha)} hinges  "
           f"| w_lig={args.w_lig_mm}mm  length_scale={ls}  energy_scale={es}")
