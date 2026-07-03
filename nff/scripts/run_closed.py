@@ -46,7 +46,8 @@ from nff.utils.visualization import (
 )
 from nff.utils.pipeline_viz import visualize_pipeline_results, plot_loss_history
 from nff.topology.closed_builder_jax import solve_cut_vertices_jax, boundary_flat_from_logits
-from nff.scripts.closed_setup import build_closed_initial_state, init_closed_les_params
+from nff.scripts.closed_setup import (build_closed_initial_state, init_closed_les_params,
+                                      build_surrogate_bond_energy)
 
 
 def _fit_circle(cloud):
@@ -106,6 +107,7 @@ def main():
 
     initial_state, tessellation = build_closed_initial_state(config)
     params, static_features = init_closed_les_params(config)
+    bond_energy = build_surrogate_bond_energy(config, initial_state)   # None for ROM (config switch)
 
     # ── Target. circle_fit: size-free (the loss fits its own circle). Otherwise a
     # FIXED target (circle or rectangle) sized to the untrained physics deploy,
@@ -118,7 +120,8 @@ def main():
     else:
         res0 = forward_pipeline(initial_state, config.target, config.validity, config.physics,
                                 map_type=config.mapping.type, map_params=params,
-                                static_features=static_features, load_specs=load_specs)
+                                static_features=static_features, load_specs=load_specs,
+                                bond_energy_fn=bond_energy)
         cl0 = _boundary_cloud(res0['valid_state'], res0['solution'].fields[-1])
         sc = float(config.topology.get('target_radius_scale', 1.0))
         if rect_mode:
@@ -155,7 +158,7 @@ def main():
         initial_state, target_eff, config.validity, config.physics, config.training,
         map_type=config.mapping.type, use_jit=True,
         load_specs=load_specs, static_features=static_features,
-        target_cloud=target_cloud_override)
+        target_cloud=target_cloud_override, bond_energy_fn=bond_energy)
     state = TrainState(params=params, opt_state=optimizer.init(params), rng=jax.random.PRNGKey(0))
 
     history, snaps = [], [(0, state.params)]
@@ -175,7 +178,8 @@ def main():
 
     result = forward_pipeline(initial_state, config.target, config.validity, config.physics,
                               map_type=config.mapping.type, map_params=best_params,
-                              static_features=static_features, load_specs=load_specs)
+                              static_features=static_features, load_specs=load_specs,
+                              bond_energy_fn=bond_energy)
 
     # ── Target params for the pretty viz (fitted circle is size-adaptive). ──
     vs, disp = result['valid_state'], result['solution'].fields[-1]
@@ -230,7 +234,8 @@ def main():
     for ep, p in snaps:
         res = forward_pipeline(initial_state, config.target, config.validity, config.physics,
                                map_type=config.mapping.type, map_params=p,
-                               static_features=static_features, load_specs=load_specs)
+                               static_features=static_features, load_specs=load_specs,
+                               bond_energy_fn=bond_energy)
         m, v = res['mapped_state'], res['valid_state']
         d = res['solution'].fields[-1]
         flat = _global_verts(tessellation, np.asarray(reconstruct_vertices(m.face_centroids, m.centroid_node_vectors)))

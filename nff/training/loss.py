@@ -181,6 +181,7 @@ def compute_end_to_end_loss(
         static_features: Any = None,
         load_specs: Any = None,
         target_cloud: Optional[Float[Array, "n_target 2"]] = None,
+        bond_energy_fn=None,
 ) -> tuple[Float[Array, ""], dict]:
     """Chains the forward pipeline with the loss, as required by jax.value_and_grad.
 
@@ -208,8 +209,9 @@ def compute_end_to_end_loss(
         strict_boundary_fit=strict_boundary_fit,
         static_features=static_features,
         load_specs=load_specs,
+        bond_energy_fn=bond_energy_fn,
     )
-    
+
     # 2. Evaluate Physical Objective
     base_loss, base_metrics = evaluate_physical_loss(
         results['solution'],
