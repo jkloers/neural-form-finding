@@ -113,7 +113,7 @@ def render_precise_cut_pattern(geom, filepath=None, title=None, paper="#F58025",
     real ``w_lig`` ligament bridges); the inset shows a single hinge's fillet / ligament / kerf.
     """
     fig, ax = plt.subplots(figsize=(12, 8.5), facecolor="white")
-    _plot_shapely(ax, geom["sheet"], facecolor=paper, edgecolor=ink, lw=1.0, zorder=1)
+    _plot_shapely(ax, geom["sheet"], facecolor=paper, edgecolor="none", zorder=1)
     _plot_shapely(ax, geom["cuts"], facecolor=ink, edgecolor=ink, lw=0, zorder=2)  # removed material
     x0, y0, x1, y1 = geom["sheet"].bounds
     mx = 0.04 * (x1 - x0)
@@ -130,7 +130,7 @@ def render_precise_cut_pattern(geom, filepath=None, title=None, paper="#F58025",
         wl, rho, wc = geom["w_lig"], geom["rho"], geom["w_c"]
         d = 2.4 * wl                                        # zoom window ~2 ligaments
         axins = ax.inset_axes([0.67, 0.03, 0.32, 0.36])    # lower-right, clear of the title
-        _plot_shapely(axins, geom["sheet"], facecolor=paper, edgecolor=ink, lw=1.0)
+        _plot_shapely(axins, geom["sheet"], facecolor=paper, edgecolor="none")
         _plot_shapely(axins, geom["cuts"], facecolor=ink, edgecolor=ink, lw=0)
         axins.set_xlim(tip[0] - d, tip[0] + d); axins.set_ylim(tip[1] - d, tip[1] + d)
         axins.set_aspect("equal")
@@ -148,18 +148,25 @@ def render_precise_cut_pattern(geom, filepath=None, title=None, paper="#F58025",
         axins.plot(*zip(tip - wl * hdir, tip - wl * hdir + off * perp), color=accent, lw=0.6)
         axins.text(*(0.5 * (a0 + a1) + 0.22 * wl * perp), r"$w_{lig}$", color=ink,
                    fontsize=9, ha="center", va="bottom")
-        axins.annotate("", tip - rho * perp, tip,                              # fillet radius
-                       arrowprops=dict(arrowstyle="<|-", color=accent, lw=1.1, mutation_scale=7))
-        axins.text(*(tip - 1.9 * rho * perp), r"$\rho$", color=ink, fontsize=9, ha="center", va="center")
 
-        axins.text(0.5, -0.09, f"hinge detail  ·  $w_{{lig}}$={wl:.1f} mm   "
-                   r"$\rho$" f"={rho:.2f} mm   kerf={wc:.2f} mm",
+        axins.text(0.5, -0.09, f"hinge detail  ·  $w_{{lig}}$={wl:.1f} mm   kerf={wc:.2f} mm",
                    transform=axins.transAxes, ha="center", va="top", fontsize=8.5, color=ink)
+
+    # scale bar (nice round length ~1/5 of the sheet width, in mm)
+    span = x1 - x0
+    raw = span / 5.0
+    mag = 10.0 ** np.floor(np.log10(raw))
+    nice = float(min([1, 2, 5, 10], key=lambda k: abs(k * mag - raw)) * mag)
+    sx, sy = x0 + 0.02 * span, y0 - 0.03 * span
+    ax.plot([sx, sx + nice], [sy, sy], color=ink, lw=3.5, solid_capstyle="butt",
+            zorder=6, clip_on=False)
+    ax.text(sx + nice / 2, sy - 0.012 * span, f"{nice:.0f} mm", color=ink, fontsize=11,
+            ha="center", va="top")
 
     if title:
         ax.set_title(title, fontsize=13, color=ink)
     if filepath:
-        plt.savefig(filepath, dpi=220, bbox_inches="tight"); plt.close(fig)
+        plt.savefig(filepath, dpi=320, bbox_inches="tight"); plt.close(fig)
         print(f"  Saved precise cut pattern to {filepath}")
     return fig
 
