@@ -172,7 +172,11 @@ def main():
         if (epoch + 1) % args.every == 0 or epoch == config.training.num_epochs - 1:
             snaps.append((epoch + 1, state.params))
         if epoch % 25 == 0 or epoch == config.training.num_epochs - 1:
-            print(f"  epoch {epoch:3d}  loss={float(loss):.4e}  chamfer={ch:.4e}")
+            msg = f"  epoch {epoch:3d}  loss={float(loss):.4e}  chamfer={ch:.4e}"
+            if aux.get('hinge_n_fail') is not None:   # surrogate stability metrics, when tracked
+                msg += (f"  fail={int(aux['hinge_n_fail'])} unsafe={int(aux['hinge_n_unsafe'])}"
+                        f" maxM={float(aux['hinge_max_margin']):.2f}")
+            print(msg)
     best_params = best[1]
     print(f"  best chamfer={best[0]:.4e}")
 

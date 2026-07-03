@@ -96,7 +96,7 @@ loss_weights:
 
 training:
   num_epochs: 60
-  learning_rate: 0.005
+  learning_rate: 0.01
   optimizer: adam
   lr_schedule: cosine
   grad_clip: 1.0

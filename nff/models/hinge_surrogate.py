@@ -291,7 +291,10 @@ def build_hinge_stability_fn(net_params, stats, *, alpha, w_lig, sec_dir, bond_p
         margin = apply_hinge_failure(net_params, u, g, stats)
         fail_pen = w_fail * jnp.sum(jax.nn.relu(margin - m_safe) ** 2)   # 0 when safe (margin<=m_safe)
         ood_pen = w_ood * jnp.sum(_domain_barrier(a, sh, dRot, w_lig, domain))
-        aux = {"stab_fail": fail_pen, "stab_ood": ood_pen, "hinge_max_margin": jnp.max(margin)}
+        aux = {"stab_fail": fail_pen, "stab_ood": ood_pen,
+               "hinge_max_margin": jnp.max(margin),
+               "hinge_n_fail": jnp.sum((margin >= 1.0).astype(jnp.float64)),      # past rupture
+               "hinge_n_unsafe": jnp.sum((margin > m_safe).astype(jnp.float64))}  # past the safe line
         return fail_pen + ood_pen, aux
 
     return stability
