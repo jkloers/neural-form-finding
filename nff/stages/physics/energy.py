@@ -365,7 +365,8 @@ def combine_face_energies(*energy_fns: Callable):
 
 def build_potential_energy(bond_connectivity,
                            linearized_strains: bool = True,
-                           use_contact: bool = True) -> Callable:
+                           use_contact: bool = True,
+                           bond_energy_fn: Callable = None) -> Callable:
     """Build the total potential energy functional.
 
     Composes elastic strain energy and (optionally) contact energy into a
@@ -375,11 +376,17 @@ def build_potential_energy(bond_connectivity,
         bond_connectivity: (n_hinges, 2) static NumPy array of global node indices.
         linearized_strains: use linearized beam theory if True, full strains otherwise.
         use_contact:        include contact energy penalizing face interpenetration.
+        bond_energy_fn:     optional explicit single-bond energy functional. When given it
+            OVERRIDES the linearized/nonlinear spring default — used to inject the learned
+            condensed hinge-energy surrogate (see
+            ``nff.models.hinge_surrogate.build_hinge_bond_energy_fn``). Default ``None`` keeps
+            the spring model, so existing behavior is unchanged.
 
     Returns:
         Callable: potential_energy(face_displacement, control_params) -> scalar.
     """
-    bond_energy_fn = ligament_energy_linearized if linearized_strains else ligament_energy
+    if bond_energy_fn is None:
+        bond_energy_fn = ligament_energy_linearized if linearized_strains else ligament_energy
     strain_energy = build_strain_energy(
         bond_connectivity=bond_connectivity,
         bond_energy_fn=bond_energy_fn,
