@@ -212,6 +212,7 @@ def _execute_stage2_physics(valid_state, physics_cfg, load_specs, bond_energy_fn
         solver_maxiter=physics_cfg.solver_maxiter,
         solver_tol=physics_cfg.solver_tol,
         updated_lagrangian=physics_cfg.updated_lagrangian,
+        backward_reg=getattr(physics_cfg, 'backward_reg', 0.0),
     )
 
     control_params = build_control_params(

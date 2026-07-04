@@ -84,12 +84,14 @@ class PhysicsConfig(eqx.Module):
     solver_maxiter: int
     solver_tol: float
     updated_lagrangian: bool
+    backward_reg: float
 
     def __init__(self, domain_restriction: float, use_contact: bool,
                  k_contact: float, min_angle: float, cutoff_angle: float,
                  linearized_strains: bool, incremental: bool,
                  num_load_steps: int, solver_maxiter: int = 1000,
-                 solver_tol: float = 1e-5, updated_lagrangian: bool = False):
+                 solver_tol: float = 1e-5, updated_lagrangian: bool = False,
+                 backward_reg: float = 0.0):
         self.domain_restriction = domain_restriction
         self.use_contact = use_contact
         self.k_contact = k_contact
@@ -101,6 +103,9 @@ class PhysicsConfig(eqx.Module):
         self.solver_maxiter = solver_maxiter
         self.solver_tol = solver_tol
         self.updated_lagrangian = updated_lagrangian
+        # Tikhonov ridge on the implicit-diff backward solve (0 = off). Lifts the near-singular/
+        # indefinite tangent stiffness to PD so the IFT gradient is well-conditioned.
+        self.backward_reg = backward_reg
 
 
 class LossWeights(eqx.Module):
@@ -360,6 +365,7 @@ def _parse_physics_config(physics_raw: dict, domain_restriction: float) -> Physi
         solver_maxiter=int(physics_raw.get("solver_maxiter", 1000)),
         solver_tol=float(physics_raw.get("solver_tol", 1e-5)),
         updated_lagrangian=bool(physics_raw.get("updated_lagrangian", False)),
+        backward_reg=float(physics_raw.get("backward_reg", 0.0)),
     )
 
 

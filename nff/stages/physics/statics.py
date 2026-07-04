@@ -14,7 +14,9 @@ from nff.stages.physics.kinematics import build_constrained_kinematics, DOFsInfo
 
 from nff.stages.physics.params import ControlParams, SolutionData
 
+import functools
 from jaxopt import LBFGS
+from jaxopt.linear_solve import solve_cg
 
 
 def setup_static_solver(
@@ -28,7 +30,8 @@ def setup_static_solver(
         num_steps: int = 10,
         solver_maxiter: int = 1000,
         solver_tol: float = 1e-5,
-        updated_lagrangian: bool = False) -> Callable:
+        updated_lagrangian: bool = False,
+        backward_reg: float = 0.0) -> Callable:
     """Setup a static equilibrium solver by minimizing the total potential energy.
 
     Args:
@@ -96,7 +99,12 @@ def setup_static_solver(
             SolutionData: Equilibrium solution.
         """
         initial_free = initial_displacements.reshape(-1)[free_DOF_ids]
-        solver = LBFGS(fun=total_potential_energy, maxiter=solver_maxiter, tol=solver_tol)
+        # backward_reg > 0: Tikhonov-regularize the IMPLICIT-DIFF (adjoint) linear solve so the
+        # near-singular / indefinite tangent stiffness (plastic softening -> negative eigenvalues)
+        # is lifted to PD before inversion. Forward equilibrium is untouched; only the gradient path.
+        _ids = (functools.partial(solve_cg, ridge=backward_reg) if backward_reg > 0 else None)
+        solver = LBFGS(fun=total_potential_energy, maxiter=solver_maxiter, tol=solver_tol,
+                       implicit_diff_solve=_ids)
         t_array = jnp.linspace(1.0 / num_steps, 1.0, num_steps) if incremental else jnp.array([1.0])
 
         if not updated_lagrangian:
