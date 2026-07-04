@@ -42,7 +42,7 @@ hinge_model:
   w_lig_mm: 5.0
   calibrate: true
   barrier: 0.05            # weak: let a small force give a partial (in-domain) deployment
-  w_fail: 0.05            # x154 raw -> ~8 (vs ~35 chamfer)
+  w_fail: 1.0            # x154 raw -> ~8 (vs ~35 chamfer)
   w_ood: 1.0e-3           # real OOD design penalty (was 1e-5, negligible)
   m_safe: 0.75            # safe failure-margin line (peeq/eps_f)
   learn_w_lig: true       # per-hinge ligament width as a learnable DOF (thicken failing hinges)
@@ -54,6 +54,7 @@ physics:
   num_load_steps: 6
   solver_maxiter: 1500
   solver_tol: 1.0e-5
+  backward_reg: 0.01      # ridge on the IFT adjoint (revives the gradient)
   updated_lagrangian: false
 
 material:
