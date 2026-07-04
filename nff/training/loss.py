@@ -12,6 +12,7 @@ import jax.numpy as jnp
 from typing import Any, Optional
 from jaxtyping import Array, Float
 from nff.stages.pipeline import forward_pipeline
+from nff.stages.physics.kinematics import face_to_node_kinematics_fn
 from nff.stages.state import CentroidalState
 from nff.stages.geometry import compute_total_area, compute_void_area
 from nff.stages.constraints import hinge_connectivity
@@ -359,7 +360,13 @@ def compute_end_to_end_loss(
     stab_loss = jnp.asarray(0.0, dtype=jnp.float64)
     stab_metrics = {}
     if stability_fn is not None:
-        stab_loss, stab_metrics = stability_fn(results['solution'].fields[-1], hinge_w_lig)
+        # bond_connectivity indexes NODES (n_faces*n_nodes_per_face), so map face displacements
+        # through the rigid-tile kinematics FIRST -- exactly as strain_energy_fn does -- else the
+        # stability gather is wrong (JAX silently clamps out-of-bounds indices).
+        _cnv = results['valid_state'].centroid_node_vectors
+        _nf, _nn, _ = _cnv.shape
+        _node_disp = face_to_node_kinematics_fn(results['solution'].fields[-1], _cnv).reshape(_nf * _nn, 3)
+        stab_loss, stab_metrics = stability_fn(_node_disp, hinge_w_lig)
 
     total_loss = (base_loss + material_area_loss + hinge_gap_loss + reg_loss
                   + openness_loss + deformation_loss + void_closure_loss + closure_delta_loss

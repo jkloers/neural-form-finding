@@ -276,10 +276,12 @@ def build_hinge_stability_fn(net_params, stats, *, alpha, w_lig, sec_dir, bond_p
     physical safety, so the optimizer walks the shape-equivalent set into ill-conditioned/near-
     failure corners; this term gives the design gradient an explicit "keep hinges safe" component.
 
-    ``bond_pairs`` (n_hinges, 2): the two connected faces per hinge, in the surrogate's hinge order
-    (= Stage-2 bond order), used to gather DOFs from the final displacement field.
+    ``bond_pairs`` (n_hinges, 2): the two connected NODES per hinge (indices into the reshaped
+    node-displacement array, = Stage-2 bond_connectivity). The caller MUST pass NODE displacements
+    (face displacements mapped through the rigid-tile kinematics), NOT raw face displacements --
+    bond_connectivity indexes nodes (n_faces*n_nodes_per_face), not faces.
 
-    Returns ``fn(final_displacements) -> (penalty, aux)``, or ``None`` if both weights are 0.
+    Returns ``fn(node_displacements, w_lig_override) -> (penalty, aux)``, or ``None`` if both weights are 0.
     """
     if w_fail == 0.0 and w_ood == 0.0:
         return None
@@ -291,12 +293,12 @@ def build_hinge_stability_fn(net_params, stats, *, alpha, w_lig, sec_dir, bond_p
     fj = jnp.asarray(np.asarray(bond_pairs)[:, 1])
     g = jnp.stack([w_lig, alpha], axis=-1)
 
-    def stability(final_displacements, w_lig_override=None):
+    def stability(node_displacements, w_lig_override=None):
         # Use the LEARNED width if provided (so the margin reflects thicker hinges -> the failure
         # penalty drops as the optimizer thickens them); else the fixed manufacturing width.
         wl = w_lig if w_lig_override is None else jnp.asarray(w_lig_override, dtype=jnp.float64)
         gg = g if w_lig_override is None else jnp.stack([wl, alpha], axis=-1)
-        a, sh, dRot = hinge_kinematics((final_displacements[fi], final_displacements[fj]),
+        a, sh, dRot = hinge_kinematics((node_displacements[fi], node_displacements[fj]),
                                        sec, length_scale)
         u = jnp.stack([a, sh, dRot], axis=-1)
         margin = apply_hinge_failure(net_params, u, gg, stats)
