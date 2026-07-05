@@ -144,7 +144,7 @@ def build_surrogate_bond_energy(config, state):
         return None, None, None
 
     from nff.models.hinge_surrogate import (load_hinge_surrogate, build_hinge_bond_energy_fn,
-                                            build_hinge_stability_fn, calibrate_scales)
+                                            build_hinge_stability_fn, calibrate_scales, DOMAIN)
     topo = config.topology
     M, N = int(topo['M']), int(topo['N'])
     r = float(topo.get('r_init', 0.45)); spacing = float(topo.get('spacing', 1.0))
@@ -168,12 +168,16 @@ def build_surrogate_bond_energy(config, state):
     m_safe = float(getattr(hm, 'm_safe', 0.8))
     bond_pairs = np.asarray(state.bond_connectivity)
 
+    # Trust region: the surrogate carries its own (data-driven) domain in stats; a wider v2 dataset
+    # auto-widens the OOD barrier here. Legacy checkpoints without it fall back to the hardcoded box.
+    dom = stats.get("domain", DOMAIN)
+
     def _build(w_lig_arr):
         """Bond energy + stability fn for a given per-hinge ligament width [mm] (scales fixed)."""
         bond = build_hinge_bond_energy_fn(net, stats, alpha=alpha, w_lig=w_lig_arr, sec_dir=sec_dir,
-                                          length_scale=ls, energy_scale=es, barrier=hm.barrier)
+                                          length_scale=ls, energy_scale=es, barrier=hm.barrier, domain=dom)
         stab = build_hinge_stability_fn(net, stats, alpha=alpha, w_lig=w_lig_arr, sec_dir=sec_dir,
-                                        bond_pairs=bond_pairs, length_scale=ls,
+                                        bond_pairs=bond_pairs, length_scale=ls, domain=dom,
                                         w_fail=w_fail, w_ood=w_ood, m_safe=m_safe)
         return bond, stab
 

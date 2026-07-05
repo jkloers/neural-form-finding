@@ -1,0 +1,119 @@
+# Closed-state RDPQK — A4 beam (17 x 12 = 204 panels), LEARNED hinge SURROGATE (S235 steel).
+#
+# ── V2 (deeper-campaign template; ACTIVATE once hinge_dataset_v2 is trained) ──────────────────
+# Differences from v1 (rect_a4_beam_surrogate.yaml):
+#   * checkpoint -> hinge_surrogate_v2.pkl  (trained on the wider campaign: w_lig in [1,20]mm,
+#     thickness 1.5mm, run PAST first fracture, CONTINUOUS ductile-damage D label)
+#   * thickness_mm 1.0 -> 1.5  (standard laser-cut gauge; stiffer but higher strain/rotation)
+#   * the OOD DOMAIN is now DATA-DRIVEN: the v2 checkpoint carries its own (wider) trust region in
+#     `stats["domain"]`, so closed_setup auto-widens the barrier -- no manual DOMAIN edit needed.
+# Everything else (edge-pull setup, ridge, learnable w_lig, break-barrier m_safe=1.0) is unchanged.
+# Tune `loads.value` / `target_half_*` to explore the now-larger feasible deployment range.
+# --------------------------------------------------------------------------------------------
+
+tessellation:
+  tessellation_type: closed_rdpqk
+  M: 17
+  N: 12
+  r_init: 0.45
+  spacing: 1.0
+  hinge_margin: 0.13
+  target_scale_x: 1.0
+  target_scale_y: 0.95
+  clamped_dofs: [0]        # left edge: x only
+  y_pin_faces: [11]        # remove the y rigid-body mode (top-left corner)
+  target_half_w: 9.31      # ~9.5% expansion (retune for the deeper range once v2 lands)
+  target_half_h: 6.57
+  target_cx: 9.31
+  target_cy: 5.43
+
+mapping:
+  map_type: closed_les
+
+optimization_weights:
+  validity_method: none
+
+hinge_model:
+  type: surrogate
+  checkpoint: data/outputs/hinge_surrogate_v2.pkl   # deeper campaign: w_lig[1,20] t1.5 D-label (train first)
+  material: S235
+  thickness_mm: 1.5        # standard laser-cut gauge (1.0-2.0mm)
+  w_lig_mm: 5.0            # manufacturing width; surrogate now covers [1,20] so this can be swept
+  calibrate: true
+  barrier: 0.05
+  w_fail: 1.0
+  w_ood: 1.0e-3
+  m_safe: 1.0             # break-onset = physical fracture D>=1 (penalize BREAKING, not folding)
+  learn_w_lig: true
+
+physics:
+  use_contact: false
+  linearized_strains: true
+  incremental: true
+  num_load_steps: 6
+  solver_maxiter: 1500
+  solver_tol: 1.0e-5
+  backward_reg: 0.01      # ridge on the IFT adjoint (revives the gradient)
+  updated_lagrangian: false
+
+material:
+  k_stretch: 1000.0
+  k_shear: 1000.0
+  k_rot: 0.5
+  density: 1.0
+
+boundary_conditions:
+  clamped_faces: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+
+loads:                     # right edge pulled +x only; raise value to explore the deeper feasible range
+  - {face: 192, dof: 0, value: 0.08}
+  - {face: 193, dof: 0, value: 0.08}
+  - {face: 194, dof: 0, value: 0.08}
+  - {face: 195, dof: 0, value: 0.08}
+  - {face: 196, dof: 0, value: 0.08}
+  - {face: 197, dof: 0, value: 0.08}
+  - {face: 198, dof: 0, value: 0.08}
+  - {face: 199, dof: 0, value: 0.08}
+  - {face: 200, dof: 0, value: 0.08}
+  - {face: 201, dof: 0, value: 0.08}
+  - {face: 202, dof: 0, value: 0.08}
+  - {face: 203, dof: 0, value: 0.08}
+
+target:
+  type: rectangle
+  center: [11.0, 6.0]
+  radius: 12.0
+
+loss_weights:
+  chamfer: 50.0
+  coverage: 1.0
+  stretching: 0.0
+  shearing: 0.0
+  bending: 0.0
+  contact: 0.0
+  material_area: 0.0
+  hinge_gap: 0.0
+  openness: 0.0
+  deformation: 0.0
+  void_closure: 0.0
+  closure_delta: 0.0
+  regularization: 1.0e-4
+
+training:
+  num_epochs: 60
+  learning_rate: 0.01
+  optimizer: adam
+  lr_schedule: cosine
+  grad_clip: 1.0
+  geometric_loss_type: boundary_vertices
+
+visualization:
+  stage0: false
+  stage1: false
+  stage2: true
+  energy_plot: false
+  animation: false
+  show_plots: false
+  save_outputs: true
+  show_external_forces: true
+  show_kinematic_blocks: true

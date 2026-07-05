@@ -117,6 +117,15 @@ def main():
     tr_idx = np.where(tr)[0]
     stats = compute_norm_stats(data["u"][tr, 0], data["u"][tr, 1], data["u"][tr, 2],
                                data["g"][tr, 0], data["g"][tr, 1], data["W"][tr])
+    # Data-driven trust region (the box the dataset actually covers) for the OOD barrier. Stored in
+    # stats -> the closed pipeline's domain AUTO-matches this surrogate; a wider v2 dataset widens it
+    # with no manual edit. Legacy checkpoints without it fall back to the hardcoded DOMAIN.
+    _wl = np.maximum(data["g"][:, 0], 1e-9)
+    stats["domain"] = dict(eta_a_max=float(np.percentile(data["u"][:, 0] / _wl, 99.0)),
+                           eta_s_max=float(np.percentile(np.abs(data["u"][:, 1] / _wl), 99.0)),
+                           theta_max=float(np.percentile(np.abs(data["u"][:, 2]), 99.0)))
+    print(f"trust region (p99): eta_a<={stats['domain']['eta_a_max']:.2f} "
+          f"|eta_s|<={stats['domain']['eta_s_max']:.2f} theta<={stats['domain']['theta_max']:.2f}rad")
     val_batch = _batch(data, va)
 
     key = jax.random.PRNGKey(args.seed)
