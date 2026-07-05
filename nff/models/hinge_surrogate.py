@@ -37,6 +37,8 @@ import jax.numpy as jnp
 import numpy as np
 from jaxtyping import Array, Float
 
+from nff.utils.linalg import corotated_bond_deformation
+
 # u = (a, s, theta); g = (w_lig, alpha[rad]). Network features (standardized):
 #   [a, s, theta, log(w_lig), alpha]
 FEAT_DIM = 5
@@ -189,22 +191,32 @@ def _domain_barrier(a, sh, dRot, w_lig, dom):
             + r(jnp.abs(dRot) - dom["theta_max"]))
 
 
-def hinge_kinematics(nodal_DOFs, sec, length_scale):
+def hinge_kinematics(nodal_DOFs, sec, length_scale, reference_vector=None):
     """Project the two connected face DOFs -> per-hinge ``(a, s, theta)`` in the COROTATED cut frame.
 
+    Uses the SHARED frame-invariant reduction ``corotated_bond_deformation`` (same core as the ROM's
+    ``ligament_strains_linearized``): the current bond is corotated by the mean face rotation and the
+    reference is subtracted, so the result is exactly zero for any rigid-body motion. The surrogate's
+    own normalization then differs from the ROM's only in the final step -- it projects onto the
+    DESIGN cut frame (``sec`` = axial unit, its 90-deg rotation = shear) and scales to mm by
+    ``length_scale`` (NO ``1/||ref||`` -- closed hinges have ``||ref||~0``).
+
     Shared by the Stage-2 bond energy and the design-loss stability terms so the ``(a, s, theta)``
-    mapping is byte-identical between the forward solve and the loss. ``sec``: (n, 2) unit axial
-    (secondary-cut) directions; ``length_scale``: mm per pipeline length-unit.
+    mapping is byte-identical between the forward solve and the loss.
+
+    Args:
+        nodal_DOFs: ``(DOFs1, DOFs2)`` each (n, 3) node DOFs of the two connected faces.
+        sec: (n, 2) unit axial (secondary-cut) directions.
+        length_scale: mm per pipeline length-unit.
+        reference_vector: (n, 2) rest bond vector (node2 - node1). ``None`` -> zero (closed hinge);
+            passing it makes ``(a, s)`` frame-invariant for OPEN bonds / net-rotating deployments.
     """
     DOFs1, DOFs2 = nodal_DOFs
-    dU = DOFs2[..., :2] - DOFs1[..., :2]
-    dRot = DOFs2[..., 2] - DOFs1[..., 2]
-    mean_rot = 0.5 * (DOFs1[..., 2] + DOFs2[..., 2])
-    c, s = jnp.cos(mean_rot), jnp.sin(mean_rot)
-    ux = c * sec[..., 0] - s * sec[..., 1]                  # corotated axial unit
-    uy = s * sec[..., 0] + c * sec[..., 1]
-    a = (dU[..., 0] * ux + dU[..., 1] * uy) * length_scale          # axial [mm]
-    sh = (dU[..., 0] * (-uy) + dU[..., 1] * ux) * length_scale      # shear (perp) [mm]
+    if reference_vector is None:
+        reference_vector = jnp.zeros_like(DOFs1[..., :2])
+    deformation, dRot = corotated_bond_deformation(DOFs1, DOFs2, reference_vector)
+    a = (deformation[..., 0] * sec[..., 0] + deformation[..., 1] * sec[..., 1]) * length_scale     # axial [mm]
+    sh = (deformation[..., 0] * (-sec[..., 1]) + deformation[..., 1] * sec[..., 0]) * length_scale  # shear [mm]
     return a, sh, dRot
 
 
@@ -248,7 +260,8 @@ def build_hinge_bond_energy_fn(net_params, stats, *, alpha, w_lig, sec_dir,
     def bond_energy(nodal_DOFs, reference_vector=None, w_lig=None, **kwargs):
         # ``w_lig`` (if passed by the solver via control_params.bond_params) is the LEARNABLE per-
         # hinge width; None -> use the fixed-width cached path (identical to before, byte-for-byte).
-        a, sh, dRot = hinge_kinematics(nodal_DOFs, sec, length_scale)
+        # ``reference_vector`` (passed by smap.bond) makes (a, s) frame-invariant for open bonds.
+        a, sh, dRot = hinge_kinematics(nodal_DOFs, sec, length_scale, reference_vector=reference_vector)
         u = jnp.stack([a, sh, dRot], axis=-1)
         if w_lig is None:
             W = energy_scale * apply_hinge_energy(net_params, u, g_const, stats, h0=h0)
@@ -293,13 +306,15 @@ def build_hinge_stability_fn(net_params, stats, *, alpha, w_lig, sec_dir, bond_p
     fj = jnp.asarray(np.asarray(bond_pairs)[:, 1])
     g = jnp.stack([w_lig, alpha], axis=-1)
 
-    def stability(node_displacements, w_lig_override=None):
+    def stability(node_displacements, w_lig_override=None, reference_vectors=None):
         # Use the LEARNED width if provided (so the margin reflects thicker hinges -> the failure
         # penalty drops as the optimizer thickens them); else the fixed manufacturing width.
         wl = w_lig if w_lig_override is None else jnp.asarray(w_lig_override, dtype=jnp.float64)
         gg = g if w_lig_override is None else jnp.stack([wl, alpha], axis=-1)
+        # ``reference_vectors`` (per-hinge rest bond) makes the margin's (a, s) frame-invariant,
+        # exactly matching the bond energy; None -> zero (closed-hinge fast path, identical result).
         a, sh, dRot = hinge_kinematics((node_displacements[fi], node_displacements[fj]),
-                                       sec, length_scale)
+                                       sec, length_scale, reference_vector=reference_vectors)
         u = jnp.stack([a, sh, dRot], axis=-1)
         margin = apply_hinge_failure(net_params, u, gg, stats)
         fail_pen = w_fail * jnp.sum(jax.nn.relu(margin - m_safe) ** 2)   # 0 when safe (margin<=m_safe)

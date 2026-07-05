@@ -10,7 +10,7 @@ from jax_md import smap
 
 from nff.stages.physics.kinematics import face_to_node_kinematics_fn
 from nff.stages.physics.params import ControlParams
-from nff.utils.linalg import vdot, void_angles, build_void_edge_distance
+from nff.utils.linalg import vdot, void_angles, build_void_edge_distance, corotated_bond_deformation
 
 
 
@@ -36,26 +36,13 @@ def ligament_strains_linearized(DOFs1: jnp.ndarray, DOFs2: jnp.ndarray, referenc
         Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]: axial, shear, rotational strains.
     """
 
-    dU = DOFs2[:, :2] - DOFs1[:, :2]
-    dRot = DOFs2[:, 2] - DOFs1[:, 2]
-    mean_rot = (DOFs2[:, 2] + DOFs1[:, 2]) / 2.0
-
-    # Exact current bond vector in the lab frame: ref + relative node displacement.
-    # (_face_to_node_displacement uses the full rotation matrix, so dU is exact.)
-    current_bond = reference_vector + dU
-
-    # Rotate back by the mean face rotation → corotated frame.
-    # For pure rigid rotation θ: current_bond = R(θ)·ref → corot_bond = ref → strain = 0.
-    c = jnp.cos(mean_rot)
-    s = jnp.sin(mean_rot)
-    corot_bond = jnp.stack([
-        c * current_bond[..., 0] + s * current_bond[..., 1],
-       -s * current_bond[..., 0] + c * current_bond[..., 1],
-    ], axis=-1)
+    # Frame-invariant deformation (corotated current bond minus reference); zero for rigid-body
+    # motion. Shared with the hinge surrogate so the (a, s) reduction is one implementation.
+    deformation, dRot = corotated_bond_deformation(DOFs1, DOFs2, reference_vector)
 
     norm_sq = jnp.linalg.norm(reference_vector, axis=-1) ** 2
-    axial_strain = vdot(corot_bond - reference_vector, reference_vector) / norm_sq
-    shear_strain = jnp.cross(reference_vector, corot_bond, axis=-1) / norm_sq
+    axial_strain = vdot(deformation, reference_vector) / norm_sq
+    shear_strain = jnp.cross(reference_vector, deformation, axis=-1) / norm_sq
 
     return axial_strain, shear_strain, dRot
 

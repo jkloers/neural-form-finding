@@ -366,7 +366,9 @@ def compute_end_to_end_loss(
         _cnv = results['valid_state'].centroid_node_vectors
         _nf, _nn, _ = _cnv.shape
         _node_disp = face_to_node_kinematics_fn(results['solution'].fields[-1], _cnv).reshape(_nf * _nn, 3)
-        stab_loss, stab_metrics = stability_fn(_node_disp, hinge_w_lig)
+        # Pass the per-hinge reference bond vectors so the margin's (a, s) reduction is frame-invariant
+        # and identical to the bond energy's (matters for open bonds; ~0 correction for closed hinges).
+        stab_loss, stab_metrics = stability_fn(_node_disp, hinge_w_lig, results['reference_bond_vectors'])
 
     total_loss = (base_loss + material_area_loss + hinge_gap_loss + reg_loss
                   + openness_loss + deformation_loss + void_closure_loss + closure_delta_loss
