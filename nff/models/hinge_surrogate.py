@@ -46,9 +46,17 @@ FEAT_DIM = 5
 
 # ── input / target normalization ────────────────────────────────────────────────
 
-def compute_norm_stats(a, s, theta, w_lig, alpha_rad, W) -> dict:
-    """Standardization stats from the training arrays (static; closed over at inference)."""
-    feats = np.stack([a, s, theta, np.log(w_lig), alpha_rad], axis=-1)
+def compute_norm_stats(a, s, theta, w_lig, alpha_rad, W, fillet_ratio=None) -> dict:
+    """Standardization stats from the training arrays (static; closed over at inference).
+
+    ``fillet_ratio`` optional: when given, the geometry input ``g`` is 3-D (w_lig, alpha, fillet) and
+    the feature vector is 6-D; otherwise the legacy 2-D g / 5-D features. The chosen width is baked
+    into ``feat_mean``/``feat_std`` length, so inference reads it back from the checkpoint.
+    """
+    cols = [a, s, theta, np.log(w_lig), alpha_rad]
+    if fillet_ratio is not None:
+        cols.append(fillet_ratio)
+    feats = np.stack(cols, axis=-1)
     return dict(
         feat_mean=jnp.asarray(feats.mean(0), dtype=jnp.float64),
         feat_std=jnp.asarray(feats.std(0) + 1e-8, dtype=jnp.float64),
@@ -57,10 +65,13 @@ def compute_norm_stats(a, s, theta, w_lig, alpha_rad, W) -> dict:
     )
 
 
-def _features(u: Float[Array, "... 3"], g: Float[Array, "... 2"], stats: dict) -> Float[Array, "... 5"]:
+def _features(u: Float[Array, "... 3"], g: Float[Array, "... _"], stats: dict) -> Float[Array, "... _"]:
+    """Standardized features. Includes the fillet DOF ``g[...,2]`` iff the checkpoint's stats are 6-D."""
     a, s, th = u[..., 0], u[..., 1], u[..., 2]
-    w_lig, alpha = g[..., 0], g[..., 1]
-    raw = jnp.stack([a, s, th, jnp.log(w_lig), alpha], axis=-1)
+    cols = [a, s, th, jnp.log(g[..., 0]), g[..., 1]]
+    if stats["feat_mean"].shape[-1] >= 6:                    # 3rd geometry DOF: fillet_ratio
+        cols.append(g[..., 2])
+    raw = jnp.stack(cols, axis=-1)
     return (raw - stats["feat_mean"]) / stats["feat_std"]
 
 
@@ -77,12 +88,15 @@ def _init_mlp(key, sizes, scale=0.1):
 
 
 def init_hinge_surrogate(key: jax.Array, hidden=(128, 128, 128), m_out: int = 32,
-                         fail_hidden=(64, 64)) -> dict:
-    """Parameter PyTree: the energy net ``h`` (R^5 -> R^m) and the failure-margin head."""
+                         fail_hidden=(64, 64), feat_dim: int = FEAT_DIM) -> dict:
+    """Parameter PyTree: the energy net ``h`` (R^feat_dim -> R^m) and the damage head.
+
+    ``feat_dim`` = 5 (legacy 2-DOF geometry) or 6 (with the swept fillet DOF).
+    """
     k_e, k_f = jax.random.split(key)
     return {
-        "energy": _init_mlp(k_e, [FEAT_DIM, *hidden, m_out]),
-        "fail": _init_mlp(k_f, [FEAT_DIM, *fail_hidden, 1]),
+        "energy": _init_mlp(k_e, [feat_dim, *hidden, m_out]),
+        "fail": _init_mlp(k_f, [feat_dim, *fail_hidden, 1]),
     }
 
 
@@ -148,7 +162,7 @@ def load_hinge_surrogate(path: str):
 
 
 def calibrate_scales(net_params, stats, *, alpha, w_lig, k_stretch, k_rot,
-                     a_ref_frac: float = 0.1, theta_ref: float = 0.1):
+                     a_ref_frac: float = 0.1, theta_ref: float = 0.1, fillet_ratio: float = 0.16):
     """Gap-2 (length_scale, energy_scale) matching BOTH the pipeline's axial and rotational springs.
 
     The abstract pipeline is anisotropic (k_stretch >> k_rot enforces near-rigid translations, soft
@@ -167,7 +181,8 @@ def calibrate_scales(net_params, stats, *, alpha, w_lig, k_stretch, k_rot,
     a_m = float(jnp.mean(jnp.asarray(alpha)))
     w_m = float(jnp.mean(jnp.asarray(w_lig)))
     a_ref = a_ref_frac * w_m
-    g = jnp.array([[w_m, a_m]], dtype=jnp.float64)
+    _g = [w_m, a_m] + ([float(fillet_ratio)] if int(stats["feat_mean"].shape[-1]) >= 6 else [])
+    g = jnp.array([_g], dtype=jnp.float64)
     W_th = float(apply_hinge_energy(net_params, jnp.array([[0., 0., theta_ref]]), g, stats)[0])
     W_ax = float(apply_hinge_energy(net_params, jnp.array([[a_ref, 0., 0.]]), g, stats)[0])
     k_theta = 2.0 * W_th / (theta_ref ** 2) + 1e-30            # [N.mm/rad]
@@ -230,7 +245,7 @@ def hinge_kinematics(nodal_DOFs, sec, length_scale, reference_vector=None):
 
 def build_hinge_bond_energy_fn(net_params, stats, *, alpha, w_lig, sec_dir,
                                length_scale: float = 1.0, energy_scale: float = 1.0,
-                               domain: dict = DOMAIN, barrier: float = 0.0):
+                               domain: dict = DOMAIN, barrier: float = 0.0, fillet_ratio=None):
     """Wrap the trained surrogate as a bond-energy fn for the Stage-2 solver.
 
     From the two connected face node-DOFs it (1) forms the relative tile motion, (2) PROJECTS it
@@ -260,8 +275,15 @@ def build_hinge_bond_energy_fn(net_params, stats, *, alpha, w_lig, sec_dir,
     sec = jnp.asarray(sec_dir, dtype=jnp.float64)
     sec = sec / (jnp.linalg.norm(sec, axis=-1, keepdims=True) + 1e-12)
 
+    # 6-feature (fillet) surrogate -> g is 3-D (w_lig, alpha, fillet_ratio); else legacy 2-D.
+    _feat6 = int(stats["feat_mean"].shape[-1]) >= 6
+    _fr = jnp.asarray(fillet_ratio if fillet_ratio is not None else 0.16, dtype=jnp.float64)
+    def _mk_g(wl):
+        return (jnp.stack([wl, alpha, jnp.broadcast_to(_fr, wl.shape)], axis=-1) if _feat6
+                else jnp.stack([wl, alpha], axis=-1))
+
     # Fixed-width fast path: geometry g is constant, so cache the zero-state embedding h(0, g) once.
-    g_const = jnp.stack([w_lig_fixed, alpha], axis=-1)
+    g_const = _mk_g(w_lig_fixed)
     h0 = _mlp(_features(jnp.zeros((g_const.shape[0], 3), dtype=jnp.float64), g_const, stats),
               net_params["energy"])
 
@@ -275,7 +297,7 @@ def build_hinge_bond_energy_fn(net_params, stats, *, alpha, w_lig, sec_dir,
             W = energy_scale * apply_hinge_energy(net_params, u, g_const, stats, h0=h0)
             wl = w_lig_fixed
         else:                                              # dynamic width: rebuild g (h0 recomputed)
-            W = energy_scale * apply_hinge_energy(net_params, u, jnp.stack([w_lig, alpha], axis=-1), stats)
+            W = energy_scale * apply_hinge_energy(net_params, u, _mk_g(w_lig), stats)
             wl = w_lig
         if barrier:
             W = W + barrier * _domain_barrier(a, sh, dRot, wl, domain)
@@ -286,7 +308,8 @@ def build_hinge_bond_energy_fn(net_params, stats, *, alpha, w_lig, sec_dir,
 
 def build_hinge_stability_fn(net_params, stats, *, alpha, w_lig, sec_dir, bond_pairs,
                              length_scale: float = 1.0, domain: dict = DOMAIN,
-                             w_fail: float = 0.0, w_ood: float = 0.0, m_safe: float = 0.8):
+                             w_fail: float = 0.0, w_ood: float = 0.0, m_safe: float = 0.8,
+                             fillet_ratio=None):
     """Physical-stability penalty at the DEPLOYED state, for the design loss:
 
         w_fail * sum softplus(K*(D_h - m_safe))/K     (hinges past the BREAK line -> fracturing)
@@ -314,13 +337,18 @@ def build_hinge_stability_fn(net_params, stats, *, alpha, w_lig, sec_dir, bond_p
     sec = sec / (jnp.linalg.norm(sec, axis=-1, keepdims=True) + 1e-12)
     fi = jnp.asarray(np.asarray(bond_pairs)[:, 0])
     fj = jnp.asarray(np.asarray(bond_pairs)[:, 1])
-    g = jnp.stack([w_lig, alpha], axis=-1)
+    _feat6 = int(stats["feat_mean"].shape[-1]) >= 6
+    _fr = jnp.asarray(fillet_ratio if fillet_ratio is not None else 0.16, dtype=jnp.float64)
+    def _mk_g(wl):
+        return (jnp.stack([wl, alpha, jnp.broadcast_to(_fr, wl.shape)], axis=-1) if _feat6
+                else jnp.stack([wl, alpha], axis=-1))
+    g = _mk_g(w_lig)
 
     def stability(node_displacements, w_lig_override=None, reference_vectors=None):
         # Use the LEARNED width if provided (so the margin reflects thicker hinges -> the failure
         # penalty drops as the optimizer thickens them); else the fixed manufacturing width.
         wl = w_lig if w_lig_override is None else jnp.asarray(w_lig_override, dtype=jnp.float64)
-        gg = g if w_lig_override is None else jnp.stack([wl, alpha], axis=-1)
+        gg = g if w_lig_override is None else _mk_g(wl)
         # ``reference_vectors`` (per-hinge rest bond) makes the margin's (a, s) frame-invariant,
         # exactly matching the bond energy; None -> zero (closed-hinge fast path, identical result).
         a, sh, dRot = hinge_kinematics((node_displacements[fi], node_displacements[fj]),

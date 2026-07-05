@@ -70,16 +70,23 @@ class HingeConstants:
 
 @dataclass(frozen=True)
 class HingeGeometry:
-    """The hinge's identity: the two shape DOF that vary across the campaign."""
+    """The hinge's identity: the shape DOF that vary across the campaign.
+
+    ``fillet_ratio`` (the rounded 'little circle' at the cut tip, ``rho = fillet_ratio * w_lig``) is
+    now a per-hinge DOF -- the main stress-relief lever -- not a fixed campaign constant. Defaults to
+    the legacy 0.16 so 2-DOF callers/datasets are unchanged.
+    """
     w_lig: float                                      # ligament gap (main-cut tip -> secondary) [mm]
     alpha_deg: float                                  # angle between the two cuts [deg]
+    fillet_ratio: float = 0.16                        # rho = fillet_ratio * w_lig (cut-tip fillet)
 
     @property
     def tag(self) -> str:
-        return f"w{self.w_lig:07.3f}_a{self.alpha_deg:06.1f}"
+        return f"w{self.w_lig:07.3f}_a{self.alpha_deg:06.1f}_f{self.fillet_ratio:05.3f}"
 
-    def rho(self, const: HingeConstants) -> float:
-        return const.fillet_ratio * self.w_lig
+    def rho(self, const: HingeConstants = None) -> float:
+        """Cut-tip fillet radius [mm]. ``const`` is ignored (kept for call-site compatibility)."""
+        return self.fillet_ratio * self.w_lig
 
 
 @dataclass(frozen=True)
@@ -150,10 +157,10 @@ def to_rve_params(geo: HingeGeometry, const: HingeConstants) -> RVEParams:
 
 def descriptor(geo: HingeGeometry, const: HingeConstants) -> dict:
     """The per-hinge descriptor carried with every dataset row (dimensional + ratios)."""
-    return dict(w_lig=geo.w_lig, alpha_deg=geo.alpha_deg,
+    return dict(w_lig=geo.w_lig, alpha_deg=geo.alpha_deg, fillet_ratio=geo.fillet_ratio,
                 t_over_wlig=const.thickness / geo.w_lig,
                 wc_over_wlig=const.w_c / geo.w_lig,
-                rho_over_wlig=const.fillet_ratio,
+                rho_over_wlig=geo.fillet_ratio,
                 sigy_over_E=const.material["sigma_y"] / const.material["E"])
 
 

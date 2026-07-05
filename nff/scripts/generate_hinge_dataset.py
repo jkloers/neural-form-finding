@@ -86,9 +86,10 @@ def run_campaign(args):
     jobs = sample_jobs(args.n, seed=args.seed, n_steps=args.steps,
                        theta1_deg=(args.angle, args.angle),
                        w_lig=(args.w_lig_min, args.w_lig_max),
-                       eta_a=(0.0, args.eta_a_max), eta_s=(-args.eta_s_max, args.eta_s_max))
+                       eta_a=(0.0, args.eta_a_max), eta_s=(-args.eta_s_max, args.eta_s_max),
+                       fillet_ratio=(args.fillet_min, args.fillet_max))
     print(f"Campaign: {args.n} jobs (t={const.thickness}mm, w_lig=[{args.w_lig_min},{args.w_lig_max}]mm, "
-          f"c={const.fillet_ratio}, n_through={const.n_through}, to {args.angle:.0f}deg, "
+          f"fillet=[{args.fillet_min},{args.fillet_max}], n_through={const.n_through}, to {args.angle:.0f}deg, "
           f"eta_a<={args.eta_a_max} |eta_s|<={args.eta_s_max}, fracture_margin={args.fracture_margin}) "
           f"-> {args.out}.npz")
     summary = generate_dataset(jobs, args.out, const, n_parallel=args.parallel,
@@ -127,6 +128,9 @@ def main():
                     help="Saint-Venant window radius [mm]; raise (~45) so window stays >=2x w_lig at wide w_lig")
     ap.add_argument("--lc-fillet-frac", dest="lc_fillet_frac", type=float, default=0.4,
                     help="fillet mesh fineness (lc_min = frac*rho); lower = finer = smoother")
+    # cut-tip fillet as a swept DOF (rho = fillet_ratio*w_lig): the stress-relief lever
+    ap.add_argument("--fillet-min", dest="fillet_min", type=float, default=0.16, help="fillet_ratio lo")
+    ap.add_argument("--fillet-max", dest="fillet_max", type=float, default=0.16, help="fillet_ratio hi (>min = swept)")
     args = ap.parse_args()
 
     if args.rehearsal:

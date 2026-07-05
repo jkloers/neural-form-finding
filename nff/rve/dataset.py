@@ -47,24 +47,28 @@ def _loglerp(u, lo, hi):
 
 def sample_jobs(n, seed=0, *, w_lig=(1.0, 10.0), alpha_deg=(30.0, 150.0),
                 theta1_deg=(60.0, 60.0), eta_a=(0.0, 1.0), eta_s=(-0.7, 0.7),
-                n_steps=20, spine_frac=0.25):
+                fillet_ratio=(0.16, 0.16), n_steps=20, spine_frac=0.25):
     """Sample the hinge function's inputs -> list of (geometry, ray).
 
     A fraction ``spine_frac`` are the PURE-ROTATION spine (eta_a=eta_s=0) over (w_lig, alpha,
-    theta1) -- the manifold the deployed pipeline rides, sampled densely. The rest fan out over
-    GENEROUS (eta_a, eta_s): buckling can accommodate large in-plane shear/stretch, so we cover
+    theta1, fillet) -- the manifold the deployed pipeline rides, sampled densely. The rest fan out
+    over GENEROUS (eta_a, eta_s): buckling can accommodate large in-plane shear/stretch, so we cover
     it broadly and let each ray fail where it fails, measuring the (a, s, theta) failure surface.
+    ``fillet_ratio`` (cut-tip radius / w_lig, the stress-relief DOF) is swept when its range is
+    non-degenerate; the default keeps it at the legacy 0.16.
     """
     n_spine = int(round(spine_frac * n))
     jobs = []
-    us = _lhs(n_spine, 3, seed)                                   # spine: pure rotation
+    us = _lhs(n_spine, 4, seed)                                   # spine: pure rotation + fillet
     for i in range(n_spine):
-        geo = HingeGeometry(_loglerp(us[i, 0], *w_lig), float(_lerp(us[i, 1], *alpha_deg)))
+        geo = HingeGeometry(_loglerp(us[i, 0], *w_lig), float(_lerp(us[i, 1], *alpha_deg)),
+                            float(_lerp(us[i, 3], *fillet_ratio)))
         ray = DeploymentRay(float(_lerp(us[i, 2], *theta1_deg)), 0.0, 0.0, n_steps, f"s{i:05d}")
         jobs.append((geo, ray))
-    uf = _lhs(n - n_spine, 5, seed + 1)                           # fan: full 3-DOF
+    uf = _lhs(n - n_spine, 6, seed + 1)                           # fan: full 3-DOF + fillet
     for i in range(n - n_spine):
-        geo = HingeGeometry(_loglerp(uf[i, 0], *w_lig), float(_lerp(uf[i, 1], *alpha_deg)))
+        geo = HingeGeometry(_loglerp(uf[i, 0], *w_lig), float(_lerp(uf[i, 1], *alpha_deg)),
+                            float(_lerp(uf[i, 5], *fillet_ratio)))
         ray = DeploymentRay(float(_lerp(uf[i, 2], *theta1_deg)),
                             float(_lerp(uf[i, 3], *eta_a)), float(_lerp(uf[i, 4], *eta_s)),
                             n_steps, f"f{i:05d}")

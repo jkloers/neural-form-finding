@@ -150,11 +150,13 @@ def build_surrogate_bond_energy(config, state):
     r = float(topo.get('r_init', 0.45)); spacing = float(topo.get('spacing', 1.0))
     alpha, w_lig, sec_dir = closed_hinge_geometry(state, M, N, r, spacing, hm.w_lig_mm)
     net, stats, eps_f = load_hinge_surrogate(hm.checkpoint)
+    fr = float(getattr(hm, 'fillet_ratio', 0.16))   # design cut-tip fillet (3rd g DOF for 6-feat nets)
 
     if hm.calibrate:
         kst = float(np.mean(np.asarray(state.k_stretch)))
         krt = float(np.mean(np.asarray(state.k_rot)))
-        ls, es = calibrate_scales(net, stats, alpha=alpha, w_lig=w_lig, k_stretch=kst, k_rot=krt)
+        ls, es = calibrate_scales(net, stats, alpha=alpha, w_lig=w_lig, k_stretch=kst, k_rot=krt,
+                                  fillet_ratio=fr)
     else:
         ls, es = hm.length_scale, hm.energy_scale
 
@@ -175,10 +177,11 @@ def build_surrogate_bond_energy(config, state):
     def _build(w_lig_arr):
         """Bond energy + stability fn for a given per-hinge ligament width [mm] (scales fixed)."""
         bond = build_hinge_bond_energy_fn(net, stats, alpha=alpha, w_lig=w_lig_arr, sec_dir=sec_dir,
-                                          length_scale=ls, energy_scale=es, barrier=hm.barrier, domain=dom)
+                                          length_scale=ls, energy_scale=es, barrier=hm.barrier,
+                                          domain=dom, fillet_ratio=fr)
         stab = build_hinge_stability_fn(net, stats, alpha=alpha, w_lig=w_lig_arr, sec_dir=sec_dir,
                                         bond_pairs=bond_pairs, length_scale=ls, domain=dom,
-                                        w_fail=w_fail, w_ood=w_ood, m_safe=m_safe)
+                                        w_fail=w_fail, w_ood=w_ood, m_safe=m_safe, fillet_ratio=fr)
         return bond, stab
 
     bond_energy_fn, stability_fn = _build(jnp.asarray(w_lig))

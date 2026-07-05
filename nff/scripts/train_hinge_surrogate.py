@@ -37,9 +37,14 @@ def load_dataset(path):
         target = np.asarray(d["damage_p99"], float)
     else:
         target = np.asarray(d["peeq_p99"], float) / eps_f
+    # geometry g = (w_lig, alpha[rad][, fillet_ratio]); include the fillet DOF iff it was SWEPT
+    g_cols = [np.asarray(d["w_lig"], float), np.radians(np.asarray(d["alpha_deg"], float))]
+    if "fillet_ratio" in d.files and float(np.ptp(np.asarray(d["fillet_ratio"], float))) > 1e-6:
+        g_cols.append(np.asarray(d["fillet_ratio"], float))
+        print(f"fillet DOF present + swept -> 3-D geometry input (6 features)")
     data = dict(
         u=np.stack([d["a"], d["s"], d["theta"]], -1),
-        g=np.stack([d["w_lig"], np.radians(d["alpha_deg"])], -1),
+        g=np.stack(g_cols, -1),
         W=np.asarray(d["W"], float),
         F=np.stack([d["F_a"], d["F_s"], d["M_theta"]], -1),
         margin=target,
@@ -115,8 +120,9 @@ def main():
           f"(held-out geometries: {len(np.unique(data['job_id'][va]))} jobs)")
 
     tr_idx = np.where(tr)[0]
+    _fillet = data["g"][tr, 2] if data["g"].shape[-1] >= 3 else None
     stats = compute_norm_stats(data["u"][tr, 0], data["u"][tr, 1], data["u"][tr, 2],
-                               data["g"][tr, 0], data["g"][tr, 1], data["W"][tr])
+                               data["g"][tr, 0], data["g"][tr, 1], data["W"][tr], fillet_ratio=_fillet)
     # Data-driven trust region (the box the dataset actually covers) for the OOD barrier. Stored in
     # stats -> the closed pipeline's domain AUTO-matches this surrogate; a wider v2 dataset widens it
     # with no manual edit. Legacy checkpoints without it fall back to the hardcoded DOMAIN.
@@ -130,7 +136,7 @@ def main():
 
     key = jax.random.PRNGKey(args.seed)
     hidden = tuple(int(x) for x in args.hidden.split(","))
-    params = init_hinge_surrogate(key, hidden=hidden)
+    params = init_hinge_surrogate(key, hidden=hidden, feat_dim=3 + data["g"].shape[-1])
     steps = max(1, n_tr // args.batch)
     sched = optax.cosine_decay_schedule(args.lr, args.epochs * steps)
     optimizer = optax.adam(sched)
