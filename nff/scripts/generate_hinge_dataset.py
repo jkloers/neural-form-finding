@@ -81,7 +81,8 @@ def run_rehearsal(parallel, timeout):
 
 def run_campaign(args):
     const = HingeConstants(fillet_ratio=args.fillet_ratio, n_through=args.n_through,
-                           thickness=args.thickness)
+                           thickness=args.thickness, r_win=args.r_win,
+                           lc_fillet_frac=args.lc_fillet_frac)
     jobs = sample_jobs(args.n, seed=args.seed, n_steps=args.steps,
                        theta1_deg=(args.angle, args.angle),
                        w_lig=(args.w_lig_min, args.w_lig_max),
@@ -121,6 +122,11 @@ def main():
     ap.add_argument("--eta-s-max", dest="eta_s_max", type=float, default=0.7, help="max |shear| neck-strain ratio s/w_lig")
     ap.add_argument("--fracture-margin", dest="fracture_margin", type=float, default=1.1,
                     help="stop-at-fracture threshold x eps_f; raise (e.g. 2.5) to run PAST first fracture (D regime)")
+    # smoothness knobs (energy jitter across geometries)
+    ap.add_argument("--r-win", dest="r_win", type=float, default=30.0,
+                    help="Saint-Venant window radius [mm]; raise (~45) so window stays >=2x w_lig at wide w_lig")
+    ap.add_argument("--lc-fillet-frac", dest="lc_fillet_frac", type=float, default=0.4,
+                    help="fillet mesh fineness (lc_min = frac*rho); lower = finer = smoother")
     args = ap.parse_args()
 
     if args.rehearsal:

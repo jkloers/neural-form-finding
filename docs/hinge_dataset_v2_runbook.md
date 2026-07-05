@@ -11,6 +11,10 @@ wider dataset auto-widens the OOD barrier with no manual edit.
 
 Environments: campaign runs in `ccx` (CalculiX + gmsh), retrain in `kgnn_mac` (JAX).
 
+**Invocation note:** `nff` is not pip-installed in the `ccx` env, so run scripts with the **`-m`
+module form** (`python -m nff.scripts.X`) from the repo root, NOT `python nff/scripts/X.py` (the
+latter drops the repo root from the path → `ModuleNotFoundError: nff`).
+
 ---
 
 ## 0. Validate the D extraction FIRST (one hinge, ~1 min)
@@ -34,13 +38,14 @@ If `damage_p99` is all-NaN → the `.frd` stress/PEEQ field names differ from as
 ## 1. Full dataset campaign (overnight; batched + checkpointed)
 
 ```bash
-conda run -n ccx python nff/scripts/generate_hinge_dataset.py \
+conda run -n ccx python -m nff.scripts.generate_hinge_dataset \
   --n 2000 --out sofa/output/hinge_dataset_v2 --parallel 8 --timeout 600 \
   --w-lig-min 1 --w-lig-max 20 \
   --thickness 1.5 \
   --angle 90 --steps 30 \
   --eta-a-max 1.5 --eta-s-max 1.0 \
-  --fracture-margin 2.5
+  --fracture-margin 2.5 \
+  --n-through 3 --r-win 45 --lc-fillet-frac 0.3
 ```
 
 | flag | why |
@@ -50,13 +55,16 @@ conda run -n ccx python nff/scripts/generate_hinge_dataset.py \
 | `--fracture-margin 2.5` | run PAST first fracture into the ductile-tearing regime `D` measures |
 | `--eta-a-max/eta-s-max 1.5/1.0` | deeper displacement envelope |
 | `--angle 90 --steps 30` | larger folds at ~3°/increment |
+| `--n-through 3` | smoother plastic bending through the thickness |
+| `--r-win 45` | Saint-Venant window ≥2×w_lig at the wide end (smoother, less boundary drift) |
+| `--lc-fillet-frac 0.3` | finer fillet → less energy jitter across geometries |
 
 Writes `sofa/output/hinge_dataset_v2.npz` + `.json`. Safe to interrupt (checkpoints every 50 jobs).
 
 ## 2. Retrain (auto-picks up `D`)
 
 ```bash
-conda run -n kgnn_mac python nff/scripts/train_hinge_surrogate.py \
+conda run -n kgnn_mac python -m nff.scripts.train_hinge_surrogate \
   --data sofa/output/hinge_dataset_v2 --out data/outputs/hinge_surrogate_v2 \
   --lam 0.65 --epochs 400 --hidden 64,64
 ```
@@ -70,7 +78,7 @@ data-driven `trust region (p99)` and saves it inside the checkpoint's `stats["do
 
 ```bash
 JAX_PLATFORMS=cpu conda run -n kgnn_mac \
-  python nff/scripts/run_closed.py --config-dir closed --config-name rect_a4_beam_surrogate_v2 --every 100
+  python -m nff.scripts.run_closed --config-dir closed --config-name rect_a4_beam_surrogate_v2 --every 100
 ```
 Then retune `loads.value` / `target_half_*` to explore the now-larger feasible deployment range.
 
