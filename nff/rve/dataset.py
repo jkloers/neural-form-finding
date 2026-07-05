@@ -75,7 +75,7 @@ def sample_jobs(n, seed=0, *, w_lig=(1.0, 10.0), alpha_deg=(30.0, 150.0),
 # ── parallel evaluation ───────────────────────────────────────────────────────────
 
 def run_jobs(jobs, const=HingeConstants(), *, n_parallel=6, timeout=900,
-             root="/tmp/hinge_campaign"):
+             root="/tmp/hinge_campaign", fracture_margin=1.1):
     """Evaluate many (geometry, ray) jobs -> list[HingeResponse | None].
 
     Phased: prepare (serial, gmsh) -> solve (parallel, ccx subprocess) -> parse (serial).
@@ -95,7 +95,8 @@ def run_jobs(jobs, const=HingeConstants(), *, n_parallel=6, timeout=900,
         if "error" in m:
             return ""
         try:
-            return solve_job(m, ncpus=1, timeout=timeout, eps_f=const.eps_f).stdout
+            return solve_job(m, ncpus=1, timeout=timeout, eps_f=const.eps_f,
+                             fracture_margin=fracture_margin).stdout
         except Exception:
             return ""                                             # parse whatever completed
     with ThreadPoolExecutor(max_workers=n_parallel) as ex:
@@ -161,7 +162,7 @@ def _write_checkpoint(out_path, acc, meta, const):
 
 
 def generate_dataset(jobs, out_path, const=HingeConstants(), *, n_parallel=9, timeout=300,
-                     batch_size=50, root="/tmp/hinge_campaign"):
+                     batch_size=50, root="/tmp/hinge_campaign", fracture_margin=1.1):
     """Run the campaign in BATCHES, checkpointing the cumulative dataset after each batch.
 
     Overnight-safe: a crash / machine-sleep loses at most one in-flight batch — everything parsed
@@ -175,7 +176,7 @@ def generate_dataset(jobs, out_path, const=HingeConstants(), *, n_parallel=9, ti
     n_batches = -(-n // batch_size)
     for bi, b0 in enumerate(range(0, n, batch_size)):
         responses = run_jobs(jobs[b0:b0 + batch_size], const, n_parallel=n_parallel,
-                             timeout=timeout, root=root)
+                             timeout=timeout, root=root, fracture_margin=fracture_margin)
         cols, bmeta = responses_to_columns(responses, const, job_id_offset=b0)
         for k, v in cols.items():
             acc.setdefault(k, []).append(v)

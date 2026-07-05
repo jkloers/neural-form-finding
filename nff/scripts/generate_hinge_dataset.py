@@ -80,13 +80,19 @@ def run_rehearsal(parallel, timeout):
 # ── full campaign ─────────────────────────────────────────────────────────────────
 
 def run_campaign(args):
-    const = HingeConstants(fillet_ratio=args.fillet_ratio, n_through=args.n_through)
+    const = HingeConstants(fillet_ratio=args.fillet_ratio, n_through=args.n_through,
+                           thickness=args.thickness)
     jobs = sample_jobs(args.n, seed=args.seed, n_steps=args.steps,
-                       theta1_deg=(args.angle, args.angle))
-    print(f"Campaign: {args.n} jobs (c={const.fillet_ratio}, n_through={const.n_through}, "
-          f"to {args.angle:.0f}deg) -> {args.out}.npz")
+                       theta1_deg=(args.angle, args.angle),
+                       w_lig=(args.w_lig_min, args.w_lig_max),
+                       eta_a=(0.0, args.eta_a_max), eta_s=(-args.eta_s_max, args.eta_s_max))
+    print(f"Campaign: {args.n} jobs (t={const.thickness}mm, w_lig=[{args.w_lig_min},{args.w_lig_max}]mm, "
+          f"c={const.fillet_ratio}, n_through={const.n_through}, to {args.angle:.0f}deg, "
+          f"eta_a<={args.eta_a_max} |eta_s|<={args.eta_s_max}, fracture_margin={args.fracture_margin}) "
+          f"-> {args.out}.npz")
     summary = generate_dataset(jobs, args.out, const, n_parallel=args.parallel,
-                               timeout=args.timeout, batch_size=args.batch_size)
+                               timeout=args.timeout, batch_size=args.batch_size,
+                               fracture_margin=args.fracture_margin)
     print(f"  jobs usable   : {summary['n_usable']}/{summary['n_jobs']}  "
           f"({summary['n_errored']} errored, {summary['n_finished_to_cap']} survived to cap)")
     print(f"  samples       : {summary['n_samples']}  "
@@ -107,6 +113,14 @@ def main():
     ap.add_argument("--angle", type=float, default=60.0, help="full-deployment rotation [deg]")
     ap.add_argument("--fillet-ratio", dest="fillet_ratio", type=float, default=0.16)
     ap.add_argument("--n-through", dest="n_through", type=int, default=2)
+    # geometry + displacement envelope (exposed so a deeper campaign is one command)
+    ap.add_argument("--w-lig-min", dest="w_lig_min", type=float, default=1.0, help="ligament width lo [mm]")
+    ap.add_argument("--w-lig-max", dest="w_lig_max", type=float, default=20.0, help="ligament width hi [mm]")
+    ap.add_argument("--thickness", type=float, default=1.0, help="sheet gauge [mm]; 1.0-2.0 = laser-cut standard")
+    ap.add_argument("--eta-a-max", dest="eta_a_max", type=float, default=1.0, help="max axial neck-strain ratio a/w_lig")
+    ap.add_argument("--eta-s-max", dest="eta_s_max", type=float, default=0.7, help="max |shear| neck-strain ratio s/w_lig")
+    ap.add_argument("--fracture-margin", dest="fracture_margin", type=float, default=1.1,
+                    help="stop-at-fracture threshold x eps_f; raise (e.g. 2.5) to run PAST first fracture (D regime)")
     args = ap.parse_args()
 
     if args.rehearsal:
