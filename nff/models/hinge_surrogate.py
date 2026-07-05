@@ -120,9 +120,17 @@ def apply_hinge_force(params, u, g, stats):
 
 
 def apply_hinge_failure(params, u, g, stats):
-    """Ductile-failure margin ``peeq_p99 / eps_f`` (>=0 via softplus). >=1 => past fracture."""
+    """Continuous ductile DAMAGE ``D`` (>=0 via softplus). 0 = intact, >=1 = fractured.
+
+    Trained on the triaxiality-based damage label (``nff.rve.damage.ductile_damage``); the old
+    ``peeq_p99 / eps_f`` margin is the tension-only special case of it.
+    """
     m = _mlp(_features(u, g, stats), params["fail"])[..., 0]
     return jax.nn.softplus(m)
+
+
+# sharpness of the break barrier: softplus(_BREAK_SHARP*(D-1)) ~ 0 below fracture, linear above
+_BREAK_SHARP = 8.0
 
 
 def build_hinge_energy_fn(params: dict, stats: dict):
@@ -281,13 +289,15 @@ def build_hinge_stability_fn(net_params, stats, *, alpha, w_lig, sec_dir, bond_p
                              w_fail: float = 0.0, w_ood: float = 0.0, m_safe: float = 0.8):
     """Physical-stability penalty at the DEPLOYED state, for the design loss:
 
-        w_fail * sum relu(margin_h - m_safe)^2        (hinges past the safe failure-margin line)
+        w_fail * sum softplus(K*(D_h - m_safe))/K     (hinges past the BREAK line -> fracturing)
       + w_ood  * sum domain_barrier(u_h)              (hinges leaving the trustworthy training box)
 
-    ``margin`` is the surrogate's failure head (peeq/eps_f) and ``u_h = (a, s, theta)`` is the SAME
-    corotated projection the bond energy uses (via ``hinge_kinematics``). Pure chamfer is blind to
-    physical safety, so the optimizer walks the shape-equivalent set into ill-conditioned/near-
-    failure corners; this term gives the design gradient an explicit "keep hinges safe" component.
+    ``D`` is the surrogate's continuous ductile-damage head (0 intact, 1 fracture) and
+    ``u_h = (a, s, theta)`` is the SAME corotated projection the bond energy uses (via
+    ``hinge_kinematics``). Pure chamfer is blind to physical safety, so the optimizer walks the
+    shape-equivalent set into fracturing corners; this term penalizes BREAKING (not mere damage --
+    a plastic mechanism is meant to yield as it folds), with the onset ``m_safe`` at the physical
+    fracture value 1.0 by default (set < 1 for a safety margin).
 
     ``bond_pairs`` (n_hinges, 2): the two connected NODES per hinge (indices into the reshaped
     node-displacement array, = Stage-2 bond_connectivity). The caller MUST pass NODE displacements
@@ -316,14 +326,18 @@ def build_hinge_stability_fn(net_params, stats, *, alpha, w_lig, sec_dir, bond_p
         a, sh, dRot = hinge_kinematics((node_displacements[fi], node_displacements[fj]),
                                        sec, length_scale, reference_vector=reference_vectors)
         u = jnp.stack([a, sh, dRot], axis=-1)
-        margin = apply_hinge_failure(net_params, u, gg, stats)
-        fail_pen = w_fail * jnp.sum(jax.nn.relu(margin - m_safe) ** 2)   # 0 when safe (margin<=m_safe)
+        # Continuous ductile damage D (0 = intact, 1 = fracture). A plastic mechanism is MEANT to
+        # damage as it folds, so we penalize BREAKING (D past the break line ``m_safe``, default the
+        # physical fracture value 1.0) -- a smooth one-sided softplus barrier, NOT a conservative
+        # safe-margin. ~0 while D < m_safe, ~linear beyond.
+        D = apply_hinge_failure(net_params, u, gg, stats)
+        break_pen = w_fail * jnp.sum(jax.nn.softplus(_BREAK_SHARP * (D - m_safe)) / _BREAK_SHARP)
         ood_pen = w_ood * jnp.sum(_domain_barrier(a, sh, dRot, wl, domain))
-        aux = {"stab_fail": fail_pen, "stab_ood": ood_pen,
-               "hinge_max_margin": jnp.max(margin),
-               "hinge_n_fail": jnp.sum((margin >= 1.0).astype(jnp.float64)),      # past rupture
-               "hinge_n_unsafe": jnp.sum((margin > m_safe).astype(jnp.float64))}  # past the safe line
-        return fail_pen + ood_pen, aux
+        aux = {"stab_fail": break_pen, "stab_ood": ood_pen,
+               "hinge_max_margin": jnp.max(D),                                # max damage
+               "hinge_n_fail": jnp.sum((D >= 1.0).astype(jnp.float64)),       # past fracture
+               "hinge_n_unsafe": jnp.sum((D > m_safe).astype(jnp.float64))}   # past the penalty onset
+        return break_pen + ood_pen, aux
 
     return stability
 

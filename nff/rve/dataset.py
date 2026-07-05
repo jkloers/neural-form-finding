@@ -117,7 +117,7 @@ def run_jobs(jobs, const=HingeConstants(), *, n_parallel=6, timeout=900,
 # every column is one flat array with one entry per solved increment (sample)
 _KIN = ["a", "s", "theta"]                                       # the hinge function's input u
 _RESP = ["W", "F_a", "F_s", "M_theta"]                           # W and its gradient dW/du
-_AUX = ["peeq_p99", "uz_max", "theta_deg", "regime"]
+_AUX = ["peeq_p99", "damage_p99", "uz_max", "theta_deg", "regime"]
 
 
 def responses_to_columns(responses, const, job_id_offset=0):

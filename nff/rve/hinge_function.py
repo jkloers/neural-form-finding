@@ -128,7 +128,8 @@ class HingeResponse:
     F_a: np.ndarray
     F_s: np.ndarray
     M_theta: np.ndarray                               # dW/du by the envelope theorem
-    peeq_p99: np.ndarray                              # robust ductile-failure statistic
+    peeq_p99: np.ndarray                              # robust PEEQ statistic (legacy failure flag)
+    damage_p99: np.ndarray                            # continuous ductile damage D (0 intact, 1 break)
     uz_max: np.ndarray                                # out-of-plane amplitude [mm]
     regime: np.ndarray                                # ELASTIC / PLASTIC / FAILED per sample
     # provenance / summary
@@ -185,10 +186,12 @@ def assemble_response(geo, ray, const, parsed) -> HingeResponse:
     """
     theta_deg = np.asarray(parsed["theta_deg"], float)
     # align every field to the common number of solved increments (guards ragged parses)
-    fields = ["W", "F_a", "F_s", "M_theta", "peeq_p99", "uz_max"]
+    if "damage_p99" not in parsed:                    # backward-compat with pre-damage parses
+        parsed = {**parsed, "damage_p99": np.full(len(parsed["peeq_p99"]), np.nan)}
+    fields = ["W", "F_a", "F_s", "M_theta", "peeq_p99", "damage_p99", "uz_max"]
     n = min([len(theta_deg)] + [len(np.asarray(parsed[k])) for k in fields])
     theta_deg = theta_deg[:n]
-    W, F_a, F_s, M_theta, peeq_p99, uz_max = (np.asarray(parsed[k], float)[:n] for k in fields)
+    W, F_a, F_s, M_theta, peeq_p99, damage_p99, uz_max = (np.asarray(parsed[k], float)[:n] for k in fields)
 
     a1, s1, theta1_deg = ray.targets(geo)
     frac = theta_deg / theta1_deg if theta1_deg else np.zeros(n)
@@ -201,7 +204,7 @@ def assemble_response(geo, ray, const, parsed) -> HingeResponse:
 
     return HingeResponse(geo=geo, ray=ray, const=const, a=a, s=s, theta=theta,
                          theta_deg=theta_deg, W=W, F_a=F_a, F_s=F_s, M_theta=M_theta,
-                         peeq_p99=peeq_p99, uz_max=uz_max, regime=regime,
+                         peeq_p99=peeq_p99, damage_p99=damage_p99, uz_max=uz_max, regime=regime,
                          n_elems=int(parsed.get("n_elems", 0)), ok=bool(parsed.get("ok", False)),
                          failure_theta_deg=failure_theta)
 

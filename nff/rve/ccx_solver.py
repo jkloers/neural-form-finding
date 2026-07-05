@@ -25,6 +25,7 @@ import time
 import numpy as np
 
 from nff.rve.geometry import RVEParams, build_rve_domain, boundary_tag
+from nff.rve.damage import ductile_damage
 
 STEEL = dict(E=210_000.0, nu=0.30, sigma_y=235.0, Et=2100.0)      # S235, hardening E/100
 
@@ -382,9 +383,10 @@ def parse_job(meta, stdout=""):
                            for f in frames if "TOSTRAIN" in f])
     peeq_max = np.array([_peeq_max(f) for f in frames])
     peeq_p99 = np.array([_peeq_pct(f, 99.0) for f in frames])
+    damage_p99 = np.array([_damage_pct(f, 99.0) for f in frames])
     return dict(ok=ok, stdout=stdout[-1500:], theta_deg=theta_deg, W=W, M_theta=np.array(Mt),
                 F_a=np.array(Fa), F_s=np.array(Fs), uz_max=uz_max, strain_max=strain_max,
-                peeq_max=peeq_max, peeq_p99=peeq_p99, frames=frames, xyz=xyz, conn=meta["conn"],
+                peeq_max=peeq_max, peeq_p99=peeq_p99, damage_p99=damage_p99, frames=frames, xyz=xyz, conn=meta["conn"],
                 arcA=meta["arcA"], arcB=meta["arcB"], pivot=pivot, n_nodes=len(xyz),
                 n_elems=len(meta["conn"]), job=job)
 
@@ -422,3 +424,26 @@ def _peeq_pct(frame, q=99.0):
         if k in frame and frame[k].size:
             return float(np.percentile(np.abs(frame[k]), q))
     return np.nan
+
+
+def _damage_pct(frame, q=99.0, eps_f0=0.25, k=1.5):
+    """Robust continuous ductile-damage percentile ``D`` (>=1 => fracture) from PEEQ + STRESS.
+
+    Triaxiality-based (``nff.rve.damage.ductile_damage``); NaN if either field is absent.
+    NOTE: the .frd field shapes (PEEQ scalar-per-elem, STRESS N x 6) must be validated on the
+    first real ccx run -- this is additive and never disturbs the existing ``peeq_p99`` path.
+    """
+    peeq = None
+    for key in ("PEEQ", "PE"):
+        if key in frame and frame[key].size:
+            arr = np.abs(np.asarray(frame[key], float))
+            peeq = arr[:, 0] if arr.ndim > 1 else arr
+            break
+    S = frame.get("STRESS")
+    if peeq is None or S is None or not np.size(S):
+        return np.nan
+    S = np.asarray(S, float)
+    if S.ndim != 2 or S.shape[1] < 6 or S.shape[0] != peeq.shape[0]:
+        return np.nan
+    _, D_p99, _ = ductile_damage(peeq, S[:, :6], eps_f0=eps_f0, k=k, q=q)
+    return D_p99

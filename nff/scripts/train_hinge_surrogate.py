@@ -31,12 +31,18 @@ from nff.models.hinge_surrogate import (init_hinge_surrogate, compute_norm_stats
 def load_dataset(path):
     d = np.load(path + ".npz")
     eps_f = json.load(open(path + ".json"))["const"].get("eps_f", 0.25)
+    # Failure-head target: the continuous triaxiality-based damage D when the dataset carries it
+    # (new campaigns), else the legacy tension-only margin peeq_p99/eps_f (older datasets).
+    if "damage_p99" in d.files and np.isfinite(np.asarray(d["damage_p99"], float)).any():
+        target = np.asarray(d["damage_p99"], float)
+    else:
+        target = np.asarray(d["peeq_p99"], float) / eps_f
     data = dict(
         u=np.stack([d["a"], d["s"], d["theta"]], -1),
         g=np.stack([d["w_lig"], np.radians(d["alpha_deg"])], -1),
         W=np.asarray(d["W"], float),
         F=np.stack([d["F_a"], d["F_s"], d["M_theta"]], -1),
-        margin=np.asarray(d["peeq_p99"], float) / eps_f,
+        margin=target,
         job_id=np.asarray(d["job_id"]),
     )
     return data, eps_f
