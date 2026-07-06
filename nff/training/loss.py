@@ -184,6 +184,7 @@ def compute_end_to_end_loss(
         target_cloud: Optional[Float[Array, "n_target 2"]] = None,
         bond_energy_fn=None,
         stability_fn=None,
+        hinge_geometry_fn=None,
 ) -> tuple[Float[Array, ""], dict]:
     """Chains the forward pipeline with the loss, as required by jax.value_and_grad.
 
@@ -199,12 +200,11 @@ def compute_end_to_end_loss(
         target_params = {'type': target_cfg.type, 'center': target_cfg.center, 'radius': target_cfg.radius}
         target_cloud = jnp.asarray(get_target_points(target_params, n_points=500), dtype=jnp.float64)
 
-    # Learnable ligament width (option A): w_lig = 1 + 9*sigmoid(logit) in [1,10]mm, threaded as an
-    # explicit differentiable solver input via control_params (NOT closed over) so jaxopt's implicit
-    # diff differentiates the deployment w.r.t. it. None -> surrogate uses its fixed closure width.
-    hinge_w_lig = None
-    if isinstance(map_params, dict) and 'w_lig_logit' in map_params:
-        hinge_w_lig = 1.0 + 9.0 / (1.0 + jnp.exp(-map_params['w_lig_logit']))
+    # Design-tracked hinge geometry: the surrogate's per-hinge HingeGeometry(w_lig, alpha, sec_dir) is a
+    # deterministic function of the design, recomputed each step and threaded to the solver via
+    # control_params (NOT closed over) so jaxopt's implicit diff carries d(loss)/d(design) through the
+    # whole geometry. None -> ROM / spring energy (no surrogate).
+    hinge_geometry = hinge_geometry_fn(map_params) if hinge_geometry_fn is not None else None
 
     # 1. Run the forward pipeline
     results = forward_pipeline(
@@ -219,7 +219,7 @@ def compute_end_to_end_loss(
         static_features=static_features,
         load_specs=load_specs,
         bond_energy_fn=bond_energy_fn,
-        hinge_w_lig=hinge_w_lig,
+        hinge_geometry=hinge_geometry,
     )
 
     # 2. Evaluate Physical Objective
@@ -368,7 +368,7 @@ def compute_end_to_end_loss(
         _node_disp = face_to_node_kinematics_fn(results['solution'].fields[-1], _cnv).reshape(_nf * _nn, 3)
         # Pass the per-hinge reference bond vectors so the margin's (a, s) reduction is frame-invariant
         # and identical to the bond energy's (matters for open bonds; ~0 correction for closed hinges).
-        stab_loss, stab_metrics = stability_fn(_node_disp, hinge_w_lig, results['reference_bond_vectors'])
+        stab_loss, stab_metrics = stability_fn(_node_disp, hinge_geometry, results['reference_bond_vectors'])
 
     total_loss = (base_loss + material_area_loss + hinge_gap_loss + reg_loss
                   + openness_loss + deformation_loss + void_closure_loss + closure_delta_loss

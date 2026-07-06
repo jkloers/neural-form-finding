@@ -66,6 +66,7 @@ def create_train_step(
         target_cloud=None,
         bond_energy_fn=None,
         stability_fn=None,
+        hinge_geometry_fn=None,
 ):
     """Creates a compiled training step for optimizing map_params.
 
@@ -153,6 +154,7 @@ def create_train_step(
             target_cloud=_target_cloud,
             bond_energy_fn=bond_energy_fn,
             stability_fn=stability_fn,
+            hinge_geometry_fn=hinge_geometry_fn,
         )
 
     def _step_body(state: TrainState) -> tuple[TrainState, Float[Array, ""], dict]:

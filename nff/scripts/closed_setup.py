@@ -92,110 +92,111 @@ def surrogate_scales(config):
     return float(get('length_scale_mm', 1.0)), float(get('energy_scale', 1.0))
 
 
-def closed_hinge_geometry(state, M, N, r, spacing, w_lig_mm, ref_r=None):
-    """Per-hinge ``(alpha[rad], w_lig[mm], sec_dir[2])`` in BOND order for a closed design.
+# ── the simple logic, factored into three small steps ──────────────────────────────
+#   {r, boundary} --(1)--> flat cut vertices --(2)--> per-hinge frame --(3)--> bond order
 
-    The surrogate adapter needs geometry aligned with the Stage-2 bond order. The analytic hinge
-    descriptor is computed in its own hinge order; we align it to the bonds by POSITION-matching
-    each state hinge-vertex to the nearest descriptor pivot (verified: same count, identity order,
-    face-pairs agree — but we match + assert to stay robust to any config). ``alpha`` and
-    ``sec_dir`` are scale-free so they transfer directly; ``w_lig`` is a manufacturing constant [mm].
-    """
+def _flat_coords_from_design(static_features, map_params):
+    """(1) The flat closed-sheet cut vertices for the CURRENT design (differentiable in z/boundary)."""
+    import jax
+    from nff.topology.closed_builder_jax import solve_cut_vertices_jax, boundary_flat_from_logits
+    boundary = boundary_flat_from_logits(static_features['sliders'], map_params['bnd_logits'])
+    return solve_cut_vertices_jax(static_features['struct'], boundary, jax.nn.sigmoid(map_params['z']))
+
+
+def _bond_order_perm(state, hs, coords):
+    """(3) The design-INVARIANT permutation descriptor-order -> Stage-2 bond order (by pivot position)."""
     import numpy as np
     from nff.stages.geometry import hinge_vertex_positions
-    from nff.topology.hinge_descriptor import (build_hinge_descriptor_structure,
-                                               hinge_descriptors_from_design)
-    from nff.topology.closed_builder_jax import boundary_points_flat, solve_cut_vertices_jax
-
-    hs = build_hinge_descriptor_structure(M, N, ref_r=ref_r if ref_r is not None else r)
-    ds = hs['deploy_struct']
-    bf = jnp.asarray(boundary_points_flat(ds, spacing))
-    r_arr = jnp.full((ds['rows'], ds['cols']), r)
-    out = hinge_descriptors_from_design(hs, bf, r_arr)
-    coords = np.asarray(solve_cut_vertices_jax(ds, bf, r_arr))
-    piv_desc = coords[np.asarray(hs['pivot_pid'])]                          # (H, 2)
-
+    piv = np.asarray(coords)[np.asarray(hs['pivot_pid'])]
     p1, _ = hinge_vertex_positions(state.face_centroids, state.centroid_node_vectors,
                                    state.hinge_node_pairs)
-    D = np.linalg.norm(np.asarray(p1)[:, None, :] - piv_desc[None, :, :], axis=-1)
+    D = np.linalg.norm(np.asarray(p1)[:, None, :] - piv[None, :, :], axis=-1)
     perm = D.argmin(1)
-    max_dist = float(D[np.arange(len(perm)), perm].max())
-    assert max_dist < 1e-3, f'descriptor<->bond alignment failed (max {max_dist:.2e})'
-
-    alpha = jnp.asarray(np.asarray(out['alpha'])[perm])
-    sec_dir = jnp.asarray(np.asarray(out['sec_dir'])[perm])
-    w_lig = jnp.full(len(perm), float(w_lig_mm))
-    return alpha, w_lig, sec_dir
+    assert float(D[np.arange(len(perm)), perm].max()) < 1e-3, 'descriptor<->bond alignment failed'
+    return jnp.asarray(perm)
 
 
-def build_surrogate_bond_energy(config, state):
-    """Build the Stage-2 hinge-energy override from ``config.hinge_model``; ``None`` for the ROM.
+def _alpha_sec_bond_order(hs, perm, coords):
+    """(2)+(3) Per-hinge ``(alpha, sec_dir)`` in bond order from flat vertices (RVE frame, in-graph)."""
+    from nff.topology.hinge_descriptor import compute_hinge_frame
+    frame = compute_hinge_frame(hs, coords)
+    return frame['alpha'][perm], frame['sec_dir'][perm]
 
-    Config-driven selection (faithful to the project's config-first spirit): reads
-    ``config.hinge_model`` (type / checkpoint / w_lig / scales / barrier), computes per-hinge
-    geometry from the closed design, loads the trained net, calibrates the Gap-2 scales, and
-    returns the injectable ``bond_energy_fn`` for ``forward_pipeline(bond_energy_fn=...)``. Prints a
-    one-line material/model header so every run is self-documenting.
+
+def build_surrogate_energy(config, static_features, state, init_map_params):
+    """Config-driven Stage-2 surrogate energy with DESIGN-TRACKED hinge geometry.
+
+    The energy + stability are built ONCE (they close over only the net, the Gap-2 scales, and the
+    fixed fillet). The design-dependent ``HingeGeometry(w_lig, alpha, sec_dir)`` is supplied PER STEP
+    as data by ``hinge_geometry_from_design(map_params)`` and the caller threads it into the solver via
+    ``forward_pipeline(hinge_geometry=)`` (control_params) and into ``stability_fn``. Because it is an
+    explicit solver input (not closed over), jaxopt's implicit diff carries the full ``d/d(design)``.
+
+    Returns ``(bond_energy_fn, stability_fn, hinge_geometry_from_design, w_lig_logit0)``;
+    ``hinge_geometry_from_design(map_params) -> HingeGeometry``. ``(None,)*4`` for the ROM.
     """
     import numpy as np
     hm = getattr(config, 'hinge_model', None)
     if hm is None or getattr(hm, 'type', 'rom') != 'surrogate':
         print("[hinge_model] ROM (linear-spring ligament energy)")
-        return None, None, None
+        return None, None, None, None
 
     from nff.models.hinge_surrogate import (load_hinge_surrogate, build_hinge_bond_energy_fn,
-                                            build_hinge_stability_fn, calibrate_scales, DOMAIN)
+                                            build_hinge_stability_fn, calibrate_scales, DOMAIN,
+                                            HingeGeometry, w_lig_from_logit)
+    from nff.topology.hinge_descriptor import build_hinge_descriptor_structure
+
     topo = config.topology
     M, N = int(topo['M']), int(topo['N'])
-    r = float(topo.get('r_init', 0.45)); spacing = float(topo.get('spacing', 1.0))
-    alpha, w_lig, sec_dir = closed_hinge_geometry(state, M, N, r, spacing, hm.w_lig_mm)
     net, stats, eps_f = load_hinge_surrogate(hm.checkpoint)
-    fr = float(getattr(hm, 'fillet_ratio', 0.16))   # design cut-tip fillet (3rd g DOF for 6-feat nets)
+    fr = float(getattr(hm, 'fillet_ratio', 0.16))     # design cut-tip fillet (3rd g DOF for 6-feat nets)
+    dom = stats.get("domain", DOMAIN)                 # data-driven OOD box (wide v2 auto-widens it)
+    w_fail = float(getattr(hm, 'w_fail', 0.0)); w_ood = float(getattr(hm, 'w_ood', 0.0))
+    m_safe = float(getattr(hm, 'm_safe', 0.8)); bond_pairs = np.asarray(state.bond_connectivity)
+    w_lig_arr = jnp.full(state.hinge_node_pairs.shape[0], float(hm.w_lig_mm))
 
+    # static topology (once): hinge structure + the design-invariant bond-order permutation
+    hs = build_hinge_descriptor_structure(M, N, ref_r=float(topo.get('r_init', 0.45)))
+    coords0 = _flat_coords_from_design(static_features, init_map_params)
+    perm = _bond_order_perm(state, hs, coords0)
+    alpha0, sec0 = _alpha_sec_bond_order(hs, perm, coords0)
+
+    # calibrate the Gap-2 scales ONCE at the initial design (fixed normalization bridges)
     if hm.calibrate:
-        kst = float(np.mean(np.asarray(state.k_stretch)))
-        krt = float(np.mean(np.asarray(state.k_rot)))
-        ls, es = calibrate_scales(net, stats, alpha=alpha, w_lig=w_lig, k_stretch=kst, k_rot=krt,
+        kst = float(np.mean(np.asarray(state.k_stretch))); krt = float(np.mean(np.asarray(state.k_rot)))
+        ls, es = calibrate_scales(net, stats, alpha=alpha0, w_lig=w_lig_arr, k_stretch=kst, k_rot=krt,
                                   fillet_ratio=fr)
     else:
         ls, es = hm.length_scale, hm.energy_scale
 
-    print(f"[hinge_model] SURROGATE  material={hm.material} t={hm.thickness_mm}mm "
-          f"w_lig={hm.w_lig_mm}mm eps_f={eps_f}  |  {len(alpha)} hinges  "
-          f"length_scale={ls:.3g}mm/u  energy_scale={es:.3g}  barrier={hm.barrier}")
-    # Physical-stability design-loss term (failure-margin + OOD), so the chamfer-only objective
-    # stops trading structural safety for shape. None unless a weight is set.
-    w_fail = float(getattr(hm, 'w_fail', 0.0))
-    w_ood = float(getattr(hm, 'w_ood', 0.0))
-    m_safe = float(getattr(hm, 'm_safe', 0.8))
-    bond_pairs = np.asarray(state.bond_connectivity)
-
-    # Trust region: the surrogate carries its own (data-driven) domain in stats; a wider v2 dataset
-    # auto-widens the OOD barrier here. Legacy checkpoints without it fall back to the hardcoded box.
-    dom = stats.get("domain", DOMAIN)
-
-    def _build(w_lig_arr):
-        """Bond energy + stability fn for a given per-hinge ligament width [mm] (scales fixed)."""
-        bond = build_hinge_bond_energy_fn(net, stats, alpha=alpha, w_lig=w_lig_arr, sec_dir=sec_dir,
-                                          length_scale=ls, energy_scale=es, barrier=hm.barrier,
-                                          domain=dom, fillet_ratio=fr)
-        stab = build_hinge_stability_fn(net, stats, alpha=alpha, w_lig=w_lig_arr, sec_dir=sec_dir,
-                                        bond_pairs=bond_pairs, length_scale=ls, domain=dom,
-                                        w_fail=w_fail, w_ood=w_ood, m_safe=m_safe, fillet_ratio=fr)
-        return bond, stab
-
-    bond_energy_fn, stability_fn = _build(jnp.asarray(w_lig))
-    if stability_fn is not None:
+    a0 = np.degrees(np.asarray(alpha0))
+    print(f"[hinge_model] SURROGATE  material={hm.material} t={hm.thickness_mm}mm w_lig={hm.w_lig_mm}mm "
+          f"eps_f={eps_f}  |  {len(alpha0)} hinges  alpha {a0.min():.0f}-{a0.max():.0f}deg (RVE-frame)"
+          f"  length_scale={ls:.3g}mm/u  energy_scale={es:.3g}  barrier={hm.barrier}")
+    if w_fail or w_ood:
         print(f"[hinge_model]   + stability loss  w_fail={w_fail}  w_ood={w_ood}  m_safe={m_safe}")
 
-    # Optional per-hinge LEARNABLE ligament width (option A): w_lig = 1 + 9*sigmoid(logit) in
-    # [1,10]mm flows to the solver as an EXPLICIT control_params input (differentiable via jaxopt
-    # implicit diff), threaded by the loss/pipeline as forward_pipeline(hinge_w_lig=...). Here we
-    # only emit the init logit; the single bond_energy_fn already reads w_lig from control_params
-    # when present (else its fixed closure). length_scale/energy_scale stay at the init calibration.
     w_lig_logit0 = None
     if bool(getattr(hm, 'learn_w_lig', False)):
-        frac = np.clip((np.asarray(w_lig) - 1.0) / 9.0, 1e-3, 1.0 - 1e-3)
+        frac = np.clip((np.asarray(w_lig_arr) - 1.0) / 9.0, 1e-3, 1.0 - 1e-3)
         w_lig_logit0 = jnp.asarray(np.log(frac / (1.0 - frac)))
-        print(f"[hinge_model]   + LEARNABLE w_lig (per-hinge, [1,10]mm; init {float(np.mean(w_lig)):.1f}mm)")
-    return bond_energy_fn, stability_fn, w_lig_logit0
+        print(f"[hinge_model]   + LEARNABLE w_lig (per-hinge, [1,10]mm; init {float(hm.w_lig_mm):.1f}mm)")
+
+    # Energy + stability built ONCE; they close over only the net / scales / fillet. The per-hinge
+    # geometry is threaded per step (see hinge_geometry_from_design below).
+    bond_energy = build_hinge_bond_energy_fn(net, stats, length_scale=ls, energy_scale=es,
+                                             barrier=hm.barrier, domain=dom, fillet_ratio=fr)
+    stability_fn = build_hinge_stability_fn(net, stats, bond_pairs=bond_pairs, length_scale=ls,
+                                            domain=dom, w_fail=w_fail, w_ood=w_ood, m_safe=m_safe,
+                                            fillet_ratio=fr)
+
+    def hinge_geometry_from_design(map_params):
+        """The per-hinge HingeGeometry(w_lig, alpha, sec_dir) for the CURRENT design -- TRACED in
+        map_params. alpha/sec_dir = f(r, boundary) via the flat sheet; w_lig from the learnable logit
+        (or the fixed manufacturing width). Deterministic, so autodiff carries d/d(design) through it."""
+        alpha, sec_dir = _alpha_sec_bond_order(hs, perm, _flat_coords_from_design(static_features, map_params))
+        w_lig = (w_lig_from_logit(map_params['w_lig_logit'])
+                 if isinstance(map_params, dict) and 'w_lig_logit' in map_params else w_lig_arr)
+        return HingeGeometry(w_lig=w_lig, alpha=alpha, sec_dir=sec_dir)
+
+    return bond_energy, stability_fn, hinge_geometry_from_design, w_lig_logit0

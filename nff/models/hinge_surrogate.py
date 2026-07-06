@@ -31,6 +31,7 @@ Follows the repo ``init_*`` / ``apply_*`` raw-JAX convention (no flax), float64.
 """
 
 import pickle
+from typing import Any, NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -39,12 +40,48 @@ from jaxtyping import Array, Float
 
 from nff.utils.linalg import corotated_bond_deformation
 
-# u = (a, s, theta); g = (w_lig, alpha[rad]). Network features (standardized):
-#   [a, s, theta, log(w_lig), alpha]
+# u = (a, s, theta); geometry g = (w_lig, alpha[rad]) or (w_lig, alpha, fillet_ratio) for the swept
+# 3rd DOF. Standardized network features: [a, s, theta, log(w_lig), alpha (, fillet)] -> 5-D or 6-D.
 FEAT_DIM = 5
 
 
+class HingeGeometry(NamedTuple):
+    """Per-hinge geometry threaded to the Stage-2 solver -- all DESIGN-dependent and differentiable.
+
+    Bundled (rather than three loose fields) so the design -> geometry map, the control_params
+    threading, and the surrogate all speak ONE type. ``fillet_ratio`` is a fixed scalar config baked
+    into the energy closure, so it is deliberately NOT here.
+
+        w_lig:   (n_hinges,)    ligament width [mm]
+        alpha:   (n_hinges,)    cut angle [rad]
+        sec_dir: (n_hinges, 2)  axial (secondary-cut) unit direction
+    """
+    w_lig: Any
+    alpha: Any
+    sec_dir: Any
+
+
+def w_lig_from_logit(logit):
+    """Learnable ligament width in [1, 10] mm: ``1 + 9*sigmoid(logit)``. The single definition of the
+    map_params `w_lig_logit` -> physical width (used by the loss and the visual deploys)."""
+    return 1.0 + 9.0 * jax.nn.sigmoid(logit)
+
+
 # ── input / target normalization ────────────────────────────────────────────────
+
+def _robust_std(std):
+    """Feature scale for standardization, robust to (near-)constant features.
+
+    Following sklearn's StandardScaler convention, a zero-variance feature gets scale 1.0 -- its
+    normalized input stays ~0 with a UNIT gradient -- instead of `std + eps` (~1e-8), which makes
+    `(raw - mean)/std` and its gradient explode to 1e8 -> inf/NaN. This is not cosmetic: it bites the
+    moment that feature is DIFFERENTIATED (e.g. the design -> (a, s) -> energy path in Phase 2b), where
+    the 1/std blow-up overflows under XLA fusion even though the forward value looks finite. A dataset
+    that fails to exercise a feature (e.g. a spine-only run with a=s=0) is the usual cause.
+    """
+    std = np.asarray(std)
+    return np.where(std < 1e-6, 1.0, std)
+
 
 def compute_norm_stats(a, s, theta, w_lig, alpha_rad, W, fillet_ratio=None) -> dict:
     """Standardization stats from the training arrays (static; closed over at inference).
@@ -59,7 +96,7 @@ def compute_norm_stats(a, s, theta, w_lig, alpha_rad, W, fillet_ratio=None) -> d
     feats = np.stack(cols, axis=-1)
     return dict(
         feat_mean=jnp.asarray(feats.mean(0), dtype=jnp.float64),
-        feat_std=jnp.asarray(feats.std(0) + 1e-8, dtype=jnp.float64),
+        feat_std=jnp.asarray(_robust_std(feats.std(0)), dtype=jnp.float64),
         # a positive energy scale so the net's ||dh||^2 ~ O(1) maps to physical N.mm
         W_scale=jnp.asarray(np.sqrt((W ** 2).mean()) + 1e-12, dtype=jnp.float64),
     )
@@ -73,6 +110,30 @@ def _features(u: Float[Array, "... 3"], g: Float[Array, "... _"], stats: dict) -
         cols.append(g[..., 2])
     raw = jnp.stack(cols, axis=-1)
     return (raw - stats["feat_mean"]) / stats["feat_std"]
+
+
+def _feat6(stats: dict) -> bool:
+    """Whether the checkpoint carries the swept fillet DOF (6-D features / 3-D geometry ``g``)."""
+    return int(stats["feat_mean"].shape[-1]) >= 6
+
+
+def _geom_vector(w_lig, alpha, fillet_ratio, stats: dict):
+    """The surrogate geometry input ``g``: ``(w_lig, alpha)``, plus ``fillet_ratio`` iff 6-D checkpoint.
+
+    THE single place geometry becomes the network's ``g`` (both the bond energy and the stability
+    margin use it), so the 5-D/6-D split lives in exactly one function.
+    """
+    w_lig = jnp.asarray(w_lig, dtype=jnp.float64)
+    cols = [w_lig, jnp.asarray(alpha, dtype=jnp.float64)]
+    if _feat6(stats):
+        cols.append(jnp.broadcast_to(jnp.asarray(fillet_ratio, dtype=jnp.float64), jnp.shape(w_lig)))
+    return jnp.stack(cols, axis=-1)
+
+
+def _unit(v):
+    """Row-wise unit vector, safe for ~0 rows (closed hinges may pass a near-zero direction)."""
+    v = jnp.asarray(v, dtype=jnp.float64)
+    return v / (jnp.linalg.norm(v, axis=-1, keepdims=True) + 1e-12)
 
 
 # ── parameters ──────────────────────────────────────────────────────────────────
@@ -128,7 +189,7 @@ def apply_hinge_force(params, u, g, stats):
     """Internal force ``dW/du = (F_a, F_s, M_theta)``. Per-sample grad, vmapped over the batch."""
     grad_one = jax.grad(lambda uu, gg: apply_hinge_energy(params, uu, gg, stats).squeeze())
     flat_u = u.reshape(-1, 3)
-    flat_g = g.reshape(-1, 2)
+    flat_g = g.reshape(-1, g.shape[-1])   # 2 or 3 geom features (fillet DOF swept -> 3)
     F = jax.vmap(grad_one)(flat_u, flat_g)
     return F.reshape(u.shape)
 
@@ -147,18 +208,19 @@ def apply_hinge_failure(params, u, g, stats):
 _BREAK_SHARP = 8.0
 
 
-def build_hinge_energy_fn(params: dict, stats: dict):
-    """Pure ``energy_fn(u, g) -> W`` for pipeline integration (JAX-differentiable, jittable)."""
-    def energy_fn(u, g):
-        return apply_hinge_energy(params, u, g, stats)
-    return energy_fn
-
-
 def load_hinge_surrogate(path: str):
-    """Load a trained surrogate checkpoint -> (net_params, stats, eps_f)."""
+    """Load a trained surrogate checkpoint -> (net_params, stats, eps_f).
+
+    Defensively re-floors ``feat_std`` (see ``_robust_std``) so older checkpoints trained before the
+    floor — e.g. spine-only runs whose a/s variance was ~0 — cannot explode the normalization when a
+    feature is differentiated. Physically such a checkpoint is still under-trained; this only keeps it
+    numerically finite.
+    """
     with open(path, "rb") as f:
         ck = pickle.load(f)
-    return ck["params"], ck["stats"], ck.get("eps_f", 0.25)
+    stats = ck["stats"]
+    stats = {**stats, "feat_std": jnp.asarray(_robust_std(stats["feat_std"]), dtype=jnp.float64)}
+    return ck["params"], stats, ck.get("eps_f", 0.25)
 
 
 def calibrate_scales(net_params, stats, *, alpha, w_lig, k_stretch, k_rot,
@@ -181,8 +243,7 @@ def calibrate_scales(net_params, stats, *, alpha, w_lig, k_stretch, k_rot,
     a_m = float(jnp.mean(jnp.asarray(alpha)))
     w_m = float(jnp.mean(jnp.asarray(w_lig)))
     a_ref = a_ref_frac * w_m
-    _g = [w_m, a_m] + ([float(fillet_ratio)] if int(stats["feat_mean"].shape[-1]) >= 6 else [])
-    g = jnp.array([_g], dtype=jnp.float64)
+    g = _geom_vector(jnp.array([w_m]), jnp.array([a_m]), fillet_ratio, stats)
     W_th = float(apply_hinge_energy(net_params, jnp.array([[0., 0., theta_ref]]), g, stats)[0])
     W_ax = float(apply_hinge_energy(net_params, jnp.array([[a_ref, 0., 0.]]), g, stats)[0])
     k_theta = 2.0 * W_th / (theta_ref ** 2) + 1e-30            # [N.mm/rad]
@@ -243,70 +304,38 @@ def hinge_kinematics(nodal_DOFs, sec, length_scale, reference_vector=None):
     return a, sh, dRot
 
 
-def build_hinge_bond_energy_fn(net_params, stats, *, alpha, w_lig, sec_dir,
-                               length_scale: float = 1.0, energy_scale: float = 1.0,
-                               domain: dict = DOMAIN, barrier: float = 0.0, fillet_ratio=None):
+def build_hinge_bond_energy_fn(net_params, stats, *, length_scale: float = 1.0,
+                               energy_scale: float = 1.0, domain: dict = DOMAIN,
+                               barrier: float = 0.0, fillet_ratio=None):
     """Wrap the trained surrogate as a bond-energy fn for the Stage-2 solver.
 
-    From the two connected face node-DOFs it (1) forms the relative tile motion, (2) PROJECTS it
-    onto the hinge's cut frame -- axial ``a`` along ``sec_dir``, shear ``s`` perpendicular --
-    COROTATED by the mean face rotation, (3) converts to physical mm via ``length_scale``,
-    (4) evaluates ``W(a, s, theta; w_lig, alpha)`` and rescales to pipeline energy via
-    ``energy_scale``, (5) adds ``barrier`` * OOD penalty to keep the minimizer in the training
-    domain (set ``barrier > 0`` -- without it the solve can diverge out of domain). Linear
-    projection (not ligament_strains' length/angle) matches how the RVE imposed ``(a, s)``. Ignores
-    ``k_stretch/k_shear/k_rot`` -- the surrogate replaces the springs.
+    The per-hinge ``HingeGeometry`` (w_lig, alpha, sec_dir) is supplied PER CALL via the solver's
+    ``control_params`` (``bond_params.hinge_geometry``), NOT closed over, so jaxopt's implicit diff
+    carries ``d/d(design)``. From the two connected face node-DOFs it (1) forms the relative tile
+    motion, (2) PROJECTS it onto the cut frame -- axial ``a`` along ``sec_dir``, shear ``s``
+    perpendicular -- COROTATED by the mean face rotation, (3) converts to mm via ``length_scale``,
+    (4) evaluates ``W(a, s, theta; w_lig, alpha[, fillet])`` and rescales via ``energy_scale``,
+    (5) adds ``barrier`` * OOD penalty (set ``barrier > 0`` or the solve can diverge out of domain).
+    Ignores ``k_stretch/k_shear/k_rot`` -- the surrogate replaces the springs.
 
-    Args:
-        net_params, stats: from ``load_hinge_surrogate``.
-        alpha:      (n_hinges,) cut angle [rad], per-hinge constant (from compute_hinge_descriptors).
-        w_lig:      (n_hinges,) ligament width [mm].
-        sec_dir:    (n_hinges, 2) unit secondary-cut (axial) direction, oriented opening-positive.
-        length_scale: mm per pipeline length-unit (Gap 2).
-        energy_scale: pipeline-energy per N.mm (Gap 2).
-        domain:     training-box bounds for the OOD barrier (default ``DOMAIN``).
-        barrier:    OOD-barrier stiffness [pipeline energy]. 0 = off.
-
-    Returns:
-        ``bond_energy(nodal_DOFs, reference_vector=None, **kwargs) -> (n_hinges,)`` [pipeline units].
+    Returns ``bond_energy(nodal_DOFs, reference_vector=None, hinge_geometry, **kwargs) -> (n_hinges,)``.
     """
-    alpha = jnp.asarray(alpha, dtype=jnp.float64)
-    w_lig_fixed = jnp.asarray(w_lig, dtype=jnp.float64)
-    sec = jnp.asarray(sec_dir, dtype=jnp.float64)
-    sec = sec / (jnp.linalg.norm(sec, axis=-1, keepdims=True) + 1e-12)
+    fr = jnp.asarray(fillet_ratio if fillet_ratio is not None else 0.16, dtype=jnp.float64)
 
-    # 6-feature (fillet) surrogate -> g is 3-D (w_lig, alpha, fillet_ratio); else legacy 2-D.
-    _feat6 = int(stats["feat_mean"].shape[-1]) >= 6
-    _fr = jnp.asarray(fillet_ratio if fillet_ratio is not None else 0.16, dtype=jnp.float64)
-    def _mk_g(wl):
-        return (jnp.stack([wl, alpha, jnp.broadcast_to(_fr, wl.shape)], axis=-1) if _feat6
-                else jnp.stack([wl, alpha], axis=-1))
-
-    # Fixed-width fast path: geometry g is constant, so cache the zero-state embedding h(0, g) once.
-    g_const = _mk_g(w_lig_fixed)
-    h0 = _mlp(_features(jnp.zeros((g_const.shape[0], 3), dtype=jnp.float64), g_const, stats),
-              net_params["energy"])
-
-    def bond_energy(nodal_DOFs, reference_vector=None, w_lig=None, **kwargs):
-        # ``w_lig`` (if passed by the solver via control_params.bond_params) is the LEARNABLE per-
-        # hinge width; None -> use the fixed-width cached path (identical to before, byte-for-byte).
-        # ``reference_vector`` (passed by smap.bond) makes (a, s) frame-invariant for open bonds.
-        a, sh, dRot = hinge_kinematics(nodal_DOFs, sec, length_scale, reference_vector=reference_vector)
+    def bond_energy(nodal_DOFs, reference_vector=None, hinge_geometry=None, **kwargs):
+        geo = hinge_geometry
+        a, sh, dRot = hinge_kinematics(nodal_DOFs, _unit(geo.sec_dir), length_scale,
+                                       reference_vector=reference_vector)
         u = jnp.stack([a, sh, dRot], axis=-1)
-        if w_lig is None:
-            W = energy_scale * apply_hinge_energy(net_params, u, g_const, stats, h0=h0)
-            wl = w_lig_fixed
-        else:                                              # dynamic width: rebuild g (h0 recomputed)
-            W = energy_scale * apply_hinge_energy(net_params, u, _mk_g(w_lig), stats)
-            wl = w_lig
+        W = energy_scale * apply_hinge_energy(net_params, u, _geom_vector(geo.w_lig, geo.alpha, fr, stats), stats)
         if barrier:
-            W = W + barrier * _domain_barrier(a, sh, dRot, wl, domain)
+            W = W + barrier * _domain_barrier(a, sh, dRot, geo.w_lig, domain)
         return W
 
     return bond_energy
 
 
-def build_hinge_stability_fn(net_params, stats, *, alpha, w_lig, sec_dir, bond_pairs,
+def build_hinge_stability_fn(net_params, stats, *, bond_pairs,
                              length_scale: float = 1.0, domain: dict = DOMAIN,
                              w_fail: float = 0.0, w_ood: float = 0.0, m_safe: float = 0.8,
                              fillet_ratio=None):
@@ -322,38 +351,30 @@ def build_hinge_stability_fn(net_params, stats, *, alpha, w_lig, sec_dir, bond_p
     a plastic mechanism is meant to yield as it folds), with the onset ``m_safe`` at the physical
     fracture value 1.0 by default (set < 1 for a safety margin).
 
-    ``bond_pairs`` (n_hinges, 2): the two connected NODES per hinge (indices into the reshaped
-    node-displacement array, = Stage-2 bond_connectivity). The caller MUST pass NODE displacements
-    (face displacements mapped through the rigid-tile kinematics), NOT raw face displacements --
-    bond_connectivity indexes nodes (n_faces*n_nodes_per_face), not faces.
+    The per-hinge ``HingeGeometry`` is passed PER CALL (same design-tracked value the bond energy
+    gets), so the margin reflects the current design. ``bond_pairs`` (n_hinges, 2): the two connected
+    NODES per hinge (indices into the reshaped node-displacement array, = Stage-2 bond_connectivity).
+    The caller MUST pass NODE displacements (face displacements mapped through the rigid-tile
+    kinematics), NOT raw face displacements.
 
-    Returns ``fn(node_displacements, w_lig_override) -> (penalty, aux)``, or ``None`` if both weights are 0.
+    Returns ``fn(node_displacements, hinge_geometry, reference_vectors) -> (penalty, aux)``, or
+    ``None`` if both weights are 0.
     """
     if w_fail == 0.0 and w_ood == 0.0:
         return None
-    alpha = jnp.asarray(alpha, dtype=jnp.float64)
-    w_lig = jnp.asarray(w_lig, dtype=jnp.float64)
-    sec = jnp.asarray(sec_dir, dtype=jnp.float64)
-    sec = sec / (jnp.linalg.norm(sec, axis=-1, keepdims=True) + 1e-12)
     fi = jnp.asarray(np.asarray(bond_pairs)[:, 0])
     fj = jnp.asarray(np.asarray(bond_pairs)[:, 1])
-    _feat6 = int(stats["feat_mean"].shape[-1]) >= 6
-    _fr = jnp.asarray(fillet_ratio if fillet_ratio is not None else 0.16, dtype=jnp.float64)
-    def _mk_g(wl):
-        return (jnp.stack([wl, alpha, jnp.broadcast_to(_fr, wl.shape)], axis=-1) if _feat6
-                else jnp.stack([wl, alpha], axis=-1))
-    g = _mk_g(w_lig)
+    fr = jnp.asarray(fillet_ratio if fillet_ratio is not None else 0.16, dtype=jnp.float64)
 
-    def stability(node_displacements, w_lig_override=None, reference_vectors=None):
-        # Use the LEARNED width if provided (so the margin reflects thicker hinges -> the failure
-        # penalty drops as the optimizer thickens them); else the fixed manufacturing width.
-        wl = w_lig if w_lig_override is None else jnp.asarray(w_lig_override, dtype=jnp.float64)
-        gg = g if w_lig_override is None else _mk_g(wl)
+    def stability(node_displacements, hinge_geometry, reference_vectors=None):
         # ``reference_vectors`` (per-hinge rest bond) makes the margin's (a, s) frame-invariant,
         # exactly matching the bond energy; None -> zero (closed-hinge fast path, identical result).
+        geo = hinge_geometry
         a, sh, dRot = hinge_kinematics((node_displacements[fi], node_displacements[fj]),
-                                       sec, length_scale, reference_vector=reference_vectors)
+                                       _unit(geo.sec_dir), length_scale, reference_vector=reference_vectors)
         u = jnp.stack([a, sh, dRot], axis=-1)
+        gg = _geom_vector(geo.w_lig, geo.alpha, fr, stats)
+        wl = geo.w_lig
         # Continuous ductile damage D (0 = intact, 1 = fracture). A plastic mechanism is MEANT to
         # damage as it folds, so we penalize BREAKING (D past the break line ``m_safe``, default the
         # physical fracture value 1.0) -- a smooth one-sided softplus barrier, NOT a conservative

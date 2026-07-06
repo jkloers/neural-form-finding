@@ -41,13 +41,13 @@ from nff.stages.pipeline import forward_pipeline
 from nff.stages.geometry import reconstruct_vertices, compute_face_areas, deformed_vertices
 from nff.training.trainer import create_train_step, TrainState
 from nff.utils.visualization import (
-    plot_cut_pattern, render_precise_cut_pattern, write_deformed_into, plot_loading_diagram,
-    plot_area_change, animate_closed_evolution,
+    write_deformed_into, plot_loading_diagram, plot_area_change, animate_closed_evolution,
 )
 from nff.utils.pipeline_viz import visualize_pipeline_results, plot_loss_history
 from nff.topology.closed_builder_jax import solve_cut_vertices_jax, boundary_flat_from_logits
+from nff.scripts.closed_paper_export import write_cut_patterns
 from nff.scripts.closed_setup import (build_closed_initial_state, init_closed_les_params,
-                                      build_surrogate_bond_energy)
+                                      build_surrogate_energy)
 
 
 def _fit_circle(cloud):
@@ -107,9 +107,13 @@ def main():
 
     initial_state, tessellation = build_closed_initial_state(config)
     params, static_features = init_closed_les_params(config)
-    bond_energy, stability_fn, w_lig_logit0 = build_surrogate_bond_energy(config, initial_state)
+    bond_energy, stability_fn, geometry_fn, w_lig_logit0 = build_surrogate_energy(
+        config, static_features, initial_state, params)
     if w_lig_logit0 is not None:                        # learnable per-hinge ligament width (option A)
         params = {**params, 'w_lig_logit': w_lig_logit0}
+    # design-dependent HingeGeometry for the non-training deploys (target sizing + final visuals)
+    def _geom_at(mp):
+        return geometry_fn(mp) if geometry_fn is not None else None
 
     # ── Target. circle_fit: size-free (the loss fits its own circle). Otherwise a
     # FIXED target (circle or rectangle) sized to the untrained physics deploy,
@@ -123,7 +127,7 @@ def main():
         res0 = forward_pipeline(initial_state, config.target, config.validity, config.physics,
                                 map_type=config.mapping.type, map_params=params,
                                 static_features=static_features, load_specs=load_specs,
-                                bond_energy_fn=bond_energy)
+                                bond_energy_fn=bond_energy, hinge_geometry=_geom_at(params))
         cl0 = _boundary_cloud(res0['valid_state'], res0['solution'].fields[-1])
         sc = float(config.topology.get('target_radius_scale', 1.0))
         if rect_mode:
@@ -160,7 +164,8 @@ def main():
         initial_state, target_eff, config.validity, config.physics, config.training,
         map_type=config.mapping.type, use_jit=True,
         load_specs=load_specs, static_features=static_features,
-        target_cloud=target_cloud_override, bond_energy_fn=bond_energy, stability_fn=stability_fn)
+        target_cloud=target_cloud_override, bond_energy_fn=bond_energy, stability_fn=stability_fn,
+        hinge_geometry_fn=geometry_fn)
     state = TrainState(params=params, opt_state=optimizer.init(params), rng=jax.random.PRNGKey(0))
 
     history, snaps = [], [(0, state.params)]
@@ -181,16 +186,16 @@ def main():
             print(msg)
     best_params = best[1]
     print(f"  best chamfer={best[0]:.4e}")
-    hinge_w_lig_best = None                  # learned per-hinge width -> final visuals deploy with it
-    if isinstance(best_params, dict) and 'w_lig_logit' in best_params:
-        hinge_w_lig_best = 1.0 + 9.0 / (1.0 + jnp.exp(-best_params['w_lig_logit']))
+    geom_best = _geom_at(best_params)                         # final design's HingeGeometry
+    hinge_w_lig_best = geom_best.w_lig if geom_best is not None else None
+    if hinge_w_lig_best is not None and isinstance(best_params, dict) and 'w_lig_logit' in best_params:
         print(f"  learned w_lig [mm]: min={float(hinge_w_lig_best.min()):.2f} "
               f"mean={float(hinge_w_lig_best.mean()):.2f} max={float(hinge_w_lig_best.max()):.2f}")
 
     result = forward_pipeline(initial_state, config.target, config.validity, config.physics,
                               map_type=config.mapping.type, map_params=best_params,
                               static_features=static_features, load_specs=load_specs,
-                              bond_energy_fn=bond_energy, hinge_w_lig=hinge_w_lig_best)
+                              bond_energy_fn=bond_energy, hinge_geometry=geom_best)
 
     # ── Target params for the pretty viz (fitted circle is size-adaptive). ──
     vs, disp = result['valid_state'], result['solution'].fields[-1]
@@ -209,31 +214,15 @@ def main():
     visualize_pipeline_results(result, tessellation, config, target_params,
                                args.config_name, run_dir=run_dir, load_specs=load_specs)
 
-    # ── Cut pattern: the PRECISE per-hinge laser geometry (kerf slots + ligaments + fillets),
-    #    sized from the hinge_model manufacturing params (w_lig = 1/10 tile). Falls back to the
-    #    schematic thin-line render if the geometry build fails on a given design. ──
+    # ── Cut patterns: precise per-hinge PNG + true 1:1 A4 print PDF (kerf slots, ligaments,
+    #    fillets + HOLD/PULL marks for the two-hands pinch test). See closed_paper_export. ──
     struct, sliders = static_features['struct'], static_features['sliders']
     cut_coords = np.asarray(solve_cut_vertices_jax(
         struct, boundary_flat_from_logits(sliders, best_params['bnd_logits']),
         jax.nn.sigmoid(best_params['z'])))
-    hm = config.hinge_model
-    w_lig_mm = float(getattr(hm, 'w_lig_mm', 5.0))
-    spacing = float(config.topology.get('spacing', 1.0))
-    cut_png = os.path.join(run_dir, "cut_pattern.png")
-    try:
-        from nff.topology.cut_pattern import build_cut_geometry
-        geom = build_cut_geometry(
-            cut_coords, np.asarray(struct['T']), struct['cols'],
-            w_c=0.2, w_lig=w_lig_mm, rho=0.16 * w_lig_mm,
-            length_scale=10.0 * w_lig_mm / spacing)     # physical scale: w_lig = 1/10 tile
-        render_precise_cut_pattern(
-            geom, filepath=cut_png,
-            title=f"Precise laser cut pattern — flat sheet ({getattr(hm, 'material', 'S235')})")
-    except Exception as exc:                            # keep the run alive on any geometry hiccup
-        print(f"  [cut_pattern] precise render failed ({exc}); using schematic fallback")
-        plot_cut_pattern(cut_coords, struct['T'], struct['cols'], filepath=cut_png,
-                         hinge_margin=max(0.22, 1.6 * float(config.topology.get('hinge_margin', 0.06))),
-                         lw=1.8, title="Kirigami cut pattern (flat sheet)")
+    write_cut_patterns(run_dir, initial_state=initial_state, cut_coords=cut_coords, struct=struct,
+                       config=config, hinge_model=config.hinge_model, load_specs=load_specs,
+                       config_name=args.config_name, hinge_w_lig=hinge_w_lig_best)
 
     # ── Validity audit + per-panel area change (flat vs deployed). ──
     s0 = write_deformed_into(tessellation, deformed_vertices(vs, jnp.zeros_like(disp)))
@@ -258,12 +247,10 @@ def main():
     # ── Training-evolution animation. ──
     frames = []
     for ep, p in snaps:
-        hw = (1.0 + 9.0 / (1.0 + jnp.exp(-p['w_lig_logit']))) \
-            if (isinstance(p, dict) and 'w_lig_logit' in p) else None
         res = forward_pipeline(initial_state, config.target, config.validity, config.physics,
                                map_type=config.mapping.type, map_params=p,
                                static_features=static_features, load_specs=load_specs,
-                               bond_energy_fn=bond_energy, hinge_w_lig=hw)
+                               bond_energy_fn=bond_energy, hinge_geometry=_geom_at(p))
         m, v = res['mapped_state'], res['valid_state']
         d = res['solution'].fields[-1]
         flat = _global_verts(tessellation, np.asarray(reconstruct_vertices(m.face_centroids, m.centroid_node_vectors)))
