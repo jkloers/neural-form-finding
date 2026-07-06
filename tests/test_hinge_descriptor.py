@@ -125,11 +125,16 @@ def test_interior_descriptor_sane(out):
 
 
 def test_known_hinge_h10(out):
-    """H10 is an interior hinge with a hand-checked geometry."""
+    """H10 is an interior hinge with a hand-checked geometry.
+
+    alpha is now the RVE-frame value (compute_hinge_descriptors delegates to compute_hinge_frame):
+    87.1deg, the supplement of the old edge-based 92.9deg. For this near-90deg hinge the two branches
+    nearly coincide; the frame resolves the correct (material-side) one. See test_hinge_frame.py.
+    """
     assert bool(out["is_interior"][10])
     assert float(out["L_main"][10]) == pytest.approx(1.990, abs=2e-3)
     assert float(out["descriptor"][10, 0]) == pytest.approx(1.001, abs=2e-3)
-    assert np.degrees(float(out["alpha"][10])) == pytest.approx(92.9, abs=0.2)
+    assert np.degrees(float(out["alpha"][10])) == pytest.approx(87.1, abs=0.2)
 
 
 def test_manufacturing_ratios(out):

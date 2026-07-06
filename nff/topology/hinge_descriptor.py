@@ -226,25 +226,17 @@ def compute_hinge_descriptors(
         is_interior: (H,) bool — passthrough of the boundary-hinge flag.
     """
     coords = cut_vertices_flat
-    pivots = coords[hstruct["pivot_pid"]]                       # (H, 2)
 
-    # Wedge angle from the two adjacent tile edges (unambiguous, physical).
-    e1 = coords[hstruct["edge_pid"][:, 0]] - pivots
-    e2 = coords[hstruct["edge_pid"][:, 1]] - pivots
-    n1 = jnp.linalg.norm(e1, axis=1); n2 = jnp.linalg.norm(e2, axis=1)
-    cos_a = jnp.sum(e1 * e2, axis=1) / (n1 * n2 + 1e-12)
-    alpha = jnp.arccos(jnp.clip(cos_a, -1.0, 1.0))              # (H,)
+    # alpha + the axial/shear frame come from the ONE source of truth (RVE-consistent, tested).
+    frame = compute_hinge_frame(hstruct, coords)
+    pivots, alpha, sec_dir, shear_dir = (frame["pivot"], frame["alpha"],
+                                         frame["sec_dir"], frame["shear_dir"])
 
-    # Cut lengths (full collinear slit spans) and their unit directions.
+    # Cut lengths (full collinear slit spans) — dimensional scales, not directions.
     main_vec = coords[hstruct["main_end_pid"][:, 1]] - coords[hstruct["main_end_pid"][:, 0]]
     sec_vec = coords[hstruct["sec_end_pid"][:, 1]] - coords[hstruct["sec_end_pid"][:, 0]]
     L_main = jnp.linalg.norm(main_vec, axis=1)                 # (H,)
     L_sec = jnp.linalg.norm(sec_vec, axis=1)
-    # Unit cut frame (for the Phase-3 point-ROM <-> physical-hinge bridge). The RVE defines the
-    # axial DOF ``a`` as translation ALONG the secondary cut, so ``sec_dir`` is the reference-bond
-    # (axial) direction each closed hinge must carry; ``main_dir`` is the shear axis.
-    sec_dir = sec_vec / (L_sec[:, None] + 1e-12)               # (H, 2)  -> axial ``a``
-    main_dir = main_vec / (L_main[:, None] + 1e-12)            # (H, 2)  -> shear ``s``
 
     lig = manufacturing.ligament_width
     wc = manufacturing.kerf_width
@@ -267,10 +259,11 @@ def compute_hinge_descriptors(
     return {
         "descriptor": descriptor,
         "L_main": L_main,
+        "L_sec": L_sec,
         "alpha": alpha,
         "pivots": pivots,
-        "sec_dir": sec_dir,
-        "main_dir": main_dir,
+        "sec_dir": sec_dir,            # axial (a) direction
+        "shear_dir": shear_dir,        # shear (s) direction = perp_CCW(sec_dir)
         "min_gap": min_gap,
         "crowded": crowded,
         "is_interior": jnp.asarray(hstruct["is_interior"]),
@@ -290,3 +283,70 @@ def hinge_descriptors_from_design(
     """
     coords = solve_cut_vertices_jax(hstruct["deploy_struct"], boundary_flat, r)
     return compute_hinge_descriptors(hstruct, coords, manufacturing, crowding_factor)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# RVE-consistent local hinge frame (α, axial, shear) — the rigorous replacement
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _hinge_frame_from_points(pivot, main_a, main_b, sec_a, sec_b):
+    """Per-hinge RVE-consistent frame from raw points (all (..., 2), differentiable).
+
+    Matches ``nff.rve.geometry.build_rve_domain`` (secondary = +x, material below, main at ``-α``)
+    and the deployment projection ``hinge_surrogate.hinge_kinematics`` (axial = ``sec_dir``, shear =
+    perp_CCW(``sec_dir``)). Uniquely fixes the branch/sign:
+
+      - ``sec_dir`` orients the through-cut so ``perp_CCW(sec_dir)`` points to the VOID (non-material)
+        side — i.e. the deployment shear axis matches the RVE's +y.
+      - ``main`` is the terminating-cut ray leaving the pivot INTO the material.
+      - ``alpha`` = ∠ from ``sec_dir`` to ``main``, measured into the material half, in ``(0, π)``.
+
+    Args:
+        pivot: (..., 2) hinge pivot.
+        main_a, main_b: (..., 2) the two endpoints of the main (terminating) slit.
+        sec_a, sec_b: (..., 2) the two endpoints of the secondary (through) slit.
+
+    Returns:
+        ``(sec_dir, shear_dir, alpha)`` — ``sec_dir``/``shear_dir`` (..., 2) orthonormal, ``alpha`` (...,).
+    """
+    def _unit(v):
+        return v / (jnp.linalg.norm(v, axis=-1, keepdims=True) + 1e-12)
+
+    # main ray: leave the pivot toward the FAR endpoint (into the material half)
+    da = jnp.linalg.norm(main_a - pivot, axis=-1)
+    db = jnp.linalg.norm(main_b - pivot, axis=-1)
+    main_far = jnp.where((db > da)[..., None], main_b, main_a)
+    main = _unit(main_far - pivot)
+
+    sec = _unit(sec_b - sec_a)                                   # through-cut line direction
+    perp = jnp.stack([-sec[..., 1], sec[..., 0]], axis=-1)       # perp_CCW(sec)
+
+    # material is the half the main ray enters -> want perp_CCW on the VOID side: main·perp < 0
+    flip = (jnp.sum(main * perp, axis=-1) > 0.0)[..., None]
+    sec = jnp.where(flip, -sec, sec)
+    perp = jnp.where(flip, -perp, perp)
+
+    m_sec = jnp.sum(main * sec, axis=-1)                         # main components in the frame
+    m_perp = jnp.sum(main * perp, axis=-1)                       # <= 0 (material side)
+    alpha = jnp.arctan2(-m_perp, m_sec)                          # (0, π): ∠ secondary -> main
+    return sec, perp, alpha
+
+
+def compute_hinge_frame(hstruct: dict, cut_vertices_flat: Float[Array, "P 2"]) -> dict:
+    """Per-hinge RVE-consistent ``(pivot, sec_dir, shear_dir, alpha)`` — differentiable in the vertices.
+
+    The rigorous replacement for the ``alpha``/``sec_dir`` in ``compute_hinge_descriptors`` (which took
+    the ``_build_hinges`` CCW panel-edge ordering, giving ``α`` or ``180-α`` per hinge). Uses the
+    terminating/through cut endpoints already resolved in ``hstruct`` and a single physical convention
+    (see ``_hinge_frame_from_points``), so the frame is consistent with both ``build_rve_domain`` and
+    ``hinge_kinematics``.
+    """
+    c = cut_vertices_flat
+    pivot = c[hstruct["pivot_pid"]]
+    sec_dir, shear_dir, alpha = _hinge_frame_from_points(
+        pivot,
+        c[hstruct["main_end_pid"][:, 0]], c[hstruct["main_end_pid"][:, 1]],
+        c[hstruct["sec_end_pid"][:, 0]], c[hstruct["sec_end_pid"][:, 1]],
+    )
+    return {"pivot": pivot, "sec_dir": sec_dir, "shear_dir": shear_dir, "alpha": alpha,
+            "is_interior": jnp.asarray(hstruct["is_interior"])}
