@@ -209,8 +209,12 @@ def _closed_cut_lines(T, cols):
     return lines
 
 
-def _draw_cuts_as_gaps(ax, coords, T, cols, retract, kerf, zorder=3):
-    """Draw cuts as WHITE removed-material slits (kerf-wide), retracted at interior ends."""
+def _draw_cuts_as_gaps(ax, coords, T, cols, retract, kerf, zorder=3, fillet=0.0):
+    """Draw cuts as WHITE removed-material slits (kerf-wide), retracted at interior ends.
+
+    ``fillet`` > 0 adds a white disc of that radius at each RETRACTED (interior) cut tip — the
+    stress-relief fillet — drawn above the strips so it reads on the macro sheet.
+    """
     coords = np.asarray(coords)
     hk = kerf / 2.0
     for (i, j), (pa, pb) in _closed_cut_lines(T, cols).items():
@@ -218,10 +222,15 @@ def _draw_cuts_as_gaps(ax, coords, T, cols, retract, kerf, zorder=3):
         u = (B - A) / (np.linalg.norm(B - A) + 1e-12)
         n = np.array([-u[1], u[0]])
         is_bnd = lambda p: T[divmod(p // 2, cols)] < 0
-        p0 = A + (0.0 if is_bnd(pa) else retract) * u
-        p1 = B - (0.0 if is_bnd(pb) else retract) * u
+        a_ret, b_ret = not is_bnd(pa), not is_bnd(pb)
+        p0 = A + (retract if a_ret else 0.0) * u
+        p1 = B - (retract if b_ret else 0.0) * u
         ax.add_patch(Polygon([p0 + hk*n, p1 + hk*n, p1 - hk*n, p0 - hk*n],
                              closed=True, facecolor="white", edgecolor="none", zorder=zorder))
+        if fillet > 0:
+            for p, ret in ((p0, a_ret), (p1, b_ret)):
+                if ret:
+                    ax.add_patch(Circle(p, fillet, facecolor="white", edgecolor="none", zorder=zorder + 3))
 
 
 def hinge_strip_polygon(coords, hstruct, hid, w_lig, kerf, r_win):
@@ -282,7 +291,8 @@ def _fill_shapely(ax, geom, **kw):
 
 def plot_hinge_strips(coords, hstruct, w_lig, kerf, r_win_factor=2.0,
                       ax=None, filepath=None, sheet_color="#F58025",
-                      strip_color=_HINGE_TEAL, mm_per_unit=None, scale_mm=200.0, title=None):
+                      strip_color=_HINGE_TEAL, mm_per_unit=None, scale_mm=200.0, title=None,
+                      fillet=0.0):
     """Full sheet with every hinge strip (the meshable RVE domains) coloured.
 
     No sheet outline; cuts drawn as white removed-material gaps; each hinge's strip
@@ -312,7 +322,7 @@ def plot_hinge_strips(coords, hstruct, w_lig, kerf, r_win_factor=2.0,
     # Cuts first (white voids), then the strips ON TOP: each strip carves its own cut
     # void (retracted by w_lig, constant kerf) and keeps the ligament wedge, so the
     # long slits still show elsewhere.
-    _draw_cuts_as_gaps(ax, coords, T, cols, retract=w_lig, kerf=kerf, zorder=3)
+    _draw_cuts_as_gaps(ax, coords, T, cols, retract=w_lig, kerf=kerf, zorder=3, fillet=fillet)
     for hid in range(len(hstruct["pivot_pid"])):
         _fill_shapely(ax, hinge_strip_polygon(coords, hstruct, hid, w_lig, kerf, r_win),
                       facecolor=strip_color, edgecolor="none", alpha=1.0, zorder=5)
@@ -408,7 +418,56 @@ def plot_hinge_detail(coords, hstruct, hid, w_lig, kerf, descriptors=None,
         print(f"  Saved hinge detail to {filepath}")
 
 
-def plot_hinge_dimensions(w_lig=10.0, w_c=3.0, alpha_deg=92.0, fillet=2.0, thickness=1.0,
+def _rve_real_mesh(ax, region, *, w_lig, lc_min, lc_max, color="#728079", lw=0.4, zorder=3):
+    """The REAL gmsh RVE surface mesh drawn over ``region`` — same domain + ligament-Ball refinement
+    the CalculiX pipeline uses (``nff.rve.ccx_solver._build_mesh``), reduced to the 2D face triangles.
+
+    Uses the actual mesher so the drawn density/grading match the physics mesh (fine at the
+    ligament, coarse away). Falls back silently if gmsh is unavailable.
+    """
+    from matplotlib.tri import Triangulation
+    try:
+        import gmsh
+    except Exception:
+        return
+    for poly in getattr(region, "geoms", [region]):
+        if poly.is_empty or poly.area < 1e-9:
+            continue
+        coords = list(poly.exterior.coords)[:-1]
+        gmsh.initialize()
+        try:
+            gmsh.option.setNumber("General.Terminal", 0)
+            gmsh.model.add("rve2d")
+            pts = [gmsh.model.geo.addPoint(x, y, 0.0, lc_max) for (x, y) in coords]
+            n = len(pts)
+            loop = [gmsh.model.geo.addLine(pts[i], pts[(i + 1) % n]) for i in range(n)]
+            gmsh.model.geo.addPlaneSurface([gmsh.model.geo.addCurveLoop(loop)])
+            gmsh.model.geo.synchronize()
+            gmsh.model.mesh.field.add("Ball", 1)                  # refine only the ligament strip
+            for k, v in (("XCenter", 0.0), ("YCenter", -0.5 * w_lig), ("ZCenter", 0.0),
+                         ("Radius", 0.75 * w_lig), ("Thickness", 0.75 * w_lig),
+                         ("VIn", lc_min), ("VOut", lc_max)):
+                gmsh.model.mesh.field.setNumber(1, k, v)
+            gmsh.model.mesh.field.setAsBackgroundMesh(1)
+            for opt in ("MeshSizeExtendFromBoundary", "MeshSizeFromPoints", "MeshSizeFromCurvature"):
+                gmsh.option.setNumber("Mesh." + opt, 0)
+            gmsh.model.mesh.generate(2)
+            tags, xyz, _ = gmsh.model.mesh.getNodes()
+            xyz = np.asarray(xyz).reshape(-1, 3)
+            remap = {int(t): i for i, t in enumerate(tags)}
+            tris = np.empty((0, 3), int)
+            for et, en in zip(*gmsh.model.mesh.getElements(dim=2)[:3:2]):
+                if int(et) == 2:                                 # 3-node triangle
+                    tris = np.asarray(en, int).reshape(-1, 3)
+            if len(tris):
+                conn = np.vectorize(remap.get)(tris)
+                ax.triplot(Triangulation(xyz[:, 0], xyz[:, 1], conn),
+                           color=color, lw=lw, zorder=zorder)
+        finally:
+            gmsh.finalize()
+
+
+def plot_hinge_dimensions(w_lig=10.0, w_c=3.0, alpha_deg=62.0, fillet=2.0, thickness=1.0,
                           ax=None, filepath=None, steel_color="#D9DCE1",
                           lig_color=_HINGE_TEAL, title=None):
     """Dimensioned engineering drawing of one hinge (parametric schematic).
@@ -461,6 +520,8 @@ def plot_hinge_dimensions(w_lig=10.0, w_c=3.0, alpha_deg=92.0, fillet=2.0, thick
     green = _Pt(0.0, 0.0).buffer(Rw, resolution=80).intersection(_sbox(-Rw, -Rw, Rw, 0.0))
     green = green.difference(main_void)
     _fill_shapely(ax, green, facecolor=lig_color, edgecolor="none", alpha=1.0, zorder=2)
+    # the REAL pipeline mesh (gmsh, ligament-refined) over the RVE — real grading = physical intuition
+    _rve_real_mesh(ax, green, w_lig=wl, lc_min=max(0.5 * fillet, 0.09 * wl), lc_max=0.42 * wl)
 
     def _dim_linear(p1, p2, off, label, side=1, pad=1.6):
         p1, p2 = np.array(p1, float), np.array(p2, float)
@@ -484,14 +545,18 @@ def plot_hinge_dimensions(w_lig=10.0, w_c=3.0, alpha_deg=92.0, fillet=2.0, thick
                 tip + 1.7*wl*um + wc/2*np.array([-um[1], um[0]]), off=0.8*wl, label=r"$w_c$", side=-1)
     # green-region width (the meshed RVE width) as a parameter, along the secondary cut
     _dim_linear((-Rw, 0.0), (Rw, 0.0), off=1.3*wl, label=r"$w_{mesh}$", side=1)
-    # alpha: prolong the main-cut axis to the secondary cut; small arc AT the vertex
-    xsec = tip - (tip[1] / um[1]) * um                              # main axis crosses secondary axis (y=0)
-    ax.plot([tip[0] + 2.6*wl*um[0], xsec[0]], [tip[1] + 2.6*wl*um[1], xsec[1]],
-            color=dim, lw=0.5, ls=(0, (5, 3)), zorder=6)
-    am = np.degrees(np.arctan2(um[1], um[0]))                        # main-axis angle (~ -alpha)
-    ax.add_patch(_Arc(xsec, 0.8*wl, 0.8*wl, theta1=am, theta2=0.0, color=ink, lw=1.0, zorder=8))
+    # alpha = angle between the main cut and the secondary cut, drawn AT THE TOP of the main cut
+    # (its tip) against a short reference line PARALLEL to the secondary cut. Placing it at the tip
+    # makes it independent of the ligament w_lig (the uncut strip is a separate parameter).
+    L_ref = 1.15 * wl
+    ax.plot([tip[0], tip[0] + L_ref*us[0]], [tip[1], tip[1] + L_ref*us[1]],
+            color=dim, lw=0.7, ls=(0, (4, 3)), zorder=6)            # parallel-to-secondary reference
+    ax.plot([tip[0], tip[0] + L_ref*um[0]], [tip[1], tip[1] + L_ref*um[1]],
+            color=dim, lw=0.7, ls=(0, (4, 3)), zorder=6)            # main-cut axis (into the material)
+    am = np.degrees(np.arctan2(um[1], um[0]))                        # main-axis angle (negative, tilts down)
+    ax.add_patch(_Arc(tip, 0.75*wl, 0.75*wl, theta1=am, theta2=0.0, color=ink, lw=1.0, zorder=8))
     amid = np.radians(am / 2.0)
-    ax.annotate(r"$\alpha$", xsec + 0.55*wl*np.array([np.cos(amid), np.sin(amid)]),
+    ax.annotate(r"$\alpha$", tip + 0.52*wl*np.array([np.cos(amid), np.sin(amid)]),
                 color=ink, fontsize=12, ha="center", va="center", zorder=9)
     # fillet radius rho — shown as a radius (centre of the tip fillet -> arc)
     u_r = np.array([np.cos(np.radians(212)), np.sin(np.radians(212))])
