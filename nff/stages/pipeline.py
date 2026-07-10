@@ -54,11 +54,16 @@ def forward_pipeline(
         use_shirley_chiu: bool = True,
         strict_boundary_fit: bool = True,
         static_features: Optional[dict] = None,
-        load_specs: Optional[list] = None) -> dict:
+        load_specs: Optional[list] = None,
+        bond_energy_fn=None,
+        hinge_geometry=None) -> dict:
     """Full differentiable pipeline: Initial Mapping → Geometric Validity → Static Equilibrium.
 
     GRADIENT PATH (Reverse-mode AD):
     Loss → Stage 2 (Physics VJP) → Stage 1 (Validity VJP) → Stage 0 (Mapping VJP) → map_params gradients
+
+    ``bond_energy_fn``: optional Stage-2 single-bond energy override (e.g. the learned hinge-energy
+    surrogate). Default ``None`` = the linear-spring ROM, so existing behavior is unchanged.
     """
 
     # ── Stage 0: Initial Mapping ──
@@ -80,7 +85,8 @@ def forward_pipeline(
     # Forward: valid_state → solution (equilibrium displacements, strain energy)
     # Backward: VJP flows automatically through the physics minimizer
     solution, geometry = _execute_stage2_physics(
-        valid_state, physics_cfg, load_specs
+        valid_state, physics_cfg, load_specs, bond_energy_fn=bond_energy_fn,
+        hinge_geometry=hinge_geometry
     )
 
     vertices_ref = reconstruct_vertices(
@@ -170,7 +176,8 @@ def _execute_stage1_validity(mapped_state, target_cfg, validity_cfg):
     return valid_state
 
 
-def _execute_stage2_physics(valid_state, physics_cfg, load_specs):
+def _execute_stage2_physics(valid_state, physics_cfg, load_specs, bond_energy_fn=None,
+                            hinge_geometry=None):
     if not getattr(physics_cfg, 'use_stage2', True):
         n_faces = valid_state.face_centroids.shape[0]
         zero_fields = jnp.zeros((1, n_faces, 3), dtype=float)
@@ -185,6 +192,7 @@ def _execute_stage2_physics(valid_state, physics_cfg, load_specs):
         bond_connectivity=geometry.bond_connectivity,
         linearized_strains=physics_cfg.linearized_strains,
         use_contact=physics_cfg.use_contact,
+        bond_energy_fn=bond_energy_fn,
     )
 
     if has_geometry_dependent_loads(load_specs):
@@ -206,6 +214,7 @@ def _execute_stage2_physics(valid_state, physics_cfg, load_specs):
         solver_maxiter=physics_cfg.solver_maxiter,
         solver_tol=physics_cfg.solver_tol,
         updated_lagrangian=physics_cfg.updated_lagrangian,
+        backward_reg=getattr(physics_cfg, 'backward_reg', 0.0),
     )
 
     control_params = build_control_params(
@@ -218,6 +227,7 @@ def _execute_stage2_physics(valid_state, physics_cfg, load_specs):
         min_angle=physics_cfg.min_angle,
         cutoff_angle=physics_cfg.cutoff_angle,
         use_contact=physics_cfg.use_contact,
+        hinge_geometry=hinge_geometry,   # design-tracked HingeGeometry; None -> ROM / spring energy
     )
     
     if force_vals_jax is not None:

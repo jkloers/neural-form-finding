@@ -58,18 +58,62 @@ def _panel_corner_sources(T):
     return np.array(corner_pid, dtype=np.int64)
 
 
+def _les_assembly_indices(T):
+    """Static sparsity pattern of the collinearity LES, precomputed once (NumPy).
+
+    The LES is ``A x = b`` with ``A`` = identity diagonal plus, for each INTERIOR cut point, two
+    off-diagonal entries with coefficients ``-r`` and ``-(1-r)``; boundary points fix ``x = boundary``.
+    We precompute the off-diagonal ``(row, col, which r, r-is-r-or-1minusr)`` pattern and the boundary
+    mask so ``solve_cut_vertices_jax`` assembles ``A`` with a single vectorized scatter -- instead of a
+    Python double-loop of ``.at[].set`` that unrolled O(P) scatter ops into the traced graph and blew
+    up compile time (the old ~20x20 ceiling). See ``closed_builder._assemble_les`` for the same rule.
+
+    Returns off_rows/off_cols/off_ridx (int, length E=4*n_interior) + off_is_r (bool) + boundary_mask.
+    """
+    rows, cols = T.shape
+    P = 2 * rows * cols
+
+    def pid(i, j, s):
+        return 2 * (i * cols + j) + s
+
+    off_rows, off_cols, off_ridx, off_is_r = [], [], [], []
+    boundary_mask = np.zeros(P, dtype=bool)
+    for i in range(rows):
+        for j in range(cols):
+            t = int(T[i, j])
+            if t < 0:                                       # boundary cut: x = boundary_flat
+                boundary_mask[pid(i, j, 0)] = True
+                boundary_mask[pid(i, j, 1)] = True
+                continue
+            a0, b0 = ((pid(i - 1, j, 0), pid(i + 1, j, 1)) if t == 1        # horizontal
+                      else (pid(i, j - 1, 1), pid(i, j + 1, 0)))            # t == 2, vertical
+            p0, p1 = pid(i, j, 0), pid(i, j, 1)
+            # p0 = r*a0 + (1-r)*b0 ;  p1 = (1-r)*a0 + r*b0  (matches the sign convention in _assemble_les)
+            for row, col, is_r in ((p0, a0, True), (p0, b0, False), (p1, a0, False), (p1, b0, True)):
+                off_rows.append(row); off_cols.append(col)
+                off_ridx.append(i * cols + j); off_is_r.append(is_r)
+    return {
+        "off_rows": np.array(off_rows, dtype=np.int64),
+        "off_cols": np.array(off_cols, dtype=np.int64),
+        "off_ridx": np.array(off_ridx, dtype=np.int64),
+        "off_is_r": np.array(off_is_r, dtype=bool),
+        "boundary_mask": boundary_mask,
+    }
+
+
 def build_deploy_structure(M: int, N: int):
     """Precompute the static (NumPy) data needed for the differentiable forward map.
 
-    Returns the topology matrix ``T``, the cut-grid dimensions (``rows``, ``cols``)
-    and flat cut-vertex count ``P``, and ``corner_pid`` — each panel corner's index
-    into the flat cut-vertex array produced by ``solve_cut_vertices_jax``.
+    Returns the topology matrix ``T``, the cut-grid dimensions (``rows``, ``cols``) and flat
+    cut-vertex count ``P``, ``corner_pid`` — each panel corner's index into the flat cut-vertex array —
+    and ``les_idx``, the precomputed LES sparsity pattern for the vectorized solve.
     """
     T = build_topology_matrix(M, N)
     rows, cols = T.shape
     P = 2 * rows * cols
     corner_pid = _panel_corner_sources(T)
-    return {"T": T, "rows": rows, "cols": cols, "P": P, "corner_pid": corner_pid}
+    return {"T": T, "rows": rows, "cols": cols, "P": P, "corner_pid": corner_pid,
+            "les_idx": _les_assembly_indices(T)}
 
 
 def boundary_points_flat(struct, spacing: float = 1.0) -> np.ndarray:
@@ -152,43 +196,16 @@ def solve_cut_vertices_jax(
         r: Float[Array, "rows cols"]) -> Float[Array, "P 2"]:
     """Solve the collinearity LES for flat cut vertices — differentiable in r.
 
-    Mirrors ``closed_builder._assemble_les`` with ``jnp`` so gradients flow
-    through ``jnp.linalg.solve``.
+    Vectorized assembly from the precomputed sparsity pattern (``_les_assembly_indices``): a single
+    scatter builds ``A = I + off-diagonals``, so the traced graph is O(1) scatter + one dense solve
+    rather than the old O(P) unrolled ``.at[].set`` loop. Mirrors ``closed_builder._assemble_les``.
     """
-    T, rows, cols, P = struct["T"], struct["rows"], struct["cols"], struct["P"]
-    r_arr = jnp.broadcast_to(r, (rows, cols))
+    rows, cols, P = struct["rows"], struct["cols"], struct["P"]
+    idx = struct.get("les_idx") or _les_assembly_indices(struct["T"])
+    r_flat = jnp.broadcast_to(r, (rows, cols)).reshape(-1)
 
-    def pid(i, j, s):
-        return 2 * (i * cols + j) + s
-
-    A = jnp.zeros((P, P))
-    b = jnp.zeros((P, 2))
-    for i in range(rows):
-        for j in range(cols):
-            t = int(T[i, j])
-            rij = r_arr[i, j]
-            if t < 0:
-                for s in (0, 1):
-                    p = pid(i, j, s)
-                    A = A.at[p, p].set(1.0)
-                    b = b.at[p].set(boundary_flat[p])
-            elif t == 1:
-                p0 = pid(i, j, 0)
-                A = A.at[p0, p0].set(1.0)
-                A = A.at[p0, pid(i - 1, j, 0)].add(-rij)
-                A = A.at[p0, pid(i + 1, j, 1)].add(-(1.0 - rij))
-                p1 = pid(i, j, 1)
-                A = A.at[p1, p1].set(1.0)
-                A = A.at[p1, pid(i - 1, j, 0)].add(-(1.0 - rij))
-                A = A.at[p1, pid(i + 1, j, 1)].add(-rij)
-            else:  # t == 2
-                p0 = pid(i, j, 0)
-                A = A.at[p0, p0].set(1.0)
-                A = A.at[p0, pid(i, j - 1, 1)].add(-rij)
-                A = A.at[p0, pid(i, j + 1, 0)].add(-(1.0 - rij))
-                p1 = pid(i, j, 1)
-                A = A.at[p1, p1].set(1.0)
-                A = A.at[p1, pid(i, j - 1, 1)].add(-(1.0 - rij))
-                A = A.at[p1, pid(i, j + 1, 0)].add(-rij)
-
+    coeff = jnp.where(jnp.asarray(idx["off_is_r"]),
+                      r_flat[idx["off_ridx"]], 1.0 - r_flat[idx["off_ridx"]])
+    A = jnp.eye(P).at[idx["off_rows"], idx["off_cols"]].add(-coeff)
+    b = jnp.asarray(idx["boundary_mask"], dtype=boundary_flat.dtype)[:, None] * boundary_flat
     return jnp.linalg.solve(A, b)

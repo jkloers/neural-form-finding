@@ -73,17 +73,32 @@ def hinge_vertex_positions(face_centroids, cnv, hinge_node_pairs):
     return p1, p2
 
 
-def build_reference_bond_vectors(valid_state):
+def build_reference_bond_vectors(valid_state, hinge_axial_dirs=None, l0_nom=1e-4):
     """Compute bond reference vectors from the validated centroidal state.
 
     Each hinge connects vertex1 (in face1) to vertex2 (in face2).
     hinge_node_pairs has exactly 1 entry per hinge.
 
+    Point-ROM ↔ physical-hinge frame bridge (Phase 3, Gap 1): for closed hinges the two hinge
+    vertices coincide, so the natural bond ``p2 - p1`` is degenerate and its direction is
+    meaningless. ``ligament_strains`` resolves axial vs shear relative to this vector, so a
+    degenerate/arbitrary direction gives an arbitrary (a, s) split. When ``hinge_axial_dirs``
+    (the per-hinge secondary-cut direction ``sec_dir`` from ``compute_hinge_descriptors``) is
+    supplied, each degenerate hinge is given a nominal-length reference vector ALONG that cut
+    axis — the same frame the RVE imposed (its axial DOF ``a`` is translation along the secondary
+    cut). The axis is oriented face_i→face_k so opening is a > 0.
+
+    Backward-compatible: with ``hinge_axial_dirs=None`` the old unit-x fallback is used, and for
+    the canonical closed configs (k_stretch = k_shear, isotropic) the axis choice does not change
+    the spring energy at all — it only matters for anisotropic springs and the learned surrogate.
+
     Args:
-        valid_state: CentroidalState after geometric validation.
+        valid_state:      CentroidalState after geometric validation.
+        hinge_axial_dirs: optional (n_hinges, 2) unit axial (secondary-cut) directions.
+        l0_nom:           nominal reference length for degenerate (closed) hinges.
 
     Returns:
-        (n_hinges, 2) — reference bond vectors (from vertex1 to vertex2).
+        (n_hinges, 2) — reference bond vectors.
     """
     p1, p2 = hinge_vertex_positions(
         valid_state.face_centroids,
@@ -92,18 +107,21 @@ def build_reference_bond_vectors(valid_state):
     )
     bond = p2 - p1
 
-    # Guard against zero-length bonds. This occurs when Stage 1 closes hinge
-    # gaps to machine precision (e.g. alternating-projection solver), making
-    # the ligament reference vector exactly zero → zero stiffness → NaN in
-    # Stage 2 under any external load.
-    #
-    # Use squared norm (no sqrt) for the condition so the backward pass never
-    # computes bond/|bond| at bond=0 (which would give NaN via 0*NaN in XLA).
-    # A canonical unit-x fallback gives finite stiffness in an arbitrary direction;
-    # the magnitude (min_len) is small enough not to affect the physics scale.
+    # Use squared norm (no sqrt) for the condition so the backward pass never computes
+    # bond/|bond| at bond=0 (which would give NaN via 0*NaN in XLA).
     min_len = 1e-4
     sq_norms = jnp.sum(bond ** 2, axis=-1, keepdims=True)   # gradient = 2*bond, zero at 0
-    fallback = jnp.zeros_like(bond).at[:, 0].set(min_len)   # [min_len, 0] per hinge
+
+    if hinge_axial_dirs is None:
+        fallback = jnp.zeros_like(bond).at[:, 0].set(min_len)          # canonical unit-x
+    else:
+        u = hinge_axial_dirs / (jnp.linalg.norm(hinge_axial_dirs, axis=-1, keepdims=True) + 1e-12)
+        # orient face_i → face_k so a > 0 is the hinge opening
+        fi = valid_state.hinge_node_pairs[:, 0, 0]
+        fk = valid_state.hinge_node_pairs[:, 1, 0]
+        ab = valid_state.face_centroids[fk] - valid_state.face_centroids[fi]
+        sgn = jnp.sign(jnp.sum(u * ab, axis=-1, keepdims=True) + 1e-30)
+        fallback = l0_nom * u * sgn
     return jnp.where(sq_norms < min_len ** 2, fallback, bond)
 
 

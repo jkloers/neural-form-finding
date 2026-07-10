@@ -26,7 +26,7 @@ import numpy as np
 
 from nff.topology.builder import build_tessellation
 from nff.config.conditions import configure_tessellation
-from nff.scripts.closed_setup import build_closed_initial_state, init_closed_les_params
+from nff.closed.setup import build_closed_initial_state, init_closed_les_params
 from nff.config.experiment import (
     load_and_parse_config,
     load_arch_config,

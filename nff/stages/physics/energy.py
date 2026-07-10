@@ -10,7 +10,7 @@ from jax_md import smap
 
 from nff.stages.physics.kinematics import face_to_node_kinematics_fn
 from nff.stages.physics.params import ControlParams
-from nff.utils.linalg import vdot, void_angles, build_void_edge_distance
+from nff.utils.linalg import vdot, void_angles, build_void_edge_distance, corotated_bond_deformation
 
 
 
@@ -36,31 +36,18 @@ def ligament_strains_linearized(DOFs1: jnp.ndarray, DOFs2: jnp.ndarray, referenc
         Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]: axial, shear, rotational strains.
     """
 
-    dU = DOFs2[:, :2] - DOFs1[:, :2]
-    dRot = DOFs2[:, 2] - DOFs1[:, 2]
-    mean_rot = (DOFs2[:, 2] + DOFs1[:, 2]) / 2.0
-
-    # Exact current bond vector in the lab frame: ref + relative node displacement.
-    # (_face_to_node_displacement uses the full rotation matrix, so dU is exact.)
-    current_bond = reference_vector + dU
-
-    # Rotate back by the mean face rotation → corotated frame.
-    # For pure rigid rotation θ: current_bond = R(θ)·ref → corot_bond = ref → strain = 0.
-    c = jnp.cos(mean_rot)
-    s = jnp.sin(mean_rot)
-    corot_bond = jnp.stack([
-        c * current_bond[..., 0] + s * current_bond[..., 1],
-       -s * current_bond[..., 0] + c * current_bond[..., 1],
-    ], axis=-1)
+    # Frame-invariant deformation (corotated current bond minus reference); zero for rigid-body
+    # motion. Shared with the hinge surrogate so the (a, s) reduction is one implementation.
+    deformation, dRot = corotated_bond_deformation(DOFs1, DOFs2, reference_vector)
 
     norm_sq = jnp.linalg.norm(reference_vector, axis=-1) ** 2
-    axial_strain = vdot(corot_bond - reference_vector, reference_vector) / norm_sq
-    shear_strain = jnp.cross(reference_vector, corot_bond, axis=-1) / norm_sq
+    axial_strain = vdot(deformation, reference_vector) / norm_sq
+    shear_strain = jnp.cross(reference_vector, deformation, axis=-1) / norm_sq
 
     return axial_strain, shear_strain, dRot
 
 
-def ligament_energy_linearized(nodal_DOFs: Tuple[jnp.ndarray, jnp.ndarray], reference_vector: jnp.ndarray = jnp.array([1., 0.]), k_stretch=1., k_shear=1., k_rot=1.):
+def ligament_energy_linearized(nodal_DOFs: Tuple[jnp.ndarray, jnp.ndarray], reference_vector: jnp.ndarray = jnp.array([1., 0.]), k_stretch=1., k_shear=1., k_rot=1., **kwargs):
     """Computes the strain energy of an elastic ligament using linearized strain measures (suitable for moderate global rotations).
 
     Args:
@@ -136,7 +123,7 @@ def ligament_strains(DOFs1: jnp.ndarray, DOFs2: jnp.ndarray, reference_vector: j
     return axial_strain, shear_strain, dRot
 
 
-def ligament_energy(nodal_DOFs: Tuple[jnp.ndarray, jnp.ndarray], reference_vector: jnp.ndarray = jnp.array([1., 0.]), k_stretch=1., k_shear=1., k_rot=1.):
+def ligament_energy(nodal_DOFs: Tuple[jnp.ndarray, jnp.ndarray], reference_vector: jnp.ndarray = jnp.array([1., 0.]), k_stretch=1., k_shear=1., k_rot=1., **kwargs):
     """Computes the strain energy of an elastic ligament using nonlinear strain measures (suitable for arbitrarily large rotations).
 
     Args:
@@ -155,6 +142,46 @@ def ligament_energy(nodal_DOFs: Tuple[jnp.ndarray, jnp.ndarray], reference_vecto
     l0 = jnp.linalg.norm(reference_vector, axis=-1)
 
     return k_stretch * (axial_strain*l0)**2 / 2 + k_shear * (shear_strain*l0)**2 / 2 + k_rot * dRot**2 / 2
+
+
+def ligament_energy_surrogate(nodal_DOFs: Tuple[jnp.ndarray, jnp.ndarray],
+                              reference_vector: jnp.ndarray = jnp.array([1., 0.]),
+                              alpha: jnp.ndarray = jnp.array(jnp.pi / 2),
+                              w_lig: jnp.ndarray = jnp.array(1.0),
+                              **kwargs):
+    """PLACEHOLDER for the learned condensed hinge energy ``W(a, s, theta; alpha, w_lig)``.
+
+    Drop-in replacement for ``ligament_energy_linearized`` (same bond-energy signature), to be
+    filled once the CalculiX surrogate is trained. Its purpose right now is to pin down the
+    interface — what the surrogate reads and where each input comes from — so the dataset we
+    generate is compatible with what the JAX pipeline can feed it.
+
+    Inputs, per ligament, and their provenance:
+      a, s, theta = ligament_strains(*nodal_DOFs, reference_vector)
+          the 3 frame-invariant deployment strains, from the CURRENT face DOFs relative to the
+          INITIAL ligament reference geometry. MEMORYLESS: only current-vs-initial is used, no
+          path history (valid because deployment is monotonic/proportional -> deformation-theory
+          single-valued W).
+      alpha : the cut angle — a per-hinge CONSTANT fixed by the initial design (a function of the
+          r's). It does NOT change during deployment, so it is carried per bond and READ, never
+          inferred from the deformed state.
+      w_lig : the ligament gap — likewise a per-hinge constant from the initial design; the single
+          stiffness lever.
+
+    Dataset compatibility: the CalculiX dataset imposes relative face motions on the RVE and labels
+    each state with (a, s, theta) computed THE SAME WAY (ligament_strains of the imposed motion)
+    plus (alpha, w_lig). So these inputs match the dataset inputs exactly, and the free reaction
+    forces (envelope theorem) provide the Sobolev gradient labels dW/d(a,s,theta).
+
+    TODO: replace the body with ``W = W_baseline(a, s, theta) + W_NN(a, s, theta, alpha, w_lig)``.
+    For now it returns the existing quadratic form so the pipeline runs unchanged.
+    """
+    axial_strain, shear_strain, dRot = ligament_strains(
+        *nodal_DOFs, reference_vector=reference_vector)
+    l0 = jnp.linalg.norm(reference_vector, axis=-1)
+    # --- surrogate goes here: W = W_baseline(a,s,theta) + W_NN(a,s,theta,alpha,w_lig) ---
+    W_placeholder = (axial_strain * l0) ** 2 / 2 + (shear_strain * l0) ** 2 / 2 + dRot ** 2 / 2
+    return W_placeholder
 
 
 def strain_energy_bond(bond_connectivity: jnp.ndarray, bond_energy_fn: Callable = ligament_energy_linearized):
@@ -325,7 +352,8 @@ def combine_face_energies(*energy_fns: Callable):
 
 def build_potential_energy(bond_connectivity,
                            linearized_strains: bool = True,
-                           use_contact: bool = True) -> Callable:
+                           use_contact: bool = True,
+                           bond_energy_fn: Callable = None) -> Callable:
     """Build the total potential energy functional.
 
     Composes elastic strain energy and (optionally) contact energy into a
@@ -335,11 +363,17 @@ def build_potential_energy(bond_connectivity,
         bond_connectivity: (n_hinges, 2) static NumPy array of global node indices.
         linearized_strains: use linearized beam theory if True, full strains otherwise.
         use_contact:        include contact energy penalizing face interpenetration.
+        bond_energy_fn:     optional explicit single-bond energy functional. When given it
+            OVERRIDES the linearized/nonlinear spring default — used to inject the learned
+            condensed hinge-energy surrogate (see
+            ``nff.models.hinge_surrogate.build_hinge_bond_energy_fn``). Default ``None`` keeps
+            the spring model, so existing behavior is unchanged.
 
     Returns:
         Callable: potential_energy(face_displacement, control_params) -> scalar.
     """
-    bond_energy_fn = ligament_energy_linearized if linearized_strains else ligament_energy
+    if bond_energy_fn is None:
+        bond_energy_fn = ligament_energy_linearized if linearized_strains else ligament_energy
     strain_energy = build_strain_energy(
         bond_connectivity=bond_connectivity,
         bond_energy_fn=bond_energy_fn,

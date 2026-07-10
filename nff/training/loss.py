@@ -12,6 +12,7 @@ import jax.numpy as jnp
 from typing import Any, Optional
 from jaxtyping import Array, Float
 from nff.stages.pipeline import forward_pipeline
+from nff.stages.physics.kinematics import face_to_node_kinematics_fn
 from nff.stages.state import CentroidalState
 from nff.stages.geometry import compute_total_area, compute_void_area
 from nff.stages.constraints import hinge_connectivity
@@ -181,6 +182,9 @@ def compute_end_to_end_loss(
         static_features: Any = None,
         load_specs: Any = None,
         target_cloud: Optional[Float[Array, "n_target 2"]] = None,
+        bond_energy_fn=None,
+        stability_fn=None,
+        hinge_geometry_fn=None,
 ) -> tuple[Float[Array, ""], dict]:
     """Chains the forward pipeline with the loss, as required by jax.value_and_grad.
 
@@ -195,7 +199,13 @@ def compute_end_to_end_loss(
     if target_cloud is None:
         target_params = {'type': target_cfg.type, 'center': target_cfg.center, 'radius': target_cfg.radius}
         target_cloud = jnp.asarray(get_target_points(target_params, n_points=500), dtype=jnp.float64)
-    
+
+    # Design-tracked hinge geometry: the surrogate's per-hinge HingeGeometry(w_lig, alpha, sec_dir) is a
+    # deterministic function of the design, recomputed each step and threaded to the solver via
+    # control_params (NOT closed over) so jaxopt's implicit diff carries d(loss)/d(design) through the
+    # whole geometry. None -> ROM / spring energy (no surrogate).
+    hinge_geometry = hinge_geometry_fn(map_params) if hinge_geometry_fn is not None else None
+
     # 1. Run the forward pipeline
     results = forward_pipeline(
         initial_state=initial_state,
@@ -208,8 +218,10 @@ def compute_end_to_end_loss(
         strict_boundary_fit=strict_boundary_fit,
         static_features=static_features,
         load_specs=load_specs,
+        bond_energy_fn=bond_energy_fn,
+        hinge_geometry=hinge_geometry,
     )
-    
+
     # 2. Evaluate Physical Objective
     base_loss, base_metrics = evaluate_physical_loss(
         results['solution'],
@@ -342,8 +354,25 @@ def compute_end_to_end_loss(
     squared_params = jax.tree_util.tree_map(lambda x: jnp.sum(x**2), map_params)
     reg_loss = weight_reg * jax.tree_util.tree_reduce(lambda a, b: a + b, squared_params, initializer=0.0)
 
+    # 4. Physical-stability penalty (surrogate failure-margin + OOD), at the DEPLOYED state.
+    # Chamfer is blind to structural safety; this gives the design gradient a component that
+    # resists walking the shape-equivalent set into near-failure / ill-conditioned configs.
+    stab_loss = jnp.asarray(0.0, dtype=jnp.float64)
+    stab_metrics = {}
+    if stability_fn is not None:
+        # bond_connectivity indexes NODES (n_faces*n_nodes_per_face), so map face displacements
+        # through the rigid-tile kinematics FIRST -- exactly as strain_energy_fn does -- else the
+        # stability gather is wrong (JAX silently clamps out-of-bounds indices).
+        _cnv = results['valid_state'].centroid_node_vectors
+        _nf, _nn, _ = _cnv.shape
+        _node_disp = face_to_node_kinematics_fn(results['solution'].fields[-1], _cnv).reshape(_nf * _nn, 3)
+        # Pass the per-hinge reference bond vectors so the margin's (a, s) reduction is frame-invariant
+        # and identical to the bond energy's (matters for open bonds; ~0 correction for closed hinges).
+        stab_loss, stab_metrics = stability_fn(_node_disp, hinge_geometry, results['reference_bond_vectors'])
+
     total_loss = (base_loss + material_area_loss + hinge_gap_loss + reg_loss
-                  + openness_loss + deformation_loss + void_closure_loss + closure_delta_loss)
+                  + openness_loss + deformation_loss + void_closure_loss + closure_delta_loss
+                  + stab_loss)
 
     all_metrics = {
         **base_metrics,
@@ -355,6 +384,8 @@ def compute_end_to_end_loss(
         'deformation':            deformation_loss,
         'void_closure':           void_closure_loss,
         'closure_delta':          closure_delta_loss,
+        'comp_stability':         stab_loss,
+        **stab_metrics,
         'loss_total':             total_loss,
         'total':                  total_loss,
     }

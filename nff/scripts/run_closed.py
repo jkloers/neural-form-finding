@@ -39,34 +39,17 @@ from nff.config.experiment import load_and_parse_config, TargetConfig
 from nff.config.targets import get_target_points
 from nff.stages.pipeline import forward_pipeline
 from nff.stages.geometry import reconstruct_vertices, compute_face_areas, deformed_vertices
+from nff.stages.physics.kinematics import face_to_node_kinematics_fn
 from nff.training.trainer import create_train_step, TrainState
 from nff.utils.visualization import (
-    plot_cut_pattern, write_deformed_into, plot_loading_diagram,
-    plot_area_change, animate_closed_evolution,
+    write_deformed_into, plot_loading_diagram, plot_area_change, animate_closed_evolution,
 )
 from nff.utils.pipeline_viz import visualize_pipeline_results, plot_loss_history
 from nff.topology.closed_builder_jax import solve_cut_vertices_jax, boundary_flat_from_logits
-from nff.scripts.closed_setup import build_closed_initial_state, init_closed_les_params
-
-
-def _fit_circle(cloud):
-    """Algebraic (Kåsa) best-fit circle of a point cloud -> (center, radius)."""
-    n = cloud.shape[0]
-    A = np.concatenate([2.0 * cloud, np.ones((n, 1))], axis=1)
-    cx, cy, c = np.linalg.solve(A.T @ A + 1e-8 * np.eye(3), A.T @ np.sum(cloud ** 2, axis=1))
-    return np.array([cx, cy]), float(np.sqrt(max(c + cx * cx + cy * cy, 1e-12)))
-
-
-def _boundary_cloud(vs, disp):
-    """Deployed boundary-vertex positions from a valid state + displacement field."""
-    b = np.asarray(vs.boundary_face_node_ids)
-    fc = np.asarray(vs.face_centroids) + np.asarray(disp[:, :2])
-    th = np.asarray(disp[:, 2])
-    cnv = np.asarray(vs.centroid_node_vectors)
-    bf, bl = b[:, 0], b[:, 1]
-    vec = cnv[bf, bl]
-    ct, st = np.cos(th[bf]), np.sin(th[bf])
-    return fc[bf] + np.stack([ct * vec[:, 0] - st * vec[:, 1], st * vec[:, 0] + ct * vec[:, 1]], axis=-1)
+from nff.closed.cut_export import write_cut_patterns
+from nff.closed.setup import (build_closed_initial_state, init_closed_les_params,
+                              build_surrogate_energy)
+from nff.closed.deploy import _fit_circle, _boundary_cloud, _global_verts, _deployed_hinge_xy
 
 
 def _overlap(tess):
@@ -75,15 +58,6 @@ def _overlap(tess):
     twisted = sum(0 if p.is_valid else 1 for p in polys)
     polys = [p if p.is_valid else p.buffer(0) for p in polys]
     return twisted, sum(p.area for p in polys) - unary_union(polys).area
-
-
-def _global_verts(tess, node_positions):
-    """Flatten per-face node positions into the global vertex array of ``tess``."""
-    v = np.array(tess.vertices, dtype=float)
-    for f_id, face in enumerate(tess.faces):
-        for local, gv in enumerate(face.vertex_indices):
-            v[gv] = node_positions[f_id, local]
-    return v
 
 
 def main():
@@ -106,6 +80,13 @@ def main():
 
     initial_state, tessellation = build_closed_initial_state(config)
     params, static_features = init_closed_les_params(config)
+    bond_energy, stability_fn, geometry_fn, damage_fn, w_lig_logit0 = build_surrogate_energy(
+        config, static_features, initial_state, params)
+    if w_lig_logit0 is not None:                        # learnable per-hinge ligament width (option A)
+        params = {**params, 'w_lig_logit': w_lig_logit0}
+    # design-dependent HingeGeometry for the non-training deploys (target sizing + final visuals)
+    def _geom_at(mp):
+        return geometry_fn(mp) if geometry_fn is not None else None
 
     # ── Target. circle_fit: size-free (the loss fits its own circle). Otherwise a
     # FIXED target (circle or rectangle) sized to the untrained physics deploy,
@@ -118,7 +99,8 @@ def main():
     else:
         res0 = forward_pipeline(initial_state, config.target, config.validity, config.physics,
                                 map_type=config.mapping.type, map_params=params,
-                                static_features=static_features, load_specs=load_specs)
+                                static_features=static_features, load_specs=load_specs,
+                                bond_energy_fn=bond_energy, hinge_geometry=_geom_at(params))
         cl0 = _boundary_cloud(res0['valid_state'], res0['solution'].fields[-1])
         sc = float(config.topology.get('target_radius_scale', 1.0))
         if rect_mode:
@@ -131,9 +113,20 @@ def main():
             else:
                 # Auto-fit: bounding box of the (untrained) deployed boundary, scaled.
                 mn, mx = cl0.min(axis=0), cl0.max(axis=0)
-                cen0 = (mn + mx) / 2.0
+                C = (mn + mx) / 2.0
                 scx = float(config.topology.get('target_scale_x', sc))
                 scy = float(config.topology.get('target_scale_y', sc))
+                # Anchor the (shrunk) target at the CLAMPED tile so the pinned clamp stays INSIDE it:
+                # scale the bbox about the clamp centroid, not the bbox centre. With scale<1 this
+                # shrinks toward the clamp (stiffening incentive on the free/pulled side) while keeping
+                # the clamp enclosed (the clamp is a fixed point of the scaling). No clamp -> centre.
+                clamp_faces = config.topology.get('bc_clamped') or []
+                clamp_faces = clamp_faces if isinstance(clamp_faces, list) else []
+                if clamp_faces:
+                    P = np.asarray(initial_state.face_centroids)[np.asarray(clamp_faces, int)].mean(0)
+                    cen0 = P + np.array([scx, scy]) * (C - P)
+                else:
+                    cen0 = C
                 hw, hh = (mx[0] - mn[0]) / 2.0 * scx, (mx[1] - mn[1]) / 2.0 * scy
             rect_geom = (cen0, hw, hh)
             target_cloud_override = get_target_points(
@@ -155,7 +148,8 @@ def main():
         initial_state, target_eff, config.validity, config.physics, config.training,
         map_type=config.mapping.type, use_jit=True,
         load_specs=load_specs, static_features=static_features,
-        target_cloud=target_cloud_override)
+        target_cloud=target_cloud_override, bond_energy_fn=bond_energy, stability_fn=stability_fn,
+        hinge_geometry_fn=geometry_fn)
     state = TrainState(params=params, opt_state=optimizer.init(params), rng=jax.random.PRNGKey(0))
 
     history, snaps = [], [(0, state.params)]
@@ -169,13 +163,26 @@ def main():
         if (epoch + 1) % args.every == 0 or epoch == config.training.num_epochs - 1:
             snaps.append((epoch + 1, state.params))
         if epoch % 25 == 0 or epoch == config.training.num_epochs - 1:
-            print(f"  epoch {epoch:3d}  loss={float(loss):.4e}  chamfer={ch:.4e}")
+            msg = f"  epoch {epoch:3d}  loss={float(loss):.4e}  chamfer={ch:.4e}"
+            if aux.get('hinge_max_D') is not None:    # surrogate damage metrics, when tracked
+                msg += (f"  maxD={float(aux['hinge_max_D']):.2f} meanD={float(aux['hinge_mean_D']):.2f}"
+                        f" p90D={float(aux['hinge_p90_D']):.2f} over={int(aux['hinge_n_over'])}")
+            print(msg)
     best_params = best[1]
     print(f"  best chamfer={best[0]:.4e}")
+    import pickle
+    with open(os.path.join(run_dir, "best_params.pkl"), "wb") as _pf:
+        pickle.dump({k: np.asarray(v) for k, v in best_params.items()}, _pf)  # trained design, for analysis
+    geom_best = _geom_at(best_params)                         # final design's HingeGeometry
+    hinge_w_lig_best = geom_best.w_lig if geom_best is not None else None
+    if hinge_w_lig_best is not None and isinstance(best_params, dict) and 'w_lig_logit' in best_params:
+        print(f"  learned w_lig [mm]: min={float(hinge_w_lig_best.min()):.2f} "
+              f"mean={float(hinge_w_lig_best.mean()):.2f} max={float(hinge_w_lig_best.max()):.2f}")
 
     result = forward_pipeline(initial_state, config.target, config.validity, config.physics,
                               map_type=config.mapping.type, map_params=best_params,
-                              static_features=static_features, load_specs=load_specs)
+                              static_features=static_features, load_specs=load_specs,
+                              bond_energy_fn=bond_energy, hinge_geometry=geom_best)
 
     # ── Target params for the pretty viz (fitted circle is size-adaptive). ──
     vs, disp = result['valid_state'], result['solution'].fields[-1]
@@ -194,16 +201,15 @@ def main():
     visualize_pipeline_results(result, tessellation, config, target_params,
                                args.config_name, run_dir=run_dir, load_specs=load_specs)
 
-    # ── Cut pattern: slits from hinge to opposite hinge across each void. ──
+    # ── Cut patterns: precise per-hinge PNG + true 1:1 A4 print PDF (kerf slots, ligaments,
+    #    fillets + HOLD/PULL marks for the two-hands pinch test). See closed_paper_export. ──
     struct, sliders = static_features['struct'], static_features['sliders']
     cut_coords = np.asarray(solve_cut_vertices_jax(
         struct, boundary_flat_from_logits(sliders, best_params['bnd_logits']),
         jax.nn.sigmoid(best_params['z'])))
-    plot_cut_pattern(cut_coords, struct['T'], struct['cols'],
-                     filepath=os.path.join(run_dir, "cut_pattern.png"),
-                     hinge_margin=max(0.22, 1.6 * float(config.topology.get('hinge_margin', 0.06))),
-                     lw=1.8,
-                     title="Kirigami cut pattern (flat sheet)")
+    write_cut_patterns(run_dir, initial_state=initial_state, cut_coords=cut_coords, struct=struct,
+                       config=config, hinge_model=config.hinge_model, load_specs=load_specs,
+                       config_name=args.config_name, hinge_w_lig=hinge_w_lig_best)
 
     # ── Validity audit + per-panel area change (flat vs deployed). ──
     s0 = write_deformed_into(tessellation, deformed_vertices(vs, jnp.zeros_like(disp)))
@@ -228,14 +234,23 @@ def main():
     # ── Training-evolution animation. ──
     frames = []
     for ep, p in snaps:
+        geom_p = _geom_at(p)
         res = forward_pipeline(initial_state, config.target, config.validity, config.physics,
                                map_type=config.mapping.type, map_params=p,
-                               static_features=static_features, load_specs=load_specs)
+                               static_features=static_features, load_specs=load_specs,
+                               bond_energy_fn=bond_energy, hinge_geometry=geom_p)
         m, v = res['mapped_state'], res['valid_state']
         d = res['solution'].fields[-1]
         flat = _global_verts(tessellation, np.asarray(reconstruct_vertices(m.face_centroids, m.centroid_node_vectors)))
         dep = _global_verts(tessellation, np.asarray(deformed_vertices(v, d)))
-        frames.append((ep, flat, dep, _boundary_cloud(v, d)))
+        # per-hinge ductile damage D + deployed hinge positions, for the colored-dot overlay
+        hinge_xy = D = None
+        if damage_fn is not None and geom_p is not None:
+            _cnv = v.centroid_node_vectors; _nf, _nn, _ = _cnv.shape
+            _nd = face_to_node_kinematics_fn(d, _cnv).reshape(_nf * _nn, 3)
+            D = np.asarray(damage_fn(_nd, geom_p, res['reference_bond_vectors']))
+            hinge_xy = _deployed_hinge_xy(v, d)
+        frames.append((ep, flat, dep, _boundary_cloud(v, d), hinge_xy, D))
 
     def add_target(ax, cloud):
         if circle_fit:
@@ -249,8 +264,9 @@ def main():
             ax.add_patch(Circle(target_eff.center, target_eff.radius,
                                 fill=False, edgecolor="#D62828", lw=2.0, ls="--"))
 
+    fail_line = float(getattr(config.hinge_model, 'fail_line', 1.0))
     animate_closed_evolution(tessellation, frames, add_target,
-                             os.path.join(run_dir, "training_evolution.gif"))
+                             os.path.join(run_dir, "training_evolution.gif"), fail_line=fail_line)
 
     print(f"\nAll visuals written to {run_dir}")
 

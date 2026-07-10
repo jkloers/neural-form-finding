@@ -45,61 +45,14 @@ sys.path.insert(0, str(REPO))
 
 from tesseract_core import Tesseract
 from nff.sofa import oracle_payload as op
-from nff.sofa.fatigue import cycles_to_failure
 from nff.sofa.hinge_geometry import compute_hinge_geometry
+from nff.sofa.hinge_objective import build_objective, hinge_area, phys_from_params as _phys
 
 OUTPUTS_DIR           = REPO / 'data' / 'outputs' / 'hinge_opt'
 TESSERACT_DEFAULT_URL = op.DEFAULT_URL
 
 
-# ── Hinge objective helpers (physical-space params, no SOFA) ───────────────────
-
-def _phys(params: np.ndarray) -> dict:
-    """Parameter vector → name→value dict (keys == Tesseract schema names)."""
-    return {n: float(v) for n, v in zip(op.PARAM_NAMES, params)}
-
-
-def _bezier_from_phys(phys: dict) -> dict:
-    """Physical param dict → bezier_params for compute_hinge_geometry / the oracle."""
-    return {
-        's0_top': phys['s0_top'], 's0_bot': phys['s0_bot'],
-        's1_top': phys['s1_top'], 's1_bot': phys['s1_bot'],
-        'bc_up_xy': [phys['bcu_x'], phys['bcu_y']],
-        'bc_lo_xy': [phys['bcl_x'], phys['bcl_y']],
-    }
-
-
-def _hinge_area(phys: dict, cs) -> float:
-    """Hinge-strip area [m²] from the Bézier boundary — analytic, no SOFA.
-
-    Lens area between the upper and lower arcs (shoelace on a sampled boundary);
-    a cheap regulariser that rewards lean hinges.
-    """
-    geo = compute_hinge_geometry(cs, gap=phys['gap'], bezier_params=_bezier_from_phys(phys))
-
-    def _bez(p0, c, p2, n=40):
-        t = np.linspace(0.0, 1.0, n)[:, None]
-        return (1 - t) ** 2 * p0 + 2 * (1 - t) * t * c + t ** 2 * p2
-
-    total = 0.0
-    for hd in geo['hinge_data']:
-        up = _bez(hd['p0_top'], hd['bc_up'], hd['p1_top'])
-        lo = _bez(hd['p0_bot'], hd['bc_lo'], hd['p1_bot'])
-        poly = np.vstack([up, lo[::-1]])
-        x, y = poly[:, 0], poly[:, 1]
-        total += 0.5 * abs(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))
-    return float(total)
-
-
-def _area_grad(params: np.ndarray, cs, eps: float = 1e-5) -> np.ndarray:
-    """d(hinge_area)/d(param) via central FD on the cheap analytic area."""
-    g = np.zeros(len(params))
-    for i in range(len(params)):
-        pp = params.copy(); pp[i] += eps
-        pm = params.copy(); pm[i] -= eps
-        g[i] = (_hinge_area(_phys(pp), cs) - _hinge_area(_phys(pm), cs)) / (2 * eps)
-    return g
-
+# ── Optimizer (loss + gradient assembly live in nff.sofa.hinge_objective) ──────
 
 class _NumpyAdam:
     """Minimal Adam optimizer in NumPy — no JAX or optax dependency.
@@ -194,8 +147,6 @@ def _lr_schedule_fn(lr: float, n_epochs: int, schedule: str, hold_frac: float):
 def run_optimization(cfg: dict, n_epochs: int, lr: float, tesseract_url: str,
                      out_dir: pathlib.Path, capture_fields: bool = True) -> dict:
     sofa_cfg = cfg.get('sofa', {})
-    mat_cfg  = cfg.get('material', {})
-    loss_cfg = cfg.get('loss', {})
     opt_cfg  = cfg.get('optimization', {})
 
     cs_static = op.build_physical_cs(cfg)
@@ -206,22 +157,9 @@ def run_optimization(cfg: dict, n_epochs: int, lr: float, tesseract_url: str,
     pos_mask = np.array([n in op.POS_NAMES for n in op.PARAM_NAMES])   # gap + 4 reaches
     floor    = float(sofa_cfg.get('param_floor', 0.0005))             # 0.5 mm min
 
-    # Loss weights + the plasticity / low-cycle-fatigue criterion.
-    w_fatigue = float(loss_cfg.get('w_fatigue', loss_cfg.get('w_strain', 5.0)))
-    w_mat     = float(loss_cfg.get('w_mat', 2.0))
-    w_gap     = float(loss_cfg.get('w_gap', 0.5))
-    eps_frac  = float(mat_cfg.get('fracture_strain', 0.045))
-    eps_yield = float(mat_cfg.get('yield_strain',
-                      float(mat_cfg.get('yield_strength', 50e6)) /
-                      float(mat_cfg.get('young_modulus', 3.5e9))))
-    fat_ef    = float(mat_cfg.get('fatigue_ductility_coeff', 0.05))   # ε_f'
-    fat_c     = float(mat_cfg.get('fatigue_ductility_exp', -0.6))     # c (< 0)
-    n_target  = float(loss_cfg.get('target_cycles', 100.0))
-
-    gap_init = float(sofa_cfg.get('gap_initial', 0.003))
-    gap_ref  = max(gap_init, 1e-6)
-    area_ref = max(_hinge_area(_phys(params), cs_static), 1e-12)
-    area_min = float(loss_cfg.get('min_hinge_area_m2', 20e-6))        # 20 mm² floor
+    # The loss and its gradient assembly live in nff.sofa.hinge_objective; the
+    # optimizer only drives it. References (area₀, gap₀) are fixed from the initial design.
+    obj = build_objective(cfg, cs_static, params)
 
     oracle = Tesseract.from_url(tesseract_url)   # SDK handle: HTTP + response decoding via tesseract_core
     optimizer = _NumpyAdam(lr)
@@ -235,12 +173,12 @@ def run_optimization(cfg: dict, n_epochs: int, lr: float, tesseract_url: str,
     p0 = _phys(params)
     print(f"\nHinge optimization (9-param quadratic Bézier, physical space): {n_epochs} epochs, lr={lr}")
     print(f"  Tesseract URL: {tesseract_url}")
-    print(f"  loss = {w_fatigue}·ε_plastic/ε_y + {w_mat}·area/area₀ + {w_gap}·(gap/gap₀)²")
-    print(f"  ε_yield={eps_yield*100:.2f}%  ε_fracture={eps_frac*100:.1f}%  "
-          f"Coffin-Manson(ε_f'={fat_ef}, c={fat_c}); target ≥ {n_target:.0f} cycles")
+    print(f"  loss = {obj.w_fatigue}·ε_plastic/ε_y + {obj.w_mat}·area/area₀ + {obj.w_gap}·(gap/gap₀)²")
+    print(f"  ε_yield={obj.eps_yield*100:.2f}%  ε_fracture={obj.eps_frac*100:.1f}%  "
+          f"Coffin-Manson(ε_f'={obj.fat_ef}, c={obj.fat_c}); target ≥ {obj.n_target:.0f} cycles")
     print(f"  Initial: gap={p0['gap']*1e3:.2f} mm  "
           f"reach s0=({p0['s0_top']*1e3:.2f},{p0['s0_bot']*1e3:.2f}) "
-          f"s1=({p0['s1_top']*1e3:.2f},{p0['s1_bot']*1e3:.2f}) mm  area={area_ref*1e6:.1f} mm²\n")
+          f"s1=({p0['s1_top']*1e3:.2f},{p0['s1_bot']*1e3:.2f}) mm  area={obj.area_ref*1e6:.1f} mm²\n")
 
     def _save_convergence():
         np.savez(
@@ -255,9 +193,9 @@ def run_optimization(cfg: dict, n_epochs: int, lr: float, tesseract_url: str,
             cycles_Nf       = np.array(history['cycles_Nf']),
             max_vm_rot      = np.array(history['max_vm_rot']),
             hinge_area      = np.array(history['hinge_area']),
-            fracture_strain = np.array(eps_frac),
-            yield_strain    = np.array(eps_yield),
-            target_cycles   = np.array(n_target),
+            fracture_strain = np.array(obj.eps_frac),
+            yield_strain    = np.array(obj.eps_yield),
+            target_cycles   = np.array(obj.n_target),
             stress          = np.array(history['max_vm_rot']),   # backward-compat alias
         )
 
@@ -275,45 +213,11 @@ def run_optimization(cfg: dict, n_epochs: int, lr: float, tesseract_url: str,
                   "stopping early — keeping the epochs completed so far.")
             break
 
-        # Optimize the SMOOTH (KS-aggregated) strain: the hard max is a sawtooth in
-        # design space (the peak element keeps switching), which wrecks the FD gradient.
-        # true_eps is the honest peak, kept for reporting only.
-        max_vm   = float(fwd['max_von_mises_stress'])
-        strain   = float(fwd['smooth_principal_strain'])   # design objective
-        true_eps = float(fwd['max_principal_strain'])      # reporting only
-        area     = _hinge_area(phys, cs_static)
-        gp       = phys['gap']
-
-        # loss = w_fatigue·ε_plastic/ε_yield + w_mat·area/area₀ + w_gap·(gap/gap₀)²
-        eps_p = max(0.0, strain - eps_yield)
-        n_f   = cycles_to_failure(eps_p, fat_ef, fat_c)
-        l_fat = w_fatigue * eps_p / eps_yield
-        l_mat = w_mat * area / area_ref
-        l_gap = w_gap * (gp / gap_ref) ** 2
-        loss  = l_fat + l_mat + l_gap
-
-        # ── Gradients (HYBRID: only the strain term costs SOFA) ───────────────
-        # The loss has three terms but only one needs physics: the strain gradient
-        # comes from the oracle's finite-difference Jacobian (the 54-sim cost),
-        # while material and gap are pure geometry, computed locally for free.
-        def _jac_val(output_key, inp_key):
-            return float(jac[output_key][inp_key]) if output_key in jac else 0.0
-        dstrain = np.array([_jac_val('smooth_principal_strain', ki) for ki in op.PARAM_NAMES])
-
-        # Fatigue term: ε_plastic = max(0, ε − ε_yield) has a kink at yield, so its
-        # subgradient is dstrain while plastic (ε > yield) and 0 below — below yield
-        # the design is fatigue-safe and only material/gap steer it.
-        d_fat = (w_fatigue / eps_yield) * (1.0 if strain > eps_yield else 0.0) * dstrain
-
-        # Material term: cheap central-FD on the analytic hinge area (no SOFA).
-        # Degeneracy guard — stop pulling once at the min area, else the hinge collapses.
-        n_p   = len(op.PARAM_NAMES)
-        d_mat = (np.zeros(n_p) if area <= area_min
-                 else (w_mat / area_ref) * _area_grad(params, cs_static))
-
-        # Gap term: exact analytic derivative of (gap/gap0)^2; touches only the gap knob.
-        d_gap = np.zeros(n_p); d_gap[0] = w_gap * 2.0 * gp / gap_ref ** 2
-        grad  = d_fat + d_mat + d_gap
+        # ── Loss + gradient assembly (nff.sofa.hinge_objective) ───────────────
+        # One call owns all three terms and how each is differentiated: the strain
+        # gradient is the oracle's FD Jacobian (the 54-sim cost), material is a cheap
+        # analytic FD, gap is closed-form. aux carries the reporting scalars.
+        loss, grad, aux = obj.loss_and_grad(params, fwd, jac)
 
         optimizer.lr = lr_at(epoch)                              # lr schedule (damps overshoot)
         params = optimizer.update(params, grad)
@@ -325,21 +229,22 @@ def run_optimization(cfg: dict, n_epochs: int, lr: float, tesseract_url: str,
         for name in op.PARAM_NAMES:
             history[name].append(phys[name])
         history['total_loss'].append(loss)
-        history['loss_fatigue'].append(l_fat)
-        history['loss_mat'].append(l_mat)
-        history['loss_gap'].append(l_gap)
-        history['max_strain'].append(strain)
-        history['plastic_strain'].append(eps_p)
-        history['cycles_Nf'].append(min(n_f, 1e9))   # cap inf for storage
-        history['max_vm_rot'].append(max_vm)
-        history['hinge_area'].append(area)
+        history['loss_fatigue'].append(aux['l_fat'])
+        history['loss_mat'].append(aux['l_mat'])
+        history['loss_gap'].append(aux['l_gap'])
+        history['max_strain'].append(aux['strain'])
+        history['plastic_strain'].append(aux['eps_p'])
+        history['cycles_Nf'].append(min(aux['n_f'], 1e9))   # cap inf for storage
+        history['max_vm_rot'].append(aux['max_vm'])
+        history['hinge_area'].append(aux['area'])
         _save_convergence()
 
-        _nf_s = '∞' if not np.isfinite(n_f) else f'{n_f:.1f}'
+        _nf_s = '∞' if not np.isfinite(aux['n_f']) else f"{aux['n_f']:.1f}"
         print(f"  epoch {epoch+1:3d}/{n_epochs}  "
-              f"loss={loss:.3f} (fat={l_fat:.2f} mat={l_mat:.2f} gap={l_gap:.2f})  "
-              f"ε={strain*100:.2f}%(peak {true_eps*100:.1f}%) ε_p={eps_p*100:.2f}% N_f={_nf_s}cyc  "
-              f"σ_max={max_vm/1e6:.0f}MPa area={area*1e6:.1f}mm²  gap={phys['gap']*1e3:.3f} mm  "
+              f"loss={loss:.3f} (fat={aux['l_fat']:.2f} mat={aux['l_mat']:.2f} gap={aux['l_gap']:.2f})  "
+              f"ε={aux['strain']*100:.2f}%(peak {aux['true_eps']*100:.1f}%) "
+              f"ε_p={aux['eps_p']*100:.2f}% N_f={_nf_s}cyc  "
+              f"σ_max={aux['max_vm']/1e6:.0f}MPa area={aux['area']*1e6:.1f}mm²  gap={phys['gap']*1e3:.3f} mm  "
               f"s0=({phys['s0_top']*1e3:.2f},{phys['s0_bot']*1e3:.2f}) "
               f"s1=({phys['s1_top']*1e3:.2f},{phys['s1_bot']*1e3:.2f}) mm  "
               f"bc_up=({phys['bcu_x']*1e3:.2f},{phys['bcu_y']*1e3:.2f})  "

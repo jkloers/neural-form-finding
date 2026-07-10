@@ -24,6 +24,42 @@ def rotation_matrix(angle):
                       [jnp.sin(angle), jnp.cos(angle)]])
 
 
+def corotated_bond_deformation(DOFs1, DOFs2, reference_vector):
+    """Frame-invariant deformation of a bond, shared by the ROM strains and the hinge surrogate.
+
+    The current bond ``reference_vector + relative_translation`` is rotated back by the mean of the
+    two face rotations (the corotated frame) and the reference is subtracted. The result is EXACTLY
+    zero for any rigid-body motion of the pair -- pure translation (relative translation is zero) and
+    pure rotation ``theta`` (``R(-theta)*(R(theta)*ref) - ref = 0``) -- so it isolates the true hinge
+    deformation. This is the single correct reduction; consumers then normalize it their own way (the
+    ROM divides by ``||ref||`` -> dimensionless strain; the surrogate projects onto the design cut
+    frame and scales by ``length_scale`` -> physical mm).
+
+    Args:
+        DOFs1: (..., 3) node DOFs [dx, dy, theta] on face 1.
+        DOFs2: (..., 3) node DOFs [dx, dy, theta] on face 2.
+        reference_vector: (..., 2) rest bond vector (node2 - node1). May be ~0 for a closed hinge,
+            in which case the deformation reduces to the corotated relative translation.
+
+    Returns:
+        deformation: (..., 2) deformation vector in the corotated frame (0 under rigid-body motion).
+        dRot: (...) relative face rotation ``theta2 - theta1`` (already frame-invariant).
+    """
+    relative_translation = DOFs2[..., :2] - DOFs1[..., :2]
+    dRot = DOFs2[..., 2] - DOFs1[..., 2]
+    mean_rot = 0.5 * (DOFs1[..., 2] + DOFs2[..., 2])
+
+    current_bond = reference_vector + relative_translation
+    c = jnp.cos(mean_rot)
+    s = jnp.sin(mean_rot)
+    # R(-mean_rot) @ current_bond  (rotate the current bond back into the corotated frame)
+    corot_bond = jnp.stack([
+        c * current_bond[..., 0] + s * current_bond[..., 1],
+       -s * current_bond[..., 0] + c * current_bond[..., 1],
+    ], axis=-1)
+    return corot_bond - reference_vector, dRot
+
+
 def compute_edge_unit_vectors(current_face_nodes: jnp.ndarray, node_id: int):
     """Computes unit vectors from bond node to the two closest nodes of the same face.
 
