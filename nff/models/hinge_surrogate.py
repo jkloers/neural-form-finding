@@ -337,30 +337,32 @@ def build_hinge_bond_energy_fn(net_params, stats, *, length_scale: float = 1.0,
 
 def build_hinge_stability_fn(net_params, stats, *, bond_pairs,
                              length_scale: float = 1.0, domain: dict = DOMAIN,
-                             w_fail: float = 0.0, w_ood: float = 0.0, m_safe: float = 0.8,
-                             fillet_ratio=None):
-    """Physical-stability penalty at the DEPLOYED state, for the design loss:
+                             w_damage: float = 0.0, w_fail: float = 0.0, w_ood: float = 0.0,
+                             m_safe: float = 1.0, fail_line: float = 1.0, fillet_ratio=None):
+    """Damage / stability penalty at the DEPLOYED state, for the design loss:
 
-        w_fail * sum softplus(K*(D_h - m_safe))/K     (hinges past the BREAK line -> fracturing)
-      + w_ood  * sum domain_barrier(u_h)              (hinges leaving the trustworthy training box)
+        w_damage * mean(D^2)                          (reduce ductile damage on EVERY hinge)
+      + w_fail   * sum softplus(K*(D - m_safe))/K     (legacy one-sided break barrier; 0 = off)
+      + w_ood    * sum domain_barrier(u)              (hinges leaving the trustworthy training box)
 
-    ``D`` is the surrogate's continuous ductile-damage head (0 intact, 1 fracture) and
-    ``u_h = (a, s, theta)`` is the SAME corotated projection the bond energy uses (via
-    ``hinge_kinematics``). Pure chamfer is blind to physical safety, so the optimizer walks the
-    shape-equivalent set into fracturing corners; this term penalizes BREAKING (not mere damage --
-    a plastic mechanism is meant to yield as it folds), with the onset ``m_safe`` at the physical
-    fracture value 1.0 by default (set < 1 for a safety margin).
+    ``D`` is the surrogate's continuous ductile-damage prediction. The CalculiX ductile-damage law it
+    was trained on calls ``D=1`` fracture-INITIATION, but that is a modeling choice with real calibration
+    slack -- a thin plastic-hinge ligament can micro-crack and still fold -- so the PRIMARY term
+    ``w_damage * mean(D^2)`` bakes NO failure threshold into the gradient: it just pushes every hinge's
+    damage down, weighting the worst hinges (grip concentration) hardest, decoupled from where physical
+    failure actually is. ``fail_line`` is a REPORTING overlay ONLY (the count of hinges above it) --
+    calibrate it against the real printed experiment; it never enters the loss. The legacy ``w_fail``
+    softplus barrier (onset ``m_safe``) is kept for older configs.
 
-    The per-hinge ``HingeGeometry`` is passed PER CALL (same design-tracked value the bond energy
-    gets), so the margin reflects the current design. ``bond_pairs`` (n_hinges, 2): the two connected
-    NODES per hinge (indices into the reshaped node-displacement array, = Stage-2 bond_connectivity).
-    The caller MUST pass NODE displacements (face displacements mapped through the rigid-tile
-    kinematics), NOT raw face displacements.
+    ``u = (a, s, theta)`` is the SAME corotated projection the bond energy uses (``hinge_kinematics``).
+    The per-hinge ``HingeGeometry`` is passed PER CALL (same design-tracked value as the bond energy).
+    ``bond_pairs`` (n_hinges, 2): the two connected NODES per hinge (= Stage-2 bond_connectivity); the
+    caller MUST pass NODE displacements (face displacements mapped through the rigid-tile kinematics).
 
-    Returns ``fn(node_displacements, hinge_geometry, reference_vectors) -> (penalty, aux)``, or
-    ``None`` if both weights are 0.
+    Returns ``fn(node_displacements, hinge_geometry, reference_vectors) -> (penalty, aux)``, or ``None``
+    if all weights are 0.
     """
-    if w_fail == 0.0 and w_ood == 0.0:
+    if w_damage == 0.0 and w_fail == 0.0 and w_ood == 0.0:
         return None
     fi = jnp.asarray(np.asarray(bond_pairs)[:, 0])
     fj = jnp.asarray(np.asarray(bond_pairs)[:, 1])
@@ -374,21 +376,39 @@ def build_hinge_stability_fn(net_params, stats, *, bond_pairs,
                                        _unit(geo.sec_dir), length_scale, reference_vector=reference_vectors)
         u = jnp.stack([a, sh, dRot], axis=-1)
         gg = _geom_vector(geo.w_lig, geo.alpha, fr, stats)
-        wl = geo.w_lig
-        # Continuous ductile damage D (0 = intact, 1 = fracture). A plastic mechanism is MEANT to
-        # damage as it folds, so we penalize BREAKING (D past the break line ``m_safe``, default the
-        # physical fracture value 1.0) -- a smooth one-sided softplus barrier, NOT a conservative
-        # safe-margin. ~0 while D < m_safe, ~linear beyond.
-        D = apply_hinge_failure(net_params, u, gg, stats)
+        D = apply_hinge_failure(net_params, u, gg, stats)     # continuous ductile damage (>=0)
+        damage_pen = w_damage * jnp.mean(D ** 2)              # reduce damage on ALL hinges, threshold-free
         break_pen = w_fail * jnp.sum(jax.nn.softplus(_BREAK_SHARP * (D - m_safe)) / _BREAK_SHARP)
-        ood_pen = w_ood * jnp.sum(_domain_barrier(a, sh, dRot, wl, domain))
-        aux = {"stab_fail": break_pen, "stab_ood": ood_pen,
-               "hinge_max_margin": jnp.max(D),                                # max damage
-               "hinge_n_fail": jnp.sum((D >= 1.0).astype(jnp.float64)),       # past fracture
-               "hinge_n_unsafe": jnp.sum((D > m_safe).astype(jnp.float64))}   # past the penalty onset
-        return break_pen + ood_pen, aux
+        ood_pen = w_ood * jnp.sum(_domain_barrier(a, sh, dRot, geo.w_lig, domain))
+        aux = {"stab_damage": damage_pen, "stab_fail": break_pen, "stab_ood": ood_pen,
+               "hinge_max_D": jnp.max(D), "hinge_mean_D": jnp.mean(D),
+               "hinge_p90_D": jnp.percentile(D, 90.0),
+               "hinge_n_over": jnp.sum((D >= fail_line).astype(jnp.float64))}  # display line only
+        return damage_pen + break_pen + ood_pen, aux
 
     return stability
+
+
+def build_hinge_damage_fn(net_params, stats, *, bond_pairs, length_scale: float = 1.0,
+                          fillet_ratio=None):
+    """Per-hinge ductile damage ``D`` at a deployed state, in bond order -- for diagnostics/visuals.
+
+    Same kinematics + geometry as the bond energy / stability term, but returns the raw per-hinge ``D``
+    (n_hinges,) instead of a scalar penalty. ``bond_pairs`` = Stage-2 bond_connectivity (node pairs), so
+    the returned order matches the bond-energy hinges (and the same node indices place the dots).
+    """
+    fi = jnp.asarray(np.asarray(bond_pairs)[:, 0])
+    fj = jnp.asarray(np.asarray(bond_pairs)[:, 1])
+    fr = jnp.asarray(fillet_ratio if fillet_ratio is not None else 0.16, dtype=jnp.float64)
+
+    def damage(node_displacements, hinge_geometry, reference_vectors=None):
+        geo = hinge_geometry
+        a, sh, dRot = hinge_kinematics((node_displacements[fi], node_displacements[fj]),
+                                       _unit(geo.sec_dir), length_scale, reference_vector=reference_vectors)
+        u = jnp.stack([a, sh, dRot], axis=-1)
+        return apply_hinge_failure(net_params, u, _geom_vector(geo.w_lig, geo.alpha, fr, stats), stats)
+
+    return damage
 
 
 # ── training loss ─────────────────────────────────────────────────────────────────

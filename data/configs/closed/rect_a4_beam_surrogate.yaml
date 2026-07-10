@@ -23,10 +23,10 @@ tessellation:
   target_scale_y: 0.95
   clamped_dofs: [0]        # left edge: x only
   y_pin_faces: [11]        # remove the y rigid-body mode (top-left corner)
-  target_half_w: 9.10     # 17*1.07/2 (~7% expansion = the F=0.07 deploy)
-  target_half_h: 6.42     # 12*1.07/2
-  target_cx: 9.10
-  target_cy: 5.58
+  target_half_w: 9.31     # 17*1.095/2 (~9.5% expansion)
+  target_half_h: 6.57     # 12*1.095/2
+  target_cx: 9.31
+  target_cy: 5.43
 
 mapping:
   map_type: closed_les
@@ -44,7 +44,7 @@ hinge_model:
   barrier: 0.05            # weak: let a small force give a partial (in-domain) deployment
   w_fail: 1.0            # x154 raw -> ~8 (vs ~35 chamfer)
   w_ood: 1.0e-3           # real OOD design penalty (was 1e-5, negligible)
-  m_safe: 0.75            # safe failure-margin line (peeq/eps_f)
+  m_safe: 1.0             # break-onset = physical fracture D>=1 (no conservative margin)
   learn_w_lig: true       # per-hinge ligament width as a learnable DOF (thicken failing hinges)
 
 physics:
@@ -67,18 +67,18 @@ boundary_conditions:
   clamped_faces: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
 
 loads:                     # right edge pulled +x only (0.1/face: mean hinge ~10deg, max ~32deg -- in-domain plastic, on the trained manifold)
-  - {face: 192, dof: 0, value: 0.07}
-  - {face: 193, dof: 0, value: 0.07}
-  - {face: 194, dof: 0, value: 0.07}
-  - {face: 195, dof: 0, value: 0.07}
-  - {face: 196, dof: 0, value: 0.07}
-  - {face: 197, dof: 0, value: 0.07}
-  - {face: 198, dof: 0, value: 0.07}
-  - {face: 199, dof: 0, value: 0.07}
-  - {face: 200, dof: 0, value: 0.07}
-  - {face: 201, dof: 0, value: 0.07}
-  - {face: 202, dof: 0, value: 0.07}
-  - {face: 203, dof: 0, value: 0.07}
+  - {face: 192, dof: 0, value: 0.08}
+  - {face: 193, dof: 0, value: 0.08}
+  - {face: 194, dof: 0, value: 0.08}
+  - {face: 195, dof: 0, value: 0.08}
+  - {face: 196, dof: 0, value: 0.08}
+  - {face: 197, dof: 0, value: 0.08}
+  - {face: 198, dof: 0, value: 0.08}
+  - {face: 199, dof: 0, value: 0.08}
+  - {face: 200, dof: 0, value: 0.08}
+  - {face: 201, dof: 0, value: 0.08}
+  - {face: 202, dof: 0, value: 0.08}
+  - {face: 203, dof: 0, value: 0.08}
 
 target:
   type: rectangle
@@ -111,7 +111,7 @@ training:
 visualization:
   stage0: false
   stage1: false
-  stage2: false
+  stage2: true
   energy_plot: false       # surrogate = single W (no stretch/shear/rot split); dedicated visual TODO
   animation: false
   show_plots: false

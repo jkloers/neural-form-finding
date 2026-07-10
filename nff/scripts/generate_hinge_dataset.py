@@ -82,12 +82,12 @@ def run_rehearsal(parallel, timeout):
 def run_campaign(args):
     const = HingeConstants(fillet_ratio=args.fillet_ratio, n_through=args.n_through,
                            thickness=args.thickness, r_win=args.r_win,
-                           lc_fillet_frac=args.lc_fillet_frac)
+                           lc_fillet_frac=args.lc_fillet_frac, lc_min_floor=args.lc_min_floor)
     jobs = sample_jobs(args.n, seed=args.seed, n_steps=args.steps,
                        theta1_deg=(args.angle, args.angle),
                        w_lig=(args.w_lig_min, args.w_lig_max),
                        eta_a=(0.0, args.eta_a_max), eta_s=(-args.eta_s_max, args.eta_s_max),
-                       fillet_ratio=(args.fillet_min, args.fillet_max))
+                       fillet_ratio=(args.fillet_min, args.fillet_max), spine_frac=args.spine_frac)
     print(f"Campaign: {args.n} jobs (t={const.thickness}mm, w_lig=[{args.w_lig_min},{args.w_lig_max}]mm, "
           f"fillet=[{args.fillet_min},{args.fillet_max}], n_through={const.n_through}, to {args.angle:.0f}deg, "
           f"eta_a<={args.eta_a_max} |eta_s|<={args.eta_s_max}, fracture_margin={args.fracture_margin}) "
@@ -111,6 +111,9 @@ def main():
     ap.add_argument("--timeout", type=float, default=300, help="per-sim cap [s]; stop-at-fracture ends most sooner")
     ap.add_argument("--batch-size", dest="batch_size", type=int, default=50, help="checkpoint after every N jobs")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--spine-frac", dest="spine_frac", type=float, default=0.25,
+                    help="fraction of PURE-ROTATION spine jobs (eta_a=eta_s=0); 0 = all fan "
+                         "(axial+shear); jobs are shuffled so any partial run stays representative")
     ap.add_argument("--steps", type=int, default=20, help="load steps per ray")
     ap.add_argument("--angle", type=float, default=60.0, help="full-deployment rotation [deg]")
     ap.add_argument("--fillet-ratio", dest="fillet_ratio", type=float, default=0.16)
@@ -128,6 +131,9 @@ def main():
                     help="Saint-Venant window radius [mm]; raise (~45) so window stays >=2x w_lig at wide w_lig")
     ap.add_argument("--lc-fillet-frac", dest="lc_fillet_frac", type=float, default=0.4,
                     help="fillet mesh fineness (lc_min = frac*rho); lower = finer = smoother")
+    ap.add_argument("--lc-min-floor", dest="lc_min_floor", type=float, default=0.06,
+                    help="absolute floor on element size [mm]; raise (~0.12) to cap mesh blow-up "
+                         "at the smallest-fillet corner (biggest solve-cost lever at low w_lig)")
     # cut-tip fillet as a swept DOF (rho = fillet_ratio*w_lig): the stress-relief lever
     ap.add_argument("--fillet-min", dest="fillet_min", type=float, default=0.16, help="fillet_ratio lo")
     ap.add_argument("--fillet-max", dest="fillet_max", type=float, default=0.16, help="fillet_ratio hi (>min = swept)")

@@ -219,15 +219,17 @@ class HingeModelConfig(eqx.Module):
     length_scale: float
     energy_scale: float
     barrier: float
+    w_damage: float
     w_fail: float
     w_ood: float
     m_safe: float
+    fail_line: float
     learn_w_lig: bool
 
     def __init__(self, type='rom', checkpoint='data/outputs/hinge_surrogate.pkl', material='S235',
                  thickness_mm=1.0, w_lig_mm=5.0, calibrate=True, length_scale=0.0,
-                 energy_scale=0.0, barrier=0.05, w_fail=0.0, w_ood=0.0, m_safe=0.8,
-                 learn_w_lig=False):
+                 energy_scale=0.0, barrier=0.05, w_damage=0.0, w_fail=0.0, w_ood=0.0, m_safe=1.0,
+                 fail_line=1.0, learn_w_lig=False):
         self.type = type
         self.checkpoint = checkpoint
         self.material = material
@@ -237,11 +239,18 @@ class HingeModelConfig(eqx.Module):
         self.length_scale = length_scale
         self.energy_scale = energy_scale
         self.barrier = barrier
-        # Physical-stability design-loss weights (0 = off): failure-margin penalty, OOD penalty,
-        # and the safe failure-margin threshold (penalize hinges with margin > m_safe).
+        # Design-loss damage/stability weights (0 = off):
+        #   w_damage: PRIMARY continuous term, weight on mean(D^2) over ALL hinges (threshold-free);
+        #   w_fail:   legacy one-sided break barrier at onset m_safe (kept for older configs);
+        #   w_ood:    out-of-training-box barrier.
+        # fail_line: REPORTING-only D threshold (count of hinges above it); never enters the loss --
+        #   calibrate it against the real printed experiment (D=1 = model fracture-initiation, likely
+        #   conservative for a foldable plastic hinge).
+        self.w_damage = w_damage
         self.w_fail = w_fail
         self.w_ood = w_ood
         self.m_safe = m_safe
+        self.fail_line = fail_line
         self.learn_w_lig = learn_w_lig    # per-hinge ligament width as a learnable design DOF
 
 
@@ -380,9 +389,11 @@ def _parse_hinge_model_config(raw: dict) -> HingeModelConfig:
         length_scale=float(raw.get("length_scale", 0.0)),
         energy_scale=float(raw.get("energy_scale", 0.0)),
         barrier=float(raw.get("barrier", 0.05)),
+        w_damage=float(raw.get("w_damage", 0.0)),
         w_fail=float(raw.get("w_fail", 0.0)),
         w_ood=float(raw.get("w_ood", 0.0)),
-        m_safe=float(raw.get("m_safe", 0.8)),
+        m_safe=float(raw.get("m_safe", 1.0)),
+        fail_line=float(raw.get("fail_line", 1.0)),
         learn_w_lig=bool(raw.get("learn_w_lig", False)),
     )
 

@@ -86,8 +86,14 @@ def build_cut_geometry(coords, T, cols, *, w_c, w_lig, rho, length_scale=1.0,
             if L < 1e-9:
                 continue
             u = d / L
-            a_hinge = a_in and T[ai, aj] > 0                    # interior end -> retract + fillet
-            b_hinge = b_in and T[bi, bj] > 0
+            # A cut end is a HINGE (retract by w_lig + fillet) at a crossing that leaves a ligament:
+            #   * neighbour is an interior cut (T>0), OR
+            #   * neighbour is a BOUNDARY cut (T<0) and THIS cut is interior (t>0).
+            # The second case is the boundary hinges: without it the interior cut runs straight
+            # THROUGH the border, severing a ligament that must stay (the sheet falls apart when cut).
+            # This exactly matches the physics hinge set (_build_hinges): 60 @ 6x6, 180 @ 10x10.
+            a_hinge = a_in and (T[ai, aj] > 0 or (T[ai, aj] < 0 and t > 0))
+            b_hinge = b_in and (T[bi, bj] > 0 or (T[bi, bj] < 0 and t > 0))
             wl_a, rho_a = params_at(A) if a_hinge else (0.0, 0.0)
             wl_b, rho_b = params_at(B) if b_hinge else (0.0, 0.0)
             p0 = A + (wl_a if a_hinge else 0.0) * u

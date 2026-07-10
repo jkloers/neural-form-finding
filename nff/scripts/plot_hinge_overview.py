@@ -69,12 +69,14 @@ def main():
     alpha_sel = float(alphas[hid])
 
     w_lig = _W_LIG_FRAC                                  # coords units (tile pitch = 1)
-    fig, (axL, axR) = plt.subplots(1, 2, figsize=(20, 10), facecolor="white")
+    # Article layout: no panel titles, tight inter-panel gap, both panels centred in their half.
+    # The figure is sized close to 2x the (~square) panel content so there is little padding to gap.
+    fig, (axL, axR) = plt.subplots(1, 2, figsize=(15, 7.6), facecolor="white",
+                                   gridspec_kw={"wspace": 0.0})
 
     # LEFT = principle drawing: exaggerated kerf + tip fillets so the cut geometry reads clearly
     plot_hinge_strips(coords, hs, w_lig, _KERF_MACRO * w_lig, r_win_factor=_RWIN_FACTOR, ax=axL,
-                      mm_per_unit=_MM_PER_TILE, scale_mm=100.0, fillet=_FILLET_MACRO * w_lig,
-                      title="meshable hinge strips on the closed tessellation")
+                      mm_per_unit=_MM_PER_TILE, scale_mm=100.0, fillet=_FILLET_MACRO * w_lig)
 
     P, Rc = pivots[hid], 3.2 * w_lig                    # circle the detailed hinge — bigger, DOTTED
     axL.add_patch(Circle(P, Rc, edgecolor=_INK, facecolor="none", lw=1.1,
@@ -87,10 +89,10 @@ def main():
     wl = 5.0
     alpha_draw = (180.0 - alpha_sel) if args.supplement else alpha_sel
     plot_hinge_dimensions(w_lig=wl, w_c=_KERF_FRAC * wl, alpha_deg=alpha_draw,
-                          fillet=_FILLET_FRAC * wl, ax=axR,
-                          title=f"one hinge — geometry & real mesh  (α = {alpha_draw:.0f}°)")
+                          fillet=_FILLET_FRAC * wl, ax=axR)
 
-    fig.savefig(args.out, dpi=200, bbox_inches="tight")
+    axL.set_anchor("E"); axR.set_anchor("W")            # pull both to the inner edge -> close together,
+    fig.savefig(args.out, dpi=200, bbox_inches="tight")  # vertically centred
     plt.close(fig)
     print(f"saved {args.out}  (hinge {hid}, alpha {alpha_sel:.1f}°)")
 

@@ -47,6 +47,11 @@ def build_closed_initial_state(config):
     # net vertical load has support while the rest of the edge stays x-only.
     for f in topo.get('y_pin_faces', []) or []:
         tessellation.set_face_dofs(int(f), [0, 1])
+    # y-roller: pin y ONLY (DOF 1) so the face slides freely in x under an x-load. Removes the
+    # rigid rotation mode of a single-tile pinch without blocking the pull (an x-force face can
+    # still be y-rollered — different DOFs).
+    for f in topo.get('y_roller_faces', []) or []:
+        tessellation.set_face_dofs(int(f), [1])
 
     state = CentroidalState.from_tessellation(tessellation, target_cfg=config.target)
     return state, tessellation
@@ -59,6 +64,12 @@ def init_closed_les_params(config):
              'bnd_logits': (n_logits,) per-edge logits -> ordered boundary sliders}.
     The ordered-boundary + r∈(0,1) parameterization guarantees a valid (non-self-
     intersecting) flat tessellation, so no validity loss is needed.
+
+    Optional RANDOM starting design (topology ``init_noise`` > 0, seeded by ``init_seed``): adds
+    Gaussian noise to z and bnd_logits. Still valid by construction (r = sigmoid stays in (0,1);
+    ordered-softmax boundary stays convex), so different random starts probe whether the optimizer
+    is init-sensitive / stuck at the uniform symmetric attractor. ``init_noise`` = 0 (default) is the
+    deterministic uniform init -- backward-compatible.
     """
     topo = config.topology
     M, N = int(topo['M']), int(topo['N'])
@@ -69,10 +80,14 @@ def init_closed_les_params(config):
     sliders = build_boundary_edges(struct, spacing=spacing)
 
     z_init = float(np.log(r_init / (1.0 - r_init)))         # sigmoid(z_init) = r_init
-    params = {
-        'z': jnp.full((struct['rows'], struct['cols']), z_init),
-        'bnd_logits': jnp.asarray(sliders['init_logits'], dtype=float),
-    }
+    z = np.full((struct['rows'], struct['cols']), z_init)
+    bnd = np.asarray(sliders['init_logits'], dtype=float)
+    noise = float(topo.get('init_noise', 0.0))
+    if noise > 0.0:
+        rng = np.random.default_rng(int(topo.get('init_seed', 0)))
+        z = z + rng.normal(0.0, noise, size=z.shape)
+        bnd = bnd + rng.normal(0.0, noise, size=bnd.shape)
+    params = {'z': jnp.asarray(z, dtype=float), 'bnd_logits': jnp.asarray(bnd, dtype=float)}
     static_features = {'struct': struct, 'sliders': sliders, 'closed_les': True}
     return params, static_features
 
@@ -132,18 +147,19 @@ def build_surrogate_energy(config, static_features, state, init_map_params):
     ``forward_pipeline(hinge_geometry=)`` (control_params) and into ``stability_fn``. Because it is an
     explicit solver input (not closed over), jaxopt's implicit diff carries the full ``d/d(design)``.
 
-    Returns ``(bond_energy_fn, stability_fn, hinge_geometry_from_design, w_lig_logit0)``;
-    ``hinge_geometry_from_design(map_params) -> HingeGeometry``. ``(None,)*4`` for the ROM.
+    Returns ``(bond_energy_fn, stability_fn, hinge_geometry_from_design, damage_fn, w_lig_logit0)``;
+    ``hinge_geometry_from_design(map_params) -> HingeGeometry``, ``damage_fn(node_disp, geom, ref) ->
+    per-hinge D`` (diagnostics/visuals). ``(None,)*5`` for the ROM.
     """
     import numpy as np
     hm = getattr(config, 'hinge_model', None)
     if hm is None or getattr(hm, 'type', 'rom') != 'surrogate':
         print("[hinge_model] ROM (linear-spring ligament energy)")
-        return None, None, None, None
+        return None, None, None, None, None
 
     from nff.models.hinge_surrogate import (load_hinge_surrogate, build_hinge_bond_energy_fn,
-                                            build_hinge_stability_fn, calibrate_scales, DOMAIN,
-                                            HingeGeometry, w_lig_from_logit)
+                                            build_hinge_stability_fn, build_hinge_damage_fn,
+                                            calibrate_scales, DOMAIN, HingeGeometry, w_lig_from_logit)
     from nff.topology.hinge_descriptor import build_hinge_descriptor_structure
 
     topo = config.topology
@@ -151,15 +167,23 @@ def build_surrogate_energy(config, static_features, state, init_map_params):
     net, stats, eps_f = load_hinge_surrogate(hm.checkpoint)
     fr = float(getattr(hm, 'fillet_ratio', 0.16))     # design cut-tip fillet (3rd g DOF for 6-feat nets)
     dom = stats.get("domain", DOMAIN)                 # data-driven OOD box (wide v2 auto-widens it)
+    w_damage = float(getattr(hm, 'w_damage', 0.0))
     w_fail = float(getattr(hm, 'w_fail', 0.0)); w_ood = float(getattr(hm, 'w_ood', 0.0))
-    m_safe = float(getattr(hm, 'm_safe', 0.8)); bond_pairs = np.asarray(state.bond_connectivity)
+    m_safe = float(getattr(hm, 'm_safe', 1.0)); fail_line = float(getattr(hm, 'fail_line', 1.0))
+    bond_pairs = np.asarray(state.bond_connectivity)
     w_lig_arr = jnp.full(state.hinge_node_pairs.shape[0], float(hm.w_lig_mm))
 
-    # static topology (once): hinge structure + the design-invariant bond-order permutation
+    # static topology (once): hinge structure + the design-invariant bond-order permutation.
+    # `state` is ALWAYS the uniform-r_init sheet (build_closed_tessellation), so the position-based
+    # perm matching must use the UNIFORM design -- not init_map_params, which may be a RANDOM start
+    # that no longer aligns with `state`. The perm is topological, so uniform-vs-random is irrelevant
+    # to its correctness; alpha0/sec0 (header + calibration) then reflect the actual starting design.
     hs = build_hinge_descriptor_structure(M, N, ref_r=float(topo.get('r_init', 0.45)))
-    coords0 = _flat_coords_from_design(static_features, init_map_params)
-    perm = _bond_order_perm(state, hs, coords0)
-    alpha0, sec0 = _alpha_sec_bond_order(hs, perm, coords0)
+    ru = float(topo.get('r_init', 0.45))
+    uni_params = {'z': jnp.full_like(jnp.asarray(init_map_params['z']), float(np.log(ru / (1.0 - ru)))),
+                  'bnd_logits': jnp.zeros_like(jnp.asarray(init_map_params['bnd_logits']))}
+    perm = _bond_order_perm(state, hs, _flat_coords_from_design(static_features, uni_params))
+    alpha0, sec0 = _alpha_sec_bond_order(hs, perm, _flat_coords_from_design(static_features, init_map_params))
 
     # calibrate the Gap-2 scales ONCE at the initial design (fixed normalization bridges)
     if hm.calibrate:
@@ -173,8 +197,9 @@ def build_surrogate_energy(config, static_features, state, init_map_params):
     print(f"[hinge_model] SURROGATE  material={hm.material} t={hm.thickness_mm}mm w_lig={hm.w_lig_mm}mm "
           f"eps_f={eps_f}  |  {len(alpha0)} hinges  alpha {a0.min():.0f}-{a0.max():.0f}deg (RVE-frame)"
           f"  length_scale={ls:.3g}mm/u  energy_scale={es:.3g}  barrier={hm.barrier}")
-    if w_fail or w_ood:
-        print(f"[hinge_model]   + stability loss  w_fail={w_fail}  w_ood={w_ood}  m_safe={m_safe}")
+    if w_damage or w_fail or w_ood:
+        print(f"[hinge_model]   + damage loss  w_damage={w_damage} (mean D^2)  w_fail={w_fail}  "
+              f"w_ood={w_ood}  fail_line(report only)={fail_line}")
 
     w_lig_logit0 = None
     if bool(getattr(hm, 'learn_w_lig', False)):
@@ -187,8 +212,9 @@ def build_surrogate_energy(config, static_features, state, init_map_params):
     bond_energy = build_hinge_bond_energy_fn(net, stats, length_scale=ls, energy_scale=es,
                                              barrier=hm.barrier, domain=dom, fillet_ratio=fr)
     stability_fn = build_hinge_stability_fn(net, stats, bond_pairs=bond_pairs, length_scale=ls,
-                                            domain=dom, w_fail=w_fail, w_ood=w_ood, m_safe=m_safe,
-                                            fillet_ratio=fr)
+                                            domain=dom, w_damage=w_damage, w_fail=w_fail, w_ood=w_ood,
+                                            m_safe=m_safe, fail_line=fail_line, fillet_ratio=fr)
+    damage_fn = build_hinge_damage_fn(net, stats, bond_pairs=bond_pairs, length_scale=ls, fillet_ratio=fr)
 
     def hinge_geometry_from_design(map_params):
         """The per-hinge HingeGeometry(w_lig, alpha, sec_dir) for the CURRENT design -- TRACED in
@@ -199,4 +225,4 @@ def build_surrogate_energy(config, static_features, state, init_map_params):
                  if isinstance(map_params, dict) and 'w_lig_logit' in map_params else w_lig_arr)
         return HingeGeometry(w_lig=w_lig, alpha=alpha, sec_dir=sec_dir)
 
-    return bond_energy, stability_fn, hinge_geometry_from_design, w_lig_logit0
+    return bond_energy, stability_fn, hinge_geometry_from_design, damage_fn, w_lig_logit0

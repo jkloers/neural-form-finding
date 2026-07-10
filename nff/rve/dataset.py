@@ -73,7 +73,8 @@ def sample_jobs(n, seed=0, *, w_lig=(1.0, 10.0), alpha_deg=(30.0, 150.0),
                             float(_lerp(uf[i, 3], *eta_a)), float(_lerp(uf[i, 4], *eta_s)),
                             n_steps, f"f{i:05d}")
         jobs.append((geo, ray))
-    return jobs
+    np.random.default_rng(seed + 2).shuffle(jobs)                # interleave spine + fan so any
+    return jobs                                                  # partial run stays representative
 
 
 # ── parallel evaluation ───────────────────────────────────────────────────────────

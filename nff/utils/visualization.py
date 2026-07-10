@@ -221,8 +221,20 @@ def _draw_cuts_as_gaps(ax, coords, T, cols, retract, kerf, zorder=3, fillet=0.0)
         A, B = coords[pa], coords[pb]
         u = (B - A) / (np.linalg.norm(B - A) + 1e-12)
         n = np.array([-u[1], u[0]])
-        is_bnd = lambda p: T[divmod(p // 2, cols)] < 0
-        a_ret, b_ret = not is_bnd(pa), not is_bnd(pb)
+        # Retract + fillet a cut end iff it leaves a ligament (a HINGE) -- the same rule as
+        # cut_pattern.build_cut_geometry: interior neighbour, OR interior cut terminating at a
+        # boundary cut. An off-grid neighbour (endpoint pinned to this cut's own border vertex) is
+        # the sheet EDGE -> no ligament. Without the boundary case, boundary hinges lost their fillet.
+        t_self = int(T[i, j])
+
+        def _hinge_at(p):
+            ni, nj = divmod(p // 2, cols)
+            if (ni, nj) == (i, j):                 # own border vertex -> sheet edge, not a hinge
+                return False
+            t_nbr = int(T[ni, nj])
+            return t_nbr > 0 or (t_nbr < 0 and t_self > 0)
+
+        a_ret, b_ret = _hinge_at(pa), _hinge_at(pb)
         p0 = A + (retract if a_ret else 0.0) * u
         p1 = B - (retract if b_ret else 0.0) * u
         ax.add_patch(Polygon([p0 + hk*n, p1 + hk*n, p1 - hk*n, p0 - hk*n],
@@ -331,7 +343,8 @@ def plot_hinge_strips(coords, hstruct, w_lig, kerf, r_win_factor=2.0,
         L = scale_mm / mm_per_unit
         x0 = hull[:, 0].min(); y0 = hull[:, 1].min() - 0.06 * np.ptp(hull[:, 1])
         ax.plot([x0, x0 + L], [y0, y0], color="#1A1A1A", lw=3, zorder=20)
-        ax.annotate(f"{scale_mm:.0f} mm", (x0 + L/2, y0), ha="center", va="bottom", fontsize=10, zorder=20)
+        ax.annotate(f"{scale_mm:.0f} mm", (x0 + L/2, y0 - 0.015 * np.ptp(hull[:, 1])),
+                    ha="center", va="top", fontsize=10, zorder=20)     # number BELOW the bar (match detail panel)
 
     ax.set_aspect("equal")
     ax.axis("off")
@@ -521,7 +534,8 @@ def plot_hinge_dimensions(w_lig=10.0, w_c=3.0, alpha_deg=62.0, fillet=2.0, thick
     green = green.difference(main_void)
     _fill_shapely(ax, green, facecolor=lig_color, edgecolor="none", alpha=1.0, zorder=2)
     # the REAL pipeline mesh (gmsh, ligament-refined) over the RVE — real grading = physical intuition
-    _rve_real_mesh(ax, green, w_lig=wl, lc_min=max(0.5 * fillet, 0.09 * wl), lc_max=0.42 * wl)
+    _rve_real_mesh(ax, green, w_lig=wl, lc_min=max(0.5 * fillet, 0.09 * wl), lc_max=0.42 * wl,
+                   color="#8CC0AF")     # mesh visible on the teal, a touch darker
 
     def _dim_linear(p1, p2, off, label, side=1, pad=1.6):
         p1, p2 = np.array(p1, float), np.array(p2, float)
@@ -540,9 +554,13 @@ def plot_hinge_dimensions(w_lig=10.0, w_c=3.0, alpha_deg=62.0, fillet=2.0, thick
 
     # w_lig: the ligament gap (main-cut tip -> secondary cut), on the right
     _dim_linear((wc/2+0.3*wl, -wl), (wc/2+0.3*wl, 0.0), off=0.9*wl, label=r"$w_{lig}$", side=1)
-    # w_c: across the main cut
-    _dim_linear(tip + 1.7*wl*um - wc/2*np.array([-um[1], um[0]]),
-                tip + 1.7*wl*um + wc/2*np.array([-um[1], um[0]]), off=0.8*wl, label=r"$w_c$", side=-1)
+    # w_c (kerf): the cut is too thin for an in-place dimension arrow -> leader callout pointing AT it
+    _cut_pt = tip + 2.05*wl*um + (wc/2)*np.array([-um[1], um[0]])       # a point on the main-cut edge
+    _lab_pt = _cut_pt + np.array([0.62*wl, -0.10*wl])                   # label just off the cut
+    ax.add_patch(FancyArrowPatch(_lab_pt, _cut_pt, arrowstyle="-|>", mutation_scale=11,
+                                 color=dim, lw=1.0, zorder=7, shrinkA=3, shrinkB=0))
+    ax.annotate(r"$w_c$", _lab_pt + np.array([0.05*wl, 0.0]), color=ink, fontsize=12,
+                ha="left", va="center", zorder=7)
     # green-region width (the meshed RVE width) as a parameter, along the secondary cut
     _dim_linear((-Rw, 0.0), (Rw, 0.0), off=1.3*wl, label=r"$w_{mesh}$", side=1)
     # alpha = angle between the main cut and the secondary cut, drawn AT THE TOP of the main cut
@@ -558,11 +576,12 @@ def plot_hinge_dimensions(w_lig=10.0, w_c=3.0, alpha_deg=62.0, fillet=2.0, thick
     amid = np.radians(am / 2.0)
     ax.annotate(r"$\alpha$", tip + 0.52*wl*np.array([np.cos(amid), np.sin(amid)]),
                 color=ink, fontsize=12, ha="center", va="center", zorder=9)
-    # fillet radius rho — shown as a radius (centre of the tip fillet -> arc)
+    # fillet radius rho — radius arrow from the tip-fillet centre; label kept CLOSE to the centre
     u_r = np.array([np.cos(np.radians(212)), np.sin(np.radians(212))])
     ax.annotate("", tip + fillet*u_r, tip, zorder=9,
                 arrowprops=dict(arrowstyle="-|>", color=ink, lw=1.0, shrinkA=0, shrinkB=0))
-    ax.annotate(r"$R=\rho$", tip + (fillet + 0.4*wl)*u_r, color=ink, fontsize=10, ha="right", va="center", zorder=9)
+    ax.annotate(r"$R=\rho$", tip + (fillet + 0.12*wl)*u_r, color=ink, fontsize=10,
+                ha="right", va="center", zorder=9)
     # cut-length labels — plain text, next to their voids (they mark the cuts, not dimensions)
     ax.annotate(r"$L_{main}$", (wc/2 + 0.35*wl, -2.5*wl), color=dim, fontsize=11, ha="left", va="center")
     ax.annotate(r"$L_{sec}$", (Rw + 0.45*wl, wc/2), color=dim, fontsize=11, ha="left", va="center")
@@ -571,7 +590,8 @@ def plot_hinge_dimensions(w_lig=10.0, w_c=3.0, alpha_deg=62.0, fillet=2.0, thick
     sb = 10.0
     xb, yb = -Xw, -Yw - 1.0*wl
     ax.plot([xb, xb + sb], [yb, yb], color=ink, lw=3, zorder=8)
-    ax.annotate(f"{sb:.0f} mm", (xb + sb/2, yb - 0.35*wl), ha="center", va="top", fontsize=9, zorder=8)
+    # text gap below the bar ~1.5% of panel height, matching the strips-panel scale bar
+    ax.annotate(f"{sb:.0f} mm", (xb + sb/2, yb - 0.14*wl), ha="center", va="top", fontsize=10, zorder=8)
 
     ax.set_xlim(-Xw - 0.3*wl, Xw + 0.3*wl); ax.set_ylim(-Yw - 2.0*wl, Yw + 0.5*wl)
     if title:
@@ -636,8 +656,16 @@ def plot_loading_diagram(tessellation, clamped_faces, load_specs, filepath,
     def fv(fi):
         return np.asarray(tessellation.vertices[tessellation.faces[int(fi)].vertex_indices], dtype=float)
 
+    # Expand list-valued load faces (distributed loads) into one spec per face, so each
+    # loaded tile draws its own arrow and the single-face logic below stays unchanged.
+    specs = []
+    for s in (load_specs or []):
+        f = s['face']
+        for fi in (f if isinstance(f, (list, tuple, np.ndarray)) else [f]):
+            specs.append({**s, 'face': int(fi)})
+
     # Distributed pull (dof 0) — comb of uniform arrows + a tail bracket.
-    pull = [s for s in (load_specs or []) if int(s.get('dof', -1)) == 0 and float(s.get('value', 0.0)) != 0.0]
+    pull = [s for s in specs if int(s.get('dof', -1)) == 0 and float(s.get('value', 0.0)) != 0.0]
     if pull:
         xa = max(fv(s['face'])[:, 0].max() for s in pull) + 0.03 * span
         ys = [fv(s['face'])[:, 1].mean() for s in pull]
@@ -647,7 +675,7 @@ def plot_loading_diagram(tessellation, clamped_faces, load_specs, filepath,
         ax.plot([xa, xa], [min(ys), max(ys)], color=RED, lw=2.5, zorder=29)
 
     # Point loads (dof 1) — single bold arrow per loaded tile.
-    for s in (load_specs or []):
+    for s in specs:
         if int(s.get('dof', -1)) == 1 and float(s.get('value', 0.0)) != 0.0:
             p = fv(s['face'])
             cx = p[:, 0].mean()
@@ -659,6 +687,20 @@ def plot_loading_diagram(tessellation, clamped_faces, load_specs, filepath,
                 y_anchor = p[:, 1].min() - 0.02 * span
                 ax.annotate('', xy=(cx, y_anchor), xytext=(cx, y_anchor - 1.7 * L),
                             arrowprops=dict(arrowstyle='-|>', color=RED, lw=3.2, mutation_scale=22), zorder=31)
+
+    # Moments (dof 2) — curved arrow at the loaded tile (CCW = +, CW = -).
+    for s in specs:
+        if int(s.get('dof', -1)) == 2 and float(s.get('value', 0.0)) != 0.0:
+            p = fv(s['face'])
+            cx, cy = p[:, 0].mean(), p[:, 1].mean()
+            r = 0.18 * span
+            arc = np.deg2rad(np.linspace(40, 300, 60))
+            if float(s['value']) < 0:           # clockwise
+                arc = arc[::-1]
+            xs, ys = cx + r * np.cos(arc), cy + r * np.sin(arc)
+            ax.plot(xs, ys, color=RED, lw=2.2, zorder=30)
+            ax.annotate('', xy=(xs[-1], ys[-1]), xytext=(xs[-3], ys[-3]),
+                        arrowprops=dict(arrowstyle='-|>', color=RED, lw=2.2, mutation_scale=16), zorder=31)
 
     # Fixed-support wall on the clamped edge.
     if clamped:
@@ -706,27 +748,45 @@ def plot_area_change(tess_flat, tess_deployed, rel, filepath,
 
 
 def animate_closed_evolution(tessellation, frames, add_target, filepath,
-                             title="Opening process", fps=6):
+                             title="Opening process", fps=6, fail_line=1.0):
     """Animate the closed-state design morphing over training epochs (flat | deployed).
 
     Args:
         tessellation: reference Tessellation (copied internally for each panel).
-        frames: list of (epoch, flat_verts, deployed_verts, boundary_cloud), where
-            *_verts are (n_global_vertices, 2) global vertex arrays.
-        add_target: callable (ax, boundary_cloud) -> None drawing the target on the
-            deployed panel.
+        frames: list of (epoch, flat_verts, deployed_verts, boundary_cloud[, hinge_xy, D]), where
+            *_verts are (n_global_vertices, 2) global vertex arrays and the optional
+            (hinge_xy (n_hinges,2), D (n_hinges,)) overlay the per-hinge ductile damage as dots.
+        add_target: callable (ax, boundary_cloud) -> None drawing the target on the deployed panel.
         filepath: output GIF path.
+        fail_line: D value drawn as the colour pivot (model fracture-initiation, default 1.0).
     """
+    from matplotlib.colors import TwoSlopeNorm
+    from matplotlib.cm import ScalarMappable
+
     allf = np.concatenate([f[1] for f in frames])
     alld = np.concatenate([f[2] for f in frames])
     fb = (allf[:, 0].min() - .5, allf[:, 0].max() + .5, allf[:, 1].min() - .5, allf[:, 1].max() + .5)
     db = (alld[:, 0].min() - .5, alld[:, 0].max() + .5, alld[:, 1].min() - .5, alld[:, 1].max() + .5)
+
+    # damage colour scale: green (safe) -> yellow at the fracture line -> red (past failure), shared
+    has_dmg = len(frames[0]) >= 6 and frames[0][5] is not None
+    norm = cmap = None
+    if has_dmg:
+        dmax = max(float(np.max(f[5])) for f in frames if f[5] is not None)
+        norm = TwoSlopeNorm(vmin=0.0, vcenter=float(fail_line), vmax=max(2.0 * fail_line, dmax))
+        cmap = plt.get_cmap("RdYlGn_r")
+
     tfl, tdp = tessellation.copy(), tessellation.copy()
     fig, (axf, axd) = plt.subplots(1, 2, figsize=(15, 7.6), facecolor="white")
     fig.suptitle(title, fontsize=16, weight="bold")
+    if has_dmg:
+        cb = fig.colorbar(ScalarMappable(norm=norm, cmap=cmap), ax=axd, fraction=0.046, pad=0.02)
+        cb.set_label(f"hinge damage D  (={fail_line:g} model fracture-initiation)")
 
     def draw(k):
-        ep, flat, dep, cloud = frames[k]
+        ep, flat, dep, cloud = frames[k][:4]
+        hinge_xy = frames[k][4] if len(frames[k]) >= 6 else None
+        D = frames[k][5] if len(frames[k]) >= 6 else None
         axf.clear(); axd.clear()
         tfl.update_vertices(flat)
         plot_tessellation(tfl, ax=axf, show_target=False, show_hinges=False,
@@ -737,8 +797,12 @@ def animate_closed_evolution(tessellation, frames, add_target, filepath,
         plot_tessellation(tdp, ax=axd, show_target=False, show_hinges=False,
                           show_face_indices=False, show_hinge_indices=False, color_faces="#F58025")
         add_target(axd, cloud)
+        if hinge_xy is not None and D is not None:
+            axd.scatter(hinge_xy[:, 0], hinge_xy[:, 1], c=D, cmap=cmap, norm=norm,
+                        s=42, edgecolors="black", linewidths=0.5, zorder=5)
         axd.set_xlim(db[0], db[1]); axd.set_ylim(db[2], db[3]); axd.set_aspect("equal"); axd.axis("off")
-        axd.set_title(f"Deploy — epoch {ep}")
+        n_over = int(np.sum(D >= fail_line)) if D is not None else 0
+        axd.set_title(f"Deploy — epoch {ep}" + (f"   (D≥{fail_line:g}: {n_over}/{len(D)})" if D is not None else ""))
 
     animation.FuncAnimation(fig, draw, frames=len(frames), blit=False).save(
         filepath, writer="pillow", fps=fps)

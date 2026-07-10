@@ -33,7 +33,7 @@ def test_closed_pipeline_trains_finite_and_non_diverging():
 
     state0, _ = build_closed_initial_state(cfg)
     params, sf = init_closed_les_params(cfg)
-    bond, stab, geometry_fn, w_lig_logit0 = build_surrogate_energy(cfg, sf, state0, params)
+    bond, stab, geometry_fn, _damage_fn, w_lig_logit0 = build_surrogate_energy(cfg, sf, state0, params)
     if w_lig_logit0 is not None:
         params = {**params, "w_lig_logit": w_lig_logit0}
 

@@ -117,11 +117,9 @@ def export_cut_pattern_a4(geom, out_path, *, clamped_centroids=None, loaded_cent
     for pt in loaded:
         ax.add_patch(Circle(pt, mark_radius_mm, facecolor=_LOAD, edgecolor="none",
                             alpha=0.40, zorder=5))
-        ax.add_patch(FancyArrowPatch(pt - 0.5 * arrow_len * pull, pt + 0.5 * arrow_len * pull,
-                                     arrowstyle="-|>", mutation_scale=7, color=_LOAD,
-                                     lw=1.2, zorder=7))
-        ax.text(pt[0], pt[1] - 1.25 * mark_radius_mm, "PULL", ha="center", va="top",
-                fontsize=5, color=_LOAD, fontweight="bold", zorder=6)
+        # PULL disc + label only — the direction arrow was cluttering the pattern (removed).
+        ax.text(pt[0], pt[1], "PULL", ha="center", va="center",
+                fontsize=5, color="white", fontweight="bold", zorder=6)
 
     _annotate(fig, page_w, page_h, scale, sheet_w, sheet_h, title)
     fig.savefig(out_path)                                # single-page PDF (MediaBox = A4)
@@ -168,7 +166,8 @@ def _bc_marks(initial_state, config, load_specs, length_scale):
     """Clamped/loaded face centroids [mm] + pull direction from the config BCs (any count)."""
     face_mm = np.asarray(initial_state.face_centroids) * length_scale
     clamped_f = [int(f) for f in config.topology.get('bc_clamped', [])]
-    loaded_f = [int(s['face']) for s in load_specs]
+    loaded_f = [int(fi) for s in load_specs
+                for fi in (s['face'] if isinstance(s['face'], (list, tuple, np.ndarray)) else [s['face']])]
     dof = int(load_specs[0]['dof']) if load_specs else 0
     sign = float(np.sign(load_specs[0].get('value', 1.0))) if load_specs else 1.0
     pull_dir = [sign, 0.0] if dof == 0 else [0.0, sign]
@@ -176,29 +175,47 @@ def _bc_marks(initial_state, config, load_specs, length_scale):
             face_mm[loaded_f] if loaded_f else None, pull_dir, len(clamped_f), len(loaded_f))
 
 
+def build_run_cut_geometry(initial_state, cut_coords, struct, config, hinge_model, hinge_w_lig=None):
+    """Per-hinge flat cut geometry (mm) for a run: learned ``w_lig`` + fillet at the physical scale.
+
+    Single source of truth for the kerf / ligament / fillet / ``length_scale`` a run cuts at, shared
+    by :func:`write_cut_patterns` and the standalone DXF script.
+
+    Returns:
+        (geom, w_lig, length_scale): the :func:`build_cut_geometry` dict, the (H,) per-hinge ligament
+        widths [mm], and the mm-per-sheet-unit physical scale.
+    """
+    w_lig_mm = float(getattr(hinge_model, 'w_lig_mm', 5.0))
+    spacing = float(config.topology.get('spacing', 1.0))
+    fillet_ratio = float(getattr(hinge_model, 'fillet_ratio', 0.16) or 0.16)   # may be unset/None
+    length_scale = _PHYS_TILE * w_lig_mm / spacing
+    T, cols = np.asarray(struct['T']), struct['cols']
+    hinge_lookup, w_lig = _per_hinge_lookup(initial_state, hinge_w_lig, w_lig_mm,
+                                            fillet_ratio, length_scale)
+    geom = build_cut_geometry(cut_coords, T, cols, w_c=_W_C_MM, w_lig=w_lig_mm,
+                              rho=fillet_ratio * w_lig_mm, length_scale=length_scale,
+                              hinge_lookup=hinge_lookup)
+    return geom, w_lig, length_scale
+
+
 def write_cut_patterns(run_dir, *, initial_state, cut_coords, struct, config, hinge_model,
                        load_specs, config_name, hinge_w_lig=None):
-    """Write ``cut_pattern.png`` (precise) + ``cut_pattern_A4.pdf`` (1:1 print) into ``run_dir``.
+    """Write ``cut_pattern.png`` (precise) + ``cut_pattern_A4.pdf`` (fit-to-A4) + ``cut_pattern.dxf``
+    (true 1:1, mm) into ``run_dir``.
 
-    Builds the per-hinge cut geometry once (learned ``w_lig`` + fillet), renders the PNG, and exports
-    the tiled A4 print with HOLD/PULL marks. Falls back to the schematic PNG if the precise build
-    fails; the A4 export is attempted independently. Returns the A4 summary dict, or ``None``.
+    Builds the per-hinge cut geometry once (learned ``w_lig`` + fillet), renders the PNG, exports the
+    A4 print with HOLD/PULL marks, and writes the laser DXF. Falls back to the schematic PNG if the
+    precise build fails; the A4 and DXF exports are attempted independently. Returns the A4 summary
+    dict, or ``None``.
     """
     from nff.utils.visualization import render_precise_cut_pattern, plot_cut_pattern
 
-    w_lig_mm = float(getattr(hinge_model, 'w_lig_mm', 5.0))
-    spacing = float(config.topology.get('spacing', 1.0))
-    fillet_ratio = float(getattr(hinge_model, 'fillet_ratio', 0.16))
-    length_scale = _PHYS_TILE * w_lig_mm / spacing
     T, cols = np.asarray(struct['T']), struct['cols']
     cut_png = os.path.join(run_dir, "cut_pattern.png")
 
     try:
-        hinge_lookup, w_lig = _per_hinge_lookup(initial_state, hinge_w_lig, w_lig_mm,
-                                                fillet_ratio, length_scale)
-        geom = build_cut_geometry(cut_coords, T, cols, w_c=_W_C_MM, w_lig=w_lig_mm,
-                                  rho=fillet_ratio * w_lig_mm, length_scale=length_scale,
-                                  hinge_lookup=hinge_lookup)
+        geom, w_lig, length_scale = build_run_cut_geometry(initial_state, cut_coords, struct, config,
+                                                            hinge_model, hinge_w_lig)
         rt = measure_cut_geometry(geom)
         print(f"  [cut_pattern] per-hinge geometry: {len(geom['hinge_info'])} hinges, "
               f"w_lig {w_lig.min():.1f}-{w_lig.max():.1f}mm, "
@@ -207,11 +224,19 @@ def write_cut_patterns(run_dir, *, initial_state, cut_coords, struct, config, hi
             geom, filepath=cut_png,
             title=f"Precise laser cut pattern — flat sheet ({getattr(hinge_model, 'material', 'S235')})")
     except Exception as exc:                            # keep the run alive on any geometry hiccup
-        print(f"  [cut_pattern] precise build failed ({exc}); schematic fallback, no A4")
+        print(f"  [cut_pattern] precise build failed ({exc}); schematic fallback, no A4/DXF")
         plot_cut_pattern(cut_coords, T, cols, filepath=cut_png,
                          hinge_margin=max(0.22, 1.6 * float(config.topology.get('hinge_margin', 0.06))),
                          lw=1.8, title="Kirigami cut pattern (flat sheet)")
         return None
+
+    try:                                                # laser DXF (1:1, mm) — additive, independent
+        from nff.topology.cut_dxf import export_cut_geometry_dxf
+        dxf = export_cut_geometry_dxf(geom, os.path.join(run_dir, "cut_pattern.dxf"))
+        print(f"  [cut_pattern] DXF: {dxf['n_loops']} loops, "
+              f"sheet {dxf['sheet_mm'][0]:.0f}x{dxf['sheet_mm'][1]:.0f}mm @ 1:1 -> cut_pattern.dxf")
+    except Exception as exc:
+        print(f"  [cut_pattern] DXF export skipped ({exc})")
 
     try:
         clamped, loaded, pull_dir, n_hold, n_pull = _bc_marks(
