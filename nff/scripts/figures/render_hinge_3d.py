@@ -6,7 +6,7 @@ purely as CONTEXT -- they are NOT part of the finite-element model, only a visua
 hinge connects. Reads the cached frames (scratchpad/deploy_w9.py -> hinge_frames_w9.npz) and writes
 one transparent PNG per rotation, ready to drop into the placeholder windows of the energy figure.
 
-    conda run -n ccx python nff/scripts/render_hinge_3d.py --theta 11 26.2 --labels 0.5 1.0
+    conda run -n ccx python nff/scripts/figures/render_hinge_3d.py --theta 11 26.2 --labels 0.5 1.0
 """
 
 import argparse

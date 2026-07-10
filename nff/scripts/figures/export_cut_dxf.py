@@ -13,7 +13,7 @@ Toolpath convention via ``--mode``:
 - ``centerline``: sheet outline + slot centrelines + hinge-tip relief circles (thin-kerf).
 
 Run:
-    JAX_PLATFORMS=cpu conda run -n kgnn_mac python nff/scripts/export_cut_dxf.py \
+    JAX_PLATFORMS=cpu conda run -n kgnn_mac python nff/scripts/figures/export_cut_dxf.py \
         --run-dir data/outputs/runs/run_<ts>_<config> [--mode outline] [--out path.dxf]
 """
 
@@ -28,9 +28,9 @@ import numpy as np
 import jax.numpy as jnp
 
 from nff.config.experiment import load_and_parse_config
-from nff.scripts.closed_setup import (build_closed_initial_state, init_closed_les_params,
+from nff.closed.setup import (build_closed_initial_state, init_closed_les_params,
                                       build_surrogate_energy)
-from nff.scripts.closed_paper_export import build_run_cut_geometry
+from nff.closed.cut_export import build_run_cut_geometry
 from nff.topology.closed_builder_jax import solve_cut_vertices_jax, boundary_flat_from_logits
 from nff.topology.cut_dxf import export_cut_geometry_dxf, render_dxf_png
 from nff.topology.cut_pattern import measure_cut_geometry

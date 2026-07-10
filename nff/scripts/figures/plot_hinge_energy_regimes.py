@@ -1,10 +1,10 @@
 """Strain energy W vs each kinematic (theta, shear s, stretch a), with the recalibrated
 linear ROM overlaid and the elastic / plastic / fracture regimes shaded from the data.
 
-Follows the project charter (nff/scripts/validate_hinge.py palette + clean 1x3 style); nothing
+Follows the project charter (nff/scripts/diagnostics/validate_hinge.py palette + clean 1x3 style); nothing
 generic is hardcoded. Run in an env with matplotlib (e.g. the ``ccx`` env):
 
-    conda run -n ccx python nff/scripts/plot_hinge_energy_regimes.py \
+    conda run -n ccx python nff/scripts/figures/plot_hinge_energy_regimes.py \
         --data data/fea/hinge_dataset --out data/outputs/hinge_energy_regimes.png
 
 The dispersion band is the 10-90th percentile of W across all OTHER variables (geometry w_lig,

@@ -15,7 +15,7 @@ Two quantities (``--quantity``):
 Pure rotation: ``a = s = 0``, cut angle ``alpha = 90 deg``. Run in the JAX env:
 
     JAX_ENABLE_X64=1 JAX_PLATFORMS=cpu conda run -n kgnn_mac \
-        python nff/scripts/plot_hinge_rotation_regime.py --quantity moment
+        python nff/scripts/figures/plot_hinge_rotation_regime.py --quantity moment
 """
 
 import argparse
@@ -30,7 +30,7 @@ from matplotlib.cm import ScalarMappable
 from matplotlib.patches import Rectangle, ConnectionPatch
 import matplotlib.patheffects as pe
 
-from nff.scripts.render_hinge_3d import STRESS_CMAP     # shared green von Mises ramp (inset ↔ scale)
+from nff.scripts.figures.render_hinge_3d import STRESS_CMAP     # shared green von Mises ramp (inset ↔ scale)
 
 # ── project charter (Princeton palette) ───────────────────────────────────────────
 ORANGE, RED, GREY, INK = "#F58025", "#D62828", "#6C757D", "#1A1A1A"

@@ -5,7 +5,7 @@ visuals: mesh, initial/deployed 3-D state (out-of-plane buckle), W(theta), the e
 check M_theta == dW/dtheta, buckling amplitude, and strain/failure. Also a buckling
 on/off energy comparison. Everything is CalculiX physics; we only read + plot.
 
-Run:  PYTHONPATH=. conda run -n ccx python nff/scripts/validate_hinge.py
+Run:  PYTHONPATH=. conda run -n ccx python nff/scripts/diagnostics/validate_hinge.py
 """
 import os
 

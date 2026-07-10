@@ -6,7 +6,7 @@ Right: a dimensioned single-hinge schematic (w_lig, w_c, alpha, rho, cut lengths
 The right panel is a parametric SCHEMATIC (not a specific hinge), drawn at a non-90 alpha so the
 angle between the main and secondary cuts reads clearly.
 
-    JAX_PLATFORMS=cpu conda run -n kgnn_mac python -m nff.scripts.plot_hinge_overview
+    JAX_PLATFORMS=cpu conda run -n kgnn_mac python -m nff.scripts.figures.plot_hinge_overview
 """
 
 import argparse

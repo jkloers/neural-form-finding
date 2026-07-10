@@ -20,7 +20,7 @@ independent of the load factor t (the external-work term is linear), so the
 reconstruction at the original reference frame is EXACT for that regime.
 
 Usage:
-    JAX_PLATFORMS=cpu conda run -n kgnn_mac python nff/scripts/diagnose_conditioning.py \
+    JAX_PLATFORMS=cpu conda run -n kgnn_mac python nff/scripts/diagnostics/diagnose_conditioning.py \
         --run-dir data/outputs/runs/run_20260611_124535_mpnn_best_2x2
     # optionally restrict:  --problem-ids c001
 """

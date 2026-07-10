@@ -5,7 +5,7 @@ What the model actually learned, per hinge / per cut, at the trained state:
   * alpha  — per-hinge cut angle [deg]          (deterministic function of the void ratios r)
   * r      — per-cut void aspect ratio in (0,1) (the primary design DOF; init uniform r_init)
 
-    JAX_PLATFORMS=cpu conda run -n kgnn_mac python -m nff.scripts.plot_learned_distributions \
+    JAX_PLATFORMS=cpu conda run -n kgnn_mac python -m nff.scripts.figures.plot_learned_distributions \
         --run data/outputs/runs/run_<ts>_<cfg>
 """
 import os
@@ -19,7 +19,7 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 
 from nff.config.experiment import load_and_parse_config
-from nff.scripts.closed_setup import build_closed_initial_state, init_closed_les_params, build_surrogate_energy
+from nff.closed.setup import build_closed_initial_state, init_closed_les_params, build_surrogate_energy
 
 
 def main():

@@ -37,7 +37,7 @@ the model) — NOT second-order autodiff, which is fragile/expensive through the
 implicit-diff rule. 2*P gradient evals for a P-parameter design.
 
 Usage:
-    JAX_PLATFORMS=cpu conda run -n kgnn_mac python nff/scripts/diagnose_landscape.py \
+    JAX_PLATFORMS=cpu conda run -n kgnn_mac python nff/scripts/diagnostics/diagnose_landscape.py \
         --run-dir data/outputs/runs/run_20260707_203518_rect_5x5_shear \
         --landscape --grid 21 --render-eigvec
 """
@@ -63,9 +63,9 @@ from nff.stages.pipeline import forward_pipeline
 from nff.stages.geometry import deformed_vertices
 from nff.stages.physics.kinematics import face_to_node_kinematics_fn
 from nff.training.loss import compute_end_to_end_loss
-from nff.scripts.closed_setup import (build_closed_initial_state, init_closed_les_params,
+from nff.closed.setup import (build_closed_initial_state, init_closed_les_params,
                                       build_surrogate_energy)
-from nff.scripts.run_closed import _boundary_cloud, _fit_circle, _global_verts, _deployed_hinge_xy
+from nff.closed.deploy import _boundary_cloud, _fit_circle, _global_verts, _deployed_hinge_xy
 
 
 # ── per-pipeline adapters ───────────────────────────────────────────────────────
