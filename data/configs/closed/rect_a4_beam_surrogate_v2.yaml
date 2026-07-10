@@ -35,7 +35,7 @@ optimization_weights:
 
 hinge_model:
   type: surrogate
-  checkpoint: data/outputs/hinge_surrogate_v2.pkl   # deeper campaign: w_lig[1,20] t1.5 D-label (train first)
+  checkpoint: data/surrogates/hinge_surrogate_v2.pkl   # deeper campaign: w_lig[1,20] t1.5 D-label (train first)
   material: S235
   thickness_mm: 1.5        # standard laser-cut gauge (1.0-2.0mm)
   w_lig_mm: 5.0            # manufacturing width; surrogate now covers [1,20] so this can be swept

@@ -4,7 +4,7 @@ The hinge as a differentiable energy: given the relative-tile kinematics ``u = (
 (mm, mm, rad) and the hinge geometry ``g = (w_lig, alpha)`` (mm, rad), return the stored
 energy ``W`` [N.mm]. Its autodiff gradient ``dW/du`` is the internal force ``(F_a, F_s, M_theta)``
 the Stage-2 solver balances; the pipeline differentiates this directly. Trained on the CalculiX
-dataset (``sofa/output/hinge_dataset.npz``) with a Sobolev (energy + force) loss.
+dataset (``data/fea/hinge_dataset.npz``) with a Sobolev (energy + force) loss.
 
 Architecture (locked 2026-07-03) -- the SQUARED energy form:
 

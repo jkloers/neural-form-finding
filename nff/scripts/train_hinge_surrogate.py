@@ -1,7 +1,7 @@
 """Train the condensed hinge-energy surrogate on the CalculiX dataset.
 
     JAX_PLATFORMS=cpu conda run -n kgnn_mac python nff/scripts/train_hinge_surrogate.py \
-        --data sofa/output/hinge_dataset --epochs 300 --lam 0.8 --out data/outputs/hinge_surrogate
+        --data data/fea/hinge_dataset --epochs 300 --lam 0.8 --out data/surrogates/hinge_surrogate
 
 Pipeline:
   1. Load npz -> u=(a,s,theta), g=(w_lig, alpha[rad]), targets W, F=(F_a,F_s,M_theta),
@@ -96,8 +96,8 @@ def evaluate(params, batch, stats):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--data", default="sofa/output/hinge_dataset")
-    ap.add_argument("--out", default="data/outputs/hinge_surrogate")
+    ap.add_argument("--data", default="data/fea/hinge_dataset")
+    ap.add_argument("--out", default="data/surrogates/hinge_surrogate")
     ap.add_argument("--epochs", type=int, default=300)
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--lam", type=float, default=0.8, help="energy-vs-force priority (>0.5 = energy)")

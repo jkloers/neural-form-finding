@@ -6,7 +6,7 @@
 
     # full campaign
     conda run -n ccx python nff/scripts/generate_hinge_dataset.py \
-        --n 300 --out sofa/output/hinge_dataset --parallel 6
+        --n 300 --out data/fea/hinge_dataset --parallel 6
 
 Everything routes through ``nff.rve.hinge_function`` (the hinge as a function) and
 ``nff.rve.dataset`` (sample -> evaluate -> write); this script only wires the CLI.
@@ -106,7 +106,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--rehearsal", action="store_true", help="fillet/alpha check, no dataset written")
     ap.add_argument("--n", type=int, default=1000, help="number of (geometry, ray) jobs")
-    ap.add_argument("--out", default="sofa/output/hinge_dataset", help="output path (no extension)")
+    ap.add_argument("--out", default="data/fea/hinge_dataset", help="output path (no extension)")
     ap.add_argument("--parallel", type=int, default=9)
     ap.add_argument("--timeout", type=float, default=300, help="per-sim cap [s]; stop-at-fracture ends most sooner")
     ap.add_argument("--batch-size", dest="batch_size", type=int, default=50, help="checkpoint after every N jobs")

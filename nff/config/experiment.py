@@ -226,7 +226,7 @@ class HingeModelConfig(eqx.Module):
     fail_line: float
     learn_w_lig: bool
 
-    def __init__(self, type='rom', checkpoint='data/outputs/hinge_surrogate.pkl', material='S235',
+    def __init__(self, type='rom', checkpoint='data/surrogates/hinge_surrogate.pkl', material='S235',
                  thickness_mm=1.0, w_lig_mm=5.0, calibrate=True, length_scale=0.0,
                  energy_scale=0.0, barrier=0.05, w_damage=0.0, w_fail=0.0, w_ood=0.0, m_safe=1.0,
                  fail_line=1.0, learn_w_lig=False):
@@ -381,7 +381,7 @@ def _parse_physics_config(physics_raw: dict, domain_restriction: float) -> Physi
 def _parse_hinge_model_config(raw: dict) -> HingeModelConfig:
     return HingeModelConfig(
         type=str(raw.get("type", "rom")),
-        checkpoint=str(raw.get("checkpoint", "data/outputs/hinge_surrogate.pkl")),
+        checkpoint=str(raw.get("checkpoint", "data/surrogates/hinge_surrogate.pkl")),
         material=str(raw.get("material", "S235")),
         thickness_mm=float(raw.get("thickness_mm", 1.0)),
         w_lig_mm=float(raw.get("w_lig_mm", 5.0)),

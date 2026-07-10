@@ -11,10 +11,10 @@
   `n_through=2`, stop-at-fracture.
 - **Phase 1 (data) — DONE.** 1000-hinge campaign (`nff/rve/dataset.py`,
   `nff/scripts/generate_hinge_dataset.py`): 1000/1000 usable, 0 errored, 63,644 Sobolev samples
-  (`sofa/output/hinge_dataset.npz`).
+  (`data/fea/hinge_dataset.npz`).
 - **Phase 2 (surrogate) — DONE.** Squared-form energy `nff/models/hinge_surrogate.py`, trained
   (`nff/scripts/train_hinge_surrogate.py`): held-out (150 unseen geometries) **energy_rel 1.8%,
-  force_rel 5.9%, fail_rmse 2.5%** (λ=0.9). Params `data/outputs/hinge_surrogate.pkl`.
+  force_rel 5.9%, fail_rmse 2.5%** (λ=0.9). Params `data/surrogates/hinge_surrogate.pkl`.
 - **Phase 3 (integration) — NEXT (this doc's "Known integration gaps").**
 
 ## Scientific figures — ongoing workstream

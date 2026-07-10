@@ -24,7 +24,7 @@ optimization_weights:
 # ── Hinge energy: the config switch (ROM vs learned surrogate) ──
 hinge_model:
   type: surrogate                 # rom | surrogate
-  checkpoint: data/outputs/hinge_surrogate.pkl
+  checkpoint: data/surrogates/hinge_surrogate.pkl
   material: S235                   # oversight: E=210 GPa, sigma_y=235 MPa, eps_f=0.25 (what it was trained for)
   thickness_mm: 1.0               # fixed by the surrogate
   w_lig_mm: 5.0                   # manufacturing choice, in [1, 10] mm

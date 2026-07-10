@@ -25,21 +25,21 @@ Proceed only if `damage_p99 finite: True`.
 **Step 2 — launch the campaign (caffeinated, ~6000 hinges, background + monitor):**
 ```bash
 caffeinate -i conda run --no-capture-output -n ccx python -m nff.scripts.generate_hinge_dataset \
-  --n 6000 --out sofa/output/hinge_dataset_v2 --parallel 8 --timeout 600 --batch-size 50 \
+  --n 6000 --out data/fea/hinge_dataset_v2 --parallel 8 --timeout 600 --batch-size 50 \
   --w-lig-min 1 --w-lig-max 20 --thickness 1.5 --angle 90 --steps 30 \
   --eta-a-max 1.5 --eta-s-max 1.0 --fracture-margin 2.5 \
   --n-through 3 --r-win 45 --lc-fillet-frac 0.3 \
   --fillet-min 0.10 --fillet-max 0.30
 ```
 Run it in the BACKGROUND and monitor the per-batch prints. **Verify the FIRST checkpoint** (~10 min):
-`sofa/output/hinge_dataset_v2.npz` must exist and contain a `damage_p99` column with finite values
+`data/fea/hinge_dataset_v2.npz` must exist and contain a `damage_p99` column with finite values
 and a swept `fillet_ratio` column — if not, stop and debug before burning the night. Expected
 throughput ~50 hinges / 4 min → ~6000 in ~8 h.
 
 **Step 3 — retrain once the campaign finishes (kgnn_mac):**
 ```bash
 conda run -n kgnn_mac python -m nff.scripts.train_hinge_surrogate \
-  --data sofa/output/hinge_dataset_v2 --out data/outputs/hinge_surrogate_v2 \
+  --data data/fea/hinge_dataset_v2 --out data/surrogates/hinge_surrogate_v2 \
   --lam 0.65 --epochs 400 --hidden 64,64
 ```
 It auto-detects the fillet DOF (→ 6 features) and trains the head on `D`. It prints the data-driven

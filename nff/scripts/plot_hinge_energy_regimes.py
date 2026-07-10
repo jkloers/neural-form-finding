@@ -5,7 +5,7 @@ Follows the project charter (nff/scripts/validate_hinge.py palette + clean 1x3 s
 generic is hardcoded. Run in an env with matplotlib (e.g. the ``ccx`` env):
 
     conda run -n ccx python nff/scripts/plot_hinge_energy_regimes.py \
-        --data sofa/output/hinge_dataset --out data/outputs/hinge_energy_regimes.png
+        --data data/fea/hinge_dataset --out data/outputs/hinge_energy_regimes.png
 
 The dispersion band is the 10-90th percentile of W across all OTHER variables (geometry w_lig,
 alpha, and the other two kinematics) -- so it is wide, dominated by w_lig. The ROM is the linear
@@ -147,7 +147,7 @@ def plot_axis(ax, b, xform, xlabel, term_key, term_label, sym, rom, eps_f):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--data", default="sofa/output/hinge_dataset")
+    ap.add_argument("--data", default="data/fea/hinge_dataset")
     ap.add_argument("--out", default="data/outputs/hinge_energy_regimes.png")
     args = ap.parse_args()
 

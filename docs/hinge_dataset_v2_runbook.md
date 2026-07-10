@@ -39,7 +39,7 @@ If `damage_p99` is all-NaN → the `.frd` stress/PEEQ field names differ from as
 
 ```bash
 conda run -n ccx python -m nff.scripts.generate_hinge_dataset \
-  --n 2000 --out sofa/output/hinge_dataset_v2 --parallel 8 --timeout 600 \
+  --n 2000 --out data/fea/hinge_dataset_v2 --parallel 8 --timeout 600 \
   --w-lig-min 1 --w-lig-max 20 \
   --thickness 1.5 \
   --angle 90 --steps 30 \
@@ -59,13 +59,13 @@ conda run -n ccx python -m nff.scripts.generate_hinge_dataset \
 | `--r-win 45` | Saint-Venant window ≥2×w_lig at the wide end (smoother, less boundary drift) |
 | `--lc-fillet-frac 0.3` | finer fillet → less energy jitter across geometries |
 
-Writes `sofa/output/hinge_dataset_v2.npz` + `.json`. Safe to interrupt (checkpoints every 50 jobs).
+Writes `data/fea/hinge_dataset_v2.npz` + `.json`. Safe to interrupt (checkpoints every 50 jobs).
 
 ## 2. Retrain (auto-picks up `D`)
 
 ```bash
 conda run -n kgnn_mac python -m nff.scripts.train_hinge_surrogate \
-  --data sofa/output/hinge_dataset_v2 --out data/outputs/hinge_surrogate_v2 \
+  --data data/fea/hinge_dataset_v2 --out data/surrogates/hinge_surrogate_v2 \
   --lam 0.65 --epochs 400 --hidden 64,64
 ```
 `load_dataset` detects `damage_p99` → trains the head on `D` (else legacy margin). Prints the

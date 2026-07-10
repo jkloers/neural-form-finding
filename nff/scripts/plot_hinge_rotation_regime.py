@@ -135,8 +135,8 @@ def build_uz_field(data_npz, theta_deg_grid, w_grid, kin_tol=0.18):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--ckpt", default="data/outputs/hinge_surrogate.pkl")
-    ap.add_argument("--data", default="sofa/output/hinge_dataset.npz")
+    ap.add_argument("--ckpt", default="data/surrogates/hinge_surrogate.pkl")
+    ap.add_argument("--data", default="data/fea/hinge_dataset.npz")
     ap.add_argument("--quantity", choices=["energy", "moment"], default="energy")
     ap.add_argument("--out", default=None)
     ap.add_argument("--alpha-fill", type=float, default=0.78, help="region fill opacity (lower = lighter)")
