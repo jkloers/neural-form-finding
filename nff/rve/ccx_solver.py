@@ -182,7 +182,7 @@ def _arc_disp(xyz, arcB, pivot, a, s, theta):
 
 
 def _write_deck(path, xyz, conn, arcA, arcB, pivot, mat, states, elastic_only, field_every,
-                solver=None, hyp=None):
+                solver=None, hyp=None, min_inc=1e-3):
     """One *STEP per kinematic state (a,s,theta) -> correct arc path; energy+reaction+fields out."""
     hyp = hyp or Hypotheses()
     L = ["*NODE"]
@@ -196,10 +196,12 @@ def _write_deck(path, xyz, conn, arcA, arcB, pivot, mat, states, elastic_only, f
     L.append(mat.constitutive_cards(hyp, elastic_only=elastic_only))
     L.append(mat.section_cards("EALL", hyp))
     stat = "*STATIC" + (f", SOLVER={solver}" if solver else "")
-    # min increment 1e-3: the solver bails (ends the job) once it needs tiny steps -- which is
-    # exactly the deep-plastic grind past rupture -> natural stop-at-fracture, no endless cutbacks.
+    # min increment (default 1e-3): the solver bails (ends the job) once it needs tiny steps -- for
+    # steel that is the deep-plastic grind past rupture (natural stop-at-fracture, no endless
+    # cutbacks). Thin elastic sheets (paper) buckle-snap instead and need a smaller floor to walk
+    # through the fold -> tunable via ``min_inc``.
     for k, (a, s, th) in enumerate(states):
-        L.append(f"*STEP, NLGEOM, INC=200\n{stat}\n0.25, 1.0, 1e-3, 1.0\n*BOUNDARY")
+        L.append(f"*STEP, NLGEOM, INC=500\n{stat}\n0.25, 1.0, {min_inc:g}, 1.0\n*BOUNDARY")
         if k == 0:
             L.append("ARCA, 1, 3, 0.0")
         ux, uy = _arc_disp(xyz, arcB, pivot, a, s, th)
@@ -288,7 +290,7 @@ def _principal_strain_max(tostrain):
 
 def prepare_job(p, angle_deg=60.0, n_steps=15, pivot=None, material=STEEL, imp_amp=None,
                 elastic_only=False, n_through=1, lc_min=None, lc_max=None, field_every=1,
-                a=0.0, s=0.0, solver=None, workdir="/tmp/ccx_job", hyp=None):
+                a=0.0, s=0.0, solver=None, workdir="/tmp/ccx_job", hyp=None, min_inc=1e-3):
     """Build the mesh + write the deck (the gmsh part — NOT thread-safe, run serially)."""
     mat, hyp = coerce_material(material), hyp or Hypotheses()
     lc_min = lc_min if lc_min is not None else max(p.w_c / 2, p.w_lig / 8)
@@ -302,7 +304,7 @@ def prepare_job(p, angle_deg=60.0, n_steps=15, pivot=None, material=STEEL, imp_a
     dth = np.radians(angle_deg) / n_steps
     states = [(a * (k + 1) / n_steps, s * (k + 1) / n_steps, (k + 1) * dth) for k in range(n_steps)]
     _write_deck(job + ".inp", xyz, conn, arcA, arcB, pivot, mat, states, elastic_only,
-                field_every, solver=solver, hyp=hyp)
+                field_every, solver=solver, hyp=hyp, min_inc=min_inc)
     return dict(job=job, workdir=workdir, xyz=xyz, conn=conn, arcA=arcA, arcB=arcB, pivot=pivot,
                 angle_deg=angle_deg, n_steps=n_steps, material=mat, hyp=hyp)
 
@@ -375,7 +377,7 @@ def parse_job(meta, stdout=""):
     # tensile tearing for paper. Falls back to the steel shim for meta without a material.
     mat = meta.get("material")
     hyp = meta.get("hyp") or Hypotheses()
-    fail_fn = (lambda f: mat.failure(f, hyp, q=99.0)) if mat is not None else _damage_pct
+    fail_fn = (lambda f: mat.failure(f, hyp, coords=xyz, q=99.0)) if mat is not None else _damage_pct
     damage_p99 = np.array([fail_fn(f) for f in frames])
     return dict(ok=ok, stdout=stdout[-1500:], theta_deg=theta_deg, W=W, M_theta=np.array(Mt),
                 F_a=np.array(Fa), F_s=np.array(Fs), uz_max=uz_max, strain_max=strain_max,

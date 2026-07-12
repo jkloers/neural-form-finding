@@ -46,5 +46,5 @@ class SteelJ2(Material):
     def el_file_fields(self, *, elastic_only: bool = False) -> str:
         return "E, S" if elastic_only else "E, PEEQ, S"
 
-    def failure(self, frame: dict, hyp: Hypotheses, *, q: float = 99.0) -> float:
+    def failure(self, frame: dict, hyp: Hypotheses, *, coords=None, q: float = 99.0) -> float:
         return damage_from_frame(frame, eps_f0=self.eps_f0, k=self.k, q=q)

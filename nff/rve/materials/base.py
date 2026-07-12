@@ -72,10 +72,12 @@ class Material(ABC):
         """The ``*EL FILE`` field list (e.g. ``"E, PEEQ, S"``) written per output frame."""
 
     @abstractmethod
-    def failure(self, frame: dict, hyp: Hypotheses, *, q: float = 99.0) -> float:
+    def failure(self, frame: dict, hyp: Hypotheses, *, coords=None, q: float = 99.0) -> float:
         """Scalar failure margin ``D`` for a parsed output frame (``D >= 1`` => fracture).
 
         The physical criterion is material-specific (H6): ductile plastic-strain damage for a
-        metal, tensile tearing for paper. ``frame`` is a parsed ``.frd`` frame (fields per the
-        material's :meth:`el_file_fields`). Returns NaN when the required fields are absent.
+        metal, bending/triaxiality-aware tearing for paper. ``frame`` is a parsed ``.frd`` frame
+        (fields per the material's :meth:`el_file_fields`); ``coords`` are the reference node
+        positions, supplied when the criterion needs through-thickness (membrane) averaging.
+        Returns NaN when the required fields are absent.
         """

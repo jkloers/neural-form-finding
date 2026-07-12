@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from nff.rve.damage import tear_from_frame
+from nff.rve.damage import membrane_tear_from_frame
 from nff.rve.materials.base import Hypotheses, Material
 
 # Standard 80 gsm A1 copy/printer paper. Values are mid-range handbook figures for uncoated
@@ -45,14 +45,16 @@ PAPER_80GSM = dict(
     sigma_y=20.0,    # crease-onset yield (~0.55 * MD tensile strength)
     sigma_u=35.0,    # MD tensile strength [MPa]
     eps_p_u=0.017,   # plastic strain at strength (total strain-to-break ~2%)
-    # tensile-tear failure (H6). PROVISIONAL 5%, calibrated 2026-07-11 against a real ccx solve
-    # of a 1 cm / t=0.10 mm hinge: the ligament-body p99 principal strain reaches ~5% at the
-    # observed ~60 deg fold limit, so D~1 there. The earlier 1.5% (uniaxial tensile strain-to-break)
-    # was 3-6x too conservative -- paper folding is BENDING-dominated (tension on the outer fibre,
-    # compression on the inner), and surface bending strain tolerates far more than membrane
-    # tension. The real fix is a bending/triaxiality-aware criterion (like the steel damage law) or
-    # a mid-plane (membrane) strain measure; 5% is a workable single-number stand-in until then.
-    eps_tear=0.05,
+    # tensile-tear failure (H6), bending/triaxiality-aware. eps_tear0 is the PHYSICAL uniaxial
+    # tensile strain-to-break of 80 gsm copy paper (~2-4%); the bending tolerance is carried by the
+    # criterion itself (membrane_tear_from_frame: through-thickness-averaged strain removes the
+    # bending gradient) + the fracture locus eps_f(eta). NOT tuned to match observation -- set to
+    # the material value and let the physics decide (measured 2026-07-11: membrane+triaxiality cut
+    # the raw-surface conservatism ~40-50%; the residual gap vs the observed 60 deg fold is the
+    # pure-rotation-spine over-straining the ligament and/or a higher bending-regime fracture strain
+    # -- calibrate eps_tear0/k against the physical print).
+    eps_tear0=0.03,
+    k=1.5,           # triaxiality sensitivity of the fracture locus (Johnson-Cook-like)
 )
 
 
@@ -64,7 +66,8 @@ class PaperOrthotropic(Material):
 
     def __init__(self, params: dict | None = None):
         self.params = dict(PAPER_80GSM if params is None else params)
-        self.eps_tear = self.params["eps_tear"]
+        self.eps_tear0 = self.params["eps_tear0"]
+        self.k = self.params["k"]
 
     @classmethod
     def from_dict(cls, params: dict) -> "PaperOrthotropic":
@@ -100,5 +103,5 @@ class PaperOrthotropic(Material):
         # tensile-tear needs total strain (E); stress (S) kept for diagnostics/triaxiality
         return "E, S"
 
-    def failure(self, frame: dict, hyp: Hypotheses, *, q: float = 99.0) -> float:
-        return tear_from_frame(frame, eps_tear=self.eps_tear, q=q)
+    def failure(self, frame: dict, hyp: Hypotheses, *, coords=None, q: float = 99.0) -> float:
+        return membrane_tear_from_frame(frame, coords, eps_tear0=self.eps_tear0, k=self.k, q=q)
