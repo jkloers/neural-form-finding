@@ -45,8 +45,14 @@ PAPER_80GSM = dict(
     sigma_y=20.0,    # crease-onset yield (~0.55 * MD tensile strength)
     sigma_u=35.0,    # MD tensile strength [MPa]
     eps_p_u=0.017,   # plastic strain at strength (total strain-to-break ~2%)
-    # tensile-tear failure (H6)
-    eps_tear=0.015,  # max principal strain at tearing (~1.5%, conservative MD-side)
+    # tensile-tear failure (H6). PROVISIONAL 5%, calibrated 2026-07-11 against a real ccx solve
+    # of a 1 cm / t=0.10 mm hinge: the ligament-body p99 principal strain reaches ~5% at the
+    # observed ~60 deg fold limit, so D~1 there. The earlier 1.5% (uniaxial tensile strain-to-break)
+    # was 3-6x too conservative -- paper folding is BENDING-dominated (tension on the outer fibre,
+    # compression on the inner), and surface bending strain tolerates far more than membrane
+    # tension. The real fix is a bending/triaxiality-aware criterion (like the steel damage law) or
+    # a mid-plane (membrane) strain measure; 5% is a workable single-number stand-in until then.
+    eps_tear=0.05,
 )
 
 

@@ -59,8 +59,8 @@ def test_paper_field_output_is_strain_and_stress():
 
 
 def test_paper_tear_failure_from_principal_strain():
-    # uniaxial +x strain of 0.03 -> max principal 0.03; D = 0.03 / eps_tear(0.015) = 2.0
-    eps = 0.03
+    # uniaxial +x strain at exactly 2x eps_tear -> max principal = that -> D = 2.0 (value-agnostic)
+    eps = 2.0 * PAPER_80GSM["eps_tear"]
     frame = {"TOSTRAIN": np.tile([eps, 0.0, 0.0, 0.0, 0.0, 0.0], (30, 1))}
     D = PaperOrthotropic().failure(frame, Hypotheses())
     assert D == pytest.approx(eps / PAPER_80GSM["eps_tear"], rel=1e-6)
