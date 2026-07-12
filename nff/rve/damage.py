@@ -51,6 +51,33 @@ def fracture_locus(eta: np.ndarray, eps_f0: float = 0.25, k: float = 1.5,
     return np.minimum(eps_f0 * np.exp(-k * (eta_c - 1.0 / 3.0)), eps_f_cap)
 
 
+def damage_from_frame(frame: dict, *, eps_f0: float = 0.25, k: float = 1.5, q: float = 99.0) -> float:
+    """Robust ductile-damage percentile ``D`` from a parsed CalculiX frame (PEEQ + STRESS).
+
+    Single source of truth for turning a raw .frd frame into the scalar failure margin, shared
+    by the parser and by :meth:`SteelJ2.failure`. Returns NaN if either field is absent or the
+    element counts disagree. ``D >= 1`` => fracture.
+
+    Args:
+        frame: parsed frame dict with keys ``PEEQ``/``PE`` (per-element plastic strain) and
+            ``STRESS`` (N x 6 Cauchy tensor).
+    """
+    peeq = None
+    for key in ("PEEQ", "PE"):
+        if key in frame and np.size(frame[key]):
+            arr = np.abs(np.asarray(frame[key], float))
+            peeq = arr[:, 0] if arr.ndim > 1 else arr
+            break
+    S = frame.get("STRESS")
+    if peeq is None or S is None or not np.size(S):
+        return float("nan")
+    S = np.asarray(S, float)
+    if S.ndim != 2 or S.shape[1] < 6 or S.shape[0] != peeq.shape[0]:
+        return float("nan")
+    _, D_p99, _ = ductile_damage(peeq, S[:, :6], eps_f0=eps_f0, k=k, q=q)
+    return D_p99
+
+
 def ductile_damage(peeq: np.ndarray, S: np.ndarray, *, eps_f0: float = 0.25, k: float = 1.5,
                    q: float = 99.0):
     """Continuous per-element damage and a robust scalar margin.
