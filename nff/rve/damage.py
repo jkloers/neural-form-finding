@@ -51,6 +51,37 @@ def fracture_locus(eta: np.ndarray, eps_f0: float = 0.25, k: float = 1.5,
     return np.minimum(eps_f0 * np.exp(-k * (eta_c - 1.0 / 3.0)), eps_f_cap)
 
 
+def max_principal_strain(tostrain: np.ndarray) -> np.ndarray:
+    """Per-element maximum principal (tensile) strain from a TOSTRAIN block.
+
+    Args:
+        tostrain: (N, 6) total strain ``[exx, eyy, ezz, exy, eyz, ezx]`` (CalculiX order).
+
+    Returns:
+        (N,) largest eigenvalue of the strain tensor per element (the tensile principal strain).
+    """
+    e = np.asarray(tostrain, float)
+    out = np.zeros(len(e))
+    for i, (xx, yy, zz, xy, yz, zx) in enumerate(e):
+        T = np.array([[xx, xy, zx], [xy, yy, yz], [zx, yz, zz]])
+        out[i] = np.linalg.eigvalsh(T)[-1]
+    return out
+
+
+def tear_from_frame(frame: dict, *, eps_tear: float = 0.015, q: float = 99.0) -> float:
+    """Robust tensile-tear margin ``D`` from a parsed frame (``D >= 1`` => tear).
+
+    Paper fails by tearing when the max principal (tensile) strain reaches the strain-to-break
+    ``eps_tear``. Uses a high percentile of the per-element principal strain (singularity-
+    insensitive, like the ductile-damage aggregate). Returns NaN if the strain field is absent.
+    """
+    E = frame.get("TOSTRAIN")
+    if E is None or not np.size(E):
+        return float("nan")
+    principal = max_principal_strain(np.asarray(E, float))
+    return float(np.percentile(principal, q)) / eps_tear
+
+
 def damage_from_frame(frame: dict, *, eps_f0: float = 0.25, k: float = 1.5, q: float = 99.0) -> float:
     """Robust ductile-damage percentile ``D`` from a parsed CalculiX frame (PEEQ + STRESS).
 

@@ -8,9 +8,10 @@ plain params dict (``STEEL``), which is wrapped into a :class:`SteelJ2`. A
 from __future__ import annotations
 
 from nff.rve.materials.base import Hypotheses, Material
+from nff.rve.materials.paper import PAPER_80GSM, PaperOrthotropic
 from nff.rve.materials.steel import STEEL, SteelJ2
 
-_REGISTRY: dict[str, type[Material]] = {"steel": SteelJ2}
+_REGISTRY: dict[str, type[Material]] = {"steel": SteelJ2, "paper": PaperOrthotropic}
 
 
 def get_material(name: str, **kwargs) -> Material:
@@ -33,4 +34,5 @@ def coerce_material(material) -> Material:
     raise TypeError(f"cannot coerce {type(material).__name__} to a Material")
 
 
-__all__ = ["Hypotheses", "Material", "SteelJ2", "STEEL", "get_material", "coerce_material"]
+__all__ = ["Hypotheses", "Material", "SteelJ2", "STEEL", "PaperOrthotropic", "PAPER_80GSM",
+           "get_material", "coerce_material"]

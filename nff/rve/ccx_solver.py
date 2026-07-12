@@ -25,7 +25,7 @@ import time
 import numpy as np
 
 from nff.rve.geometry import RVEParams, build_rve_domain, boundary_tag
-from nff.rve.damage import damage_from_frame
+from nff.rve.damage import damage_from_frame, max_principal_strain
 from nff.rve.materials import Hypotheses, coerce_material
 from nff.rve.materials.steel import STEEL   # re-exported for back-compat (callers import from here)
 
@@ -282,13 +282,8 @@ def _parse_frd(path):
 
 
 def _principal_strain_max(tostrain):
-    """Max principal strain per frame from TOSTRAIN (exx,eyy,ezz,exy,eyz,ezx)."""
-    e = tostrain
-    out = np.zeros(len(e))
-    for i, (xx, yy, zz, xy, yz, zx) in enumerate(e):
-        T = np.array([[xx, xy, zx], [xy, yy, yz], [zx, yz, zz]])
-        out[i] = np.linalg.eigvalsh(T)[-1]
-    return out
+    """Back-compat shim: per-element max principal strain (see damage.max_principal_strain)."""
+    return max_principal_strain(tostrain)
 
 
 def prepare_job(p, angle_deg=60.0, n_steps=15, pivot=None, material=STEEL, imp_amp=None,
