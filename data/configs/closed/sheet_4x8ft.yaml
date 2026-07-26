@@ -119,12 +119,18 @@ training:
   geometric_loss_type: boundary_vertices
 
 visualization:
-  stage0: false
-  stage1: false
-  stage2: true
-  energy_plot: false
-  animation: false
+  stage0: true               # flat trained sheet (the design the map produced)
+  stage1: false              # Stage 1 is BYPASSED here (validity_method: none) — the plot is empty
+  stage2: true               # deployed equilibrium + target
+  energy_plot: true          # ⚠ energy_balance.png is NOT valid for a surrogate run: the
+                             # decomposition (build_decompose_energy_fn) is hard-wired to the
+                             # linear-spring ligament and has no bond_energy_fn hook, so it reports
+                             # U_int from springs this solve never used (~0 here, since closed hinges
+                             # have ~zero reference bond length) and the balance Sigma≈0 fails by
+                             # construction. `work` is derived from that same U_int, so it is off too.
+                             # The solver's own total potential (solution.energies) IS correct.
+  animation: true            # deployment animation over the load steps
   show_plots: false
   save_outputs: true
-  show_external_forces: false
+  show_external_forces: false   # per-face arrows are clutter; the loading diagram carries the BCs
   show_kinematic_blocks: true
