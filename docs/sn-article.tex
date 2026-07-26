@@ -9,7 +9,7 @@
 %% All additional figures and files should be attached             %%
 %% separately and not embedded in the \TeX\ document itself.       %%
 %%                                                                 %%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %%\documentclass[referee,sn-basic]{sn-jnl}% referee option is meant for double line spacing
 
@@ -25,9 +25,9 @@
 
 %%\documentclass[sn-basic]{sn-jnl}% Basic Springer Nature Reference Style/Chemistry Reference Style
 
-%%Note: the following reference styles support Namedate and Numbered referencing. By default the style follows the most common style. To switch between the options you can add or remove Numbered in the optional parenthesis. 
-%%The option is available for: sn-basic.bst, sn-chicago.bst%  
- 
+%%Note: the following reference styles support Namedate and Numbered referencing. By default the style follows the most common style. To switch between the options you can add or remove Numbered in the optional parenthesis.
+%%The option is available for: sn-basic.bst, sn-chicago.bst%
+
 %%\documentclass[pdflatex,sn-nature]{sn-jnl}% Style for submissions to Nature Portfolio journals
 %%\documentclass[pdflatex,sn-basic]{sn-jnl}% Basic Springer Nature Reference Style/Chemistry Reference Style
 \documentclass[pdflatex,sn-mathphys-num]{sn-jnl}% Math and Physical Sciences Numbered Reference Style
@@ -60,14 +60,14 @@
 
 %%%%%=============================================================================%%%%
 %%%%  Remarks: This template is provided to aid authors with the preparation
-%%%%  of original research articles intended for submission to journals published 
-%%%%  by Springer Nature. The guidance has been prepared in partnership with 
-%%%%  production teams to conform to Springer Nature technical requirements. 
-%%%%  Editorial and presentation requirements differ among journal portfolios and 
-%%%%  research disciplines. You may find sections in this template are irrelevant 
-%%%%  to your work and are empowered to omit any such section if allowed by the 
-%%%%  journal you intend to submit to. The submission guidelines and policies 
-%%%%  of the journal take precedence. A detailed User Manual is available in the 
+%%%%  of original research articles intended for submission to journals published
+%%%%  by Springer Nature. The guidance has been prepared in partnership with
+%%%%  production teams to conform to Springer Nature technical requirements.
+%%%%  Editorial and presentation requirements differ among journal portfolios and
+%%%%  research disciplines. You may find sections in this template are irrelevant
+%%%%  to your work and are empowered to omit any such section if allowed by the
+%%%%  journal you intend to submit to. The submission guidelines and policies
+%%%%  of the journal take precedence. A detailed User Manual is available in the
 %%%%  template package for technical guidance.
 %%%%%=============================================================================%%%%
 
@@ -76,7 +76,7 @@
 \newtheorem{theorem}{Theorem}%  meant for continuous numbers
 %%\newtheorem{theorem}{Theorem}[section]% meant for sectionwise numbers
 %% optional argument [theorem] produces theorem numbering sequence instead of independent numbers for Proposition
-\newtheorem{proposition}[theorem]{Proposition}% 
+\newtheorem{proposition}[theorem]{Proposition}%
 %%\newtheorem{proposition}{Proposition}% to get separate numbers for theorem and proposition etc.
 
 \theoremstyle{thmstyletwo}%
@@ -85,6 +85,13 @@
 
 \theoremstyle{thmstylethree}%
 \newtheorem{definition}{Definition}%
+
+%%=============================================================%%
+%% Notation shorthands used throughout (see Appendix A).       %%
+%%=============================================================%%
+\newcommand{\wlig}{w_{\mathrm{lig}}}
+\newcommand{\epsh}{\bm{\varepsilon}}
+\newcommand{\sigmoid}{\operatorname{sigmoid}}
 
 \raggedbottom
 %%\unnumbered% uncomment this for unnumbered level heads
@@ -98,7 +105,7 @@
 %% Particle	-> \spfx{van der} -> surname prefix
 %% FamilyName	-> \sur{Ploeg}
 %% Suffix	-> \sfx{IV}
-%% \author*[1,2]{\fnm{Joergen W.} \spfx{van der} \sur{Ploeg} 
+%% \author*[1,2]{\fnm{Joergen W.} \spfx{van der} \sur{Ploeg}
 %%  \sfx{IV}}\email{iauthor@gmail.com}
 %%=============================================================%%
 
@@ -118,21 +125,42 @@
 %% Sample for unstructured abstract %%
 %%==================================%%
 
-\abstract{The abstract serves both as a general introduction to the topic and as a brief, non-technical summary of the main results and their implications. Authors are advised to check the author instructions for the journal they are submitting to for word limits and if structural elements like subheadings, citations, or equations are permitted.}
+\abstract{Kirigami sheets deploy from a flat, cut state into three-dimensional or
+expanded planar configurations, which makes the cut pattern a design variable for
+shape. Solving the inverse problem --- finding the pattern whose deployed
+configuration approximates a prescribed target --- requires differentiating a
+target-matching objective through the mechanics of deployment, and the mechanics
+are dominated by the slender ligaments that join the panels. These ligaments
+yield, buckle out of plane, and eventually tear, so the ideal-hinge and
+linear-spring idealisations commonly used in kirigami form finding are not
+predictive at the deployment amplitudes of interest. We present an end-to-end
+differentiable pipeline in which (i) the flat cut pattern is parameterised so that
+non-self-intersection holds by construction, removing the need for a geometric
+validity solver; (ii) deployment is a potential-energy minimisation over
+rigid-panel degrees of freedom, differentiated through the implicit function
+theorem rather than through the solver iterates; and (iii) each ligament is
+represented by a learned condensed stored-energy function of its three
+rigid-body-invariant deformation measures and its own geometry, trained on
+three-dimensional elasto-plastic finite-element simulations of the ligament
+neighbourhood. Because plastic softening can render the equilibrium Hessian
+indefinite and annihilate the design gradient, the adjoint solve is
+Tikhonov-regularised. We further report the calibration of the whole chain to a
+physical $0.5\,\mathrm{mm}$ polyethylene terephthalate sheet, from tensile coupons
+to single-ligament experiments, and show that the out-of-plane buckling amplitude
+of a real ligament is predicted without material tuning.}
+%% TODO: add one or two quantitative headline results (surrogate accuracy,
+%% achieved target-matching error) once the final numbers are frozen.
 
 %%================================%%
 %% Sample for structured abstract %%
 %%================================%%
 
-% \abstract{\textbf{Purpose:} The abstract serves both as a general introduction to the topic and as a brief, non-technical summary of the main results and their implications. The abstract must not include subheadings (unless expressly permitted in the journal's Instructions to Authors), equations or citations. As a guide the abstract should not exceed 200 words. Most journals do not set a hard limit however authors are advised to check the author instructions for the journal they are submitting to.
-% 
-% \textbf{Methods:} The abstract serves both as a general introduction to the topic and as a brief, non-technical summary of the main results and their implications. The abstract must not include subheadings (unless expressly permitted in the journal's Instructions to Authors), equations or citations. As a guide the abstract should not exceed 200 words. Most journals do not set a hard limit however authors are advised to check the author instructions for the journal they are submitting to.
-% 
-% \textbf{Results:} The abstract serves both as a general introduction to the topic and as a brief, non-technical summary of the main results and their implications. The abstract must not include subheadings (unless expressly permitted in the journal's Instructions to Authors), equations or citations. As a guide the abstract should not exceed 200 words. Most journals do not set a hard limit however authors are advised to check the author instructions for the journal they are submitting to.
-% 
-% \textbf{Conclusion:} The abstract serves both as a general introduction to the topic and as a brief, non-technical summary of the main results and their implications. The abstract must not include subheadings (unless expressly permitted in the journal's Instructions to Authors), equations or citations. As a guide the abstract should not exceed 200 words. Most journals do not set a hard limit however authors are advised to check the author instructions for the journal they are submitting to.}
+% \abstract{\textbf{Purpose:} ...
+% \textbf{Methods:} ...
+% \textbf{Results:} ...
+% \textbf{Conclusion:} ...}
 
-\keywords{keyword1, Keyword2, Keyword3, Keyword4}
+\keywords{kirigami, inverse design, differentiable physics, deployable structures, constitutive surrogate, elasto-plastic hinges}
 
 %%\pacs[JEL Classification]{D8, H51}
 
@@ -140,151 +168,223 @@
 
 \maketitle
 
-\section{Introduction}\label{sec1}
+\section{Introduction}\label{sec:intro}
 
-Kirigami
+Cutting a flat sheet along a prescribed pattern turns it into a mechanism. The
+resulting kirigami tessellation is an assembly of nearly rigid panels connected by
+the uncut strips of material left between the cuts, and it deploys --- expanding
+in plane, or buckling out of it --- along a small number of kinematic modes fixed
+by the cut topology. The cut pattern is therefore a design variable for shape:
+choosing where to cut chooses what the sheet becomes when pulled. This makes
+kirigami attractive wherever a flat, cheaply manufacturable stock must become a
+prescribed curved or expanded configuration.
+% CITE: kirigami metamaterials reviews; buckling-induced kirigami
+% (Rafsanjani & Bertoldi, PRL 2017, arXiv:1702.06470); auxetic cut sheets.
 
-Physique différentiable, JAX
+The forward problem is well posed and largely understood: given a pattern, the
+rigid-panel kinematics determine the family of admissible deployed
+configurations. The inverse problem is not. One asks for the pattern whose
+deployed configuration best approximates a prescribed target, and the map from
+cuts to deployed shape passes through the mechanics of the ligaments; it is not
+available in closed form. Gradient-based inverse design consequently requires
+differentiating the target-matching objective through an equilibrium problem.
 
-Hypotheses : 
-Rigid planar quadrangular deployable kirigami. 
-Les faces sont rigides et coplanaiaires pendant tout le développement. 
-On étudie en particulier le 
+Two idealisations are usually made at this point, and both fail in the regime
+where kirigami is actually useful. The first is to treat each ligament as an ideal
+revolute joint, or as a linear torsional spring. Real ligaments are slender
+elastic--plastic strips: they yield, they buckle out of plane --- which relieves
+the fold moment by an order of magnitude and is the mechanism that makes large
+deployment possible at all --- and they eventually tear. A constitutive
+description that ignores these effects mispredicts both the deployed shape and the
+onset of failure, and it cannot answer the question that governs the design, which
+is how far the sheet may be deployed before the ligaments fail. The second
+idealisation is to enforce the geometric admissibility of the flat pattern
+(non-self-intersection, closure) as a constraint solved after the fact, which
+inserts a second implicit solve into the gradient path.
 
+This work removes both. We parameterise the flat closed sheet so that a valid,
+non-self-intersecting pattern is produced for every admissible parameter value,
+and we replace the ligament spring by a learned condensed stored-energy function
+trained on three-dimensional elasto-plastic simulations of the ligament
+neighbourhood. Deployment is then a potential-energy minimisation over the
+rigid-panel degrees of freedom, and the design gradient is obtained from the
+implicit function theorem applied to that minimisation. The whole chain --- cut
+parameters, flat geometry, deployed equilibrium, target mismatch --- is a single
+differentiable program.
 
-Plan de l'article
+The modelling hypotheses are stated and justified where they are used, and are
+collected here for reference. \textbf{(H1)} The panels are rigid: all deformation
+localises in the ligaments. \textbf{(H2)} The panels remain coplanar throughout
+deployment, out-of-plane deformation being confined to the ligaments; the
+condition under which this holds is derived in Section~\ref{sec:buckling-locality}
+and is satisfied by the specimens tested here. \textbf{(H3)} The stored energy of
+the assembly is a sum of independent ligament contributions. \textbf{(H4)} Each
+ligament is memoryless: its energy depends on the current configuration relative
+to the flat reference, not on the deformation path. \textbf{(H5)} Deployment is
+quasi-static.
 
-\section{Methods}\label{secM}
+Section~\ref{sec:methods} develops the model: the tessellation and its design
+parameters, the rigid-panel kinematics, the ligament deformation measures, the
+energy functional and the equilibrium problem, the differentiable pipeline built
+on them, the learned ligament energy, the finite-element oracle that trains it,
+and the calibration of the chain to a physical sheet.
+Section~\ref{sec:results} reports the resulting designs and their computational
+cost. Section~\ref{sec:discussion} analyses when out-of-plane buckling localises
+in the ligaments rather than tilting the panels, which is the condition (H2) rests
+on. Section~\ref{sec:conclusion} concludes.
+
+\section{Methods}\label{sec:methods}
 
 \subsection{The kirigami tessellation}
 
-We model a planar kirigami metamaterial as an assembly of $n$ rigid polygonal tiles cut from a flat sheet and connected to one another, at their corners, by slender elastic hinges. Deformation is assumed to localise entirely in the ligaments: the panels themselves are treated as rigid. This
-reduction is appropriate in the regime where the panels are much stiffer than the thin connecting ligaments, and it collapses a high-dimensional continuum problem onto at most $3n$ degrees of freedom. A tessellation is called deployable, if it has exactly one degree of freedom. 
+We model a planar kirigami metamaterial as an assembly of $n$ rigid polygonal
+panels cut from a flat sheet and connected to one another, at their corners, by
+slender elastic \emph{ligaments}. Throughout, \emph{hinge} denotes the joint
+between two panels and \emph{ligament} the strip of uncut material that realises
+it. Deformation is assumed to localise entirely in the ligaments and the panels
+themselves are treated as rigid (H1). This reduction is appropriate in the regime
+where the panels are much stiffer than the thin connecting ligaments, and it
+collapses a high-dimensional continuum problem onto at most $3n$ degrees of
+freedom. A tessellation is called \emph{deployable} if its rigid-panel kinematics
+admit exactly one internal degree of freedom.
 
 \paragraph{Topology.}
-The connectivity is fixed by the cut pattern and does not change during deformation. A cut pattern is the arrangement of slits that decomposes a continuous sheet into rigid panels joined by intact ligaments, thereby fixing both the connectivity and the flat reference geometry of the kirigami. We generate it from the closed-state RDPQK construction of Dang~\emph{et al.}, laid out on an $M \times N$ grid of unit cells. From this pattern, we derive once and for all the purely combinatorial data of the assembly: the set of faces
-$\{P_\alpha\}_{\alpha=1}^{n}$, the corner (node) incidences of each face, and the set of \emph{hinges} $\mathcal{H}$, where each hinge $h=(i,k)\in\mathcal{H}$
-identifies a pair of face corners that an uncut strip of material connects. 
+The connectivity is fixed by the cut pattern and does not change during
+deformation. A cut pattern is the arrangement of slits that decomposes a
+continuous sheet into rigid panels joined by intact ligaments, thereby fixing both
+the connectivity and the flat reference geometry of the kirigami. We generate it
+from the closed-state rigid-deployable planar quadrilateral kirigami (RDPQK)
+construction of Dang \emph{et al.}, laid out on an $M \times N$ grid of unit
+cells. % CITE: Dang et al. 2021, RDPQK closed-state construction.
+From this pattern we derive, once and for all, the purely combinatorial data of
+the assembly: the set of panels $\{P_\alpha\}_{\alpha=1}^{n}$, the corner (node)
+incidences of each panel, and the set of hinges $\mathcal{H}$, where each hinge
+$h=(i,k)\in\mathcal{H}$ identifies the pair of panel corners that an uncut strip
+of material connects.
 
 \paragraph{Geometry and design parameters.}
-Each rigid face $P_\alpha$ is described in a centroidal representation by its
+Each rigid panel $P_\alpha$ is described in a centroidal representation by its
 centroid $\bm{c}_\alpha \in \mathbb{R}^2$ together with a set of
 centroid-to-corner vectors $\{\bm{d}_{\alpha j}\}_j$; the corner positions in the
 reference (flat, undeployed) configuration are
-$\bm{x}_{\alpha j}^{0} = \bm{c}_\alpha + \bm{d}_{\alpha j}$. This reference state is
-produced from the trainable design parameters
+$\bm{x}_{\alpha j}^{0} = \bm{c}_\alpha + \bm{d}_{\alpha j}$. This reference state
+is produced from the trainable design parameters
 \begin{equation}
   \bm{\theta} = \bigl(\, \bm{z},\ \bm{\ell},\ \bm{w}_{\mathrm{lig}}\,\bigr),
   \qquad
-  \bm{r} = \sigma(\bm{z}) \in (0,1)^{\lvert\mathrm{cuts}\rvert},
+  \bm{r} = \sigmoid(\bm{z}) \in (0,1)^{\lvert\mathrm{cuts}\rvert},
   \label{eq:design-params}
 \end{equation}
-where the per-cut logits $\bm{z}$ map through the sigmoid $\sigma$ to \emph{aspect
-ratios} $\bm{r}$, each $r$ fixing the relative placement of a cut's two endpoints;
-the ordered logits $\bm{\ell}$ map through a cumulative-softmax to the tangential
-positions $\bm{s}$ of the boundary cuts (\emph{boundary sliders}); and
-$\bm{w}_{\mathrm{lig}}$ collects the per-hinge ligament widths. Given the induced
-$(\bm{r},\bm{s})$, the interior cut vertices are obtained as the solution of a
-linear collinearity system
+where the per-cut logits $\bm{z}$ map through the logistic function to
+\emph{aspect ratios} $\bm{r}$, each $r$ fixing the relative placement of a cut's
+two endpoints; the ordered logits $\bm{\ell}$ map through a cumulative softmax to
+the tangential positions $\bm{\tau}$ of the boundary cuts (\emph{boundary
+sliders}); and $\bm{w}_{\mathrm{lig}}$ collects the per-hinge ligament widths.
+Given the induced $(\bm{r},\bm{\tau})$, the interior cut vertices are obtained as
+the solution of a sparse linear collinearity system
 \begin{equation}
-  A(\bm{r})\,\bm{v} = \bm{b}(\bm{s}),
+  \mathsf{A}(\bm{r})\,\bm{v} = \bm{b}(\bm{\tau}),
+  \label{eq:collinearity}
 \end{equation}
 which places every interior vertex on the line through its neighbours with the
 prescribed aspect ratio, while boundary vertices are pinned to the slider
 positions. The map $\bm{\theta} \mapsto \{\bm{c}_\alpha, \bm{d}_{\alpha j}\}$ is
-smooth and the resulting flat tessellation is guaranteed to be
+smooth, and the resulting flat tessellation is guaranteed to be
 non-self-intersecting: the cut aspect ratios yield parallelogram voids, and the
-boundary sliders are kept strictly ordered (the cumulative-softmax
-parameterisation) so that the outline stays convex, satisfying the hypotheses of
-Tutte's embedding theorem for any admissible $\bm{\theta}$. Validity of the flat
-state is therefore \emph{built in}, not enforced a posteriori.
+boundary sliders are kept strictly ordered by the cumulative-softmax
+parameterisation, so that the outline stays convex. The hypotheses of Tutte's
+embedding theorem are then satisfied for every admissible $\bm{\theta}$.
+% CITE: Tutte, How to draw a graph, 1963.
+Validity of the flat state is therefore \emph{built in}, not enforced a
+posteriori, and no geometric projection appears in the gradient path.
 
-Alongside the shape parameters, each hinge $h$ carries two geometric attributes
-that are constants of the design and enter the mechanics as material descriptors:
-its rest orientation, summarised by a cut angle $\beta_h$ (a function of the
-neighbouring $\bm{r}$), and its ligament width $w_{\mathrm{lig},h}$, which sets the
-local compliance. These are fixed by the flat construction and do not evolve during
-deployment.
+Alongside the shape parameters, each hinge $h$ carries three geometric attributes
+that are constants of the deployment and enter the mechanics as descriptors of the
+ligament: its rest orientation, summarised by the cut angle $\beta_h$ (a function
+of the neighbouring aspect ratios $\bm{r}$); its ligament width
+$w_{\mathrm{lig},h}$, which sets the local compliance; and the cut-tip fillet
+ratio $\rho_{f}$, defined so that the fillet radius is $\rho_f\,\wlig$. The first
+two are functions of $\bm{\theta}$ and are differentiable; the fillet ratio is
+fixed by the cutting process and is not optimised. None of the three evolves
+during deployment.
 
 \subsection{Kinematics}
 
 Because the panels are rigid, the configuration of the whole structure is
-specified by three degrees of freedom per face,
+specified by three degrees of freedom per panel,
 \begin{equation}
   \bm{q}_\alpha = (\bm{u}_\alpha,\ \phi_\alpha) \in \mathbb{R}^2 \times \mathbb{S}^1,
   \qquad
   \bm{q} = (\bm{q}_1,\dots,\bm{q}_{n}) \in \mathbb{R}^{3n},
 \end{equation}
-a rigid-body translation $\bm{u}_\alpha$ and rotation $\phi_\alpha$ of face
-$P_\alpha$ about its centroid. The displacement of corner $j$ of face $\alpha$
+a rigid-body translation $\bm{u}_\alpha$ and a rotation $\phi_\alpha$ of panel
+$P_\alpha$ about its centroid. The displacement of corner $j$ of panel $\alpha$
 follows exactly from the rigid-body map,
 \begin{equation}
   \Delta\bm{x}_{\alpha j}(\bm{q}_\alpha)
     = \bm{u}_\alpha + \bigl(R(\phi_\alpha) - I\bigr)\,\bm{d}_{\alpha j},
 \end{equation}
-where $R(\phi)$ is the planar rotation matrix; the rotation is kept fully
-nonlinear (no small-angle linearisation of the panel motion), so that the model
-remains valid through the large panel rotations that characterise deployment.
+where $R(\phi)$ is the planar rotation matrix. The rotation is kept fully
+nonlinear --- no small-angle linearisation of the panel motion --- so that the
+model remains valid through the large panel rotations that characterise
+deployment.
 
 \subsection{Hinge deformation measures}
 
 The mechanical state of a hinge is captured by the relative motion of the two
-faces it connects, expressed in a frame that is invariant to rigid-body motion of
-the assembly. For hinge $h=(i,k)$ --- joining faces $i$ and $k$ --- with reference
-bond vector $\bm{b}_h^{0} = \bm{x}_k^{0} - \bm{x}_i^{0}$, we remove the mean
-rotation of the two adjacent faces (a corotational, total-Lagrangian frame) and
-read off three scalar deformation measures,
+panels it connects, expressed in a frame that is invariant to rigid-body motion of
+the assembly. For hinge $h=(i,k)$, joining panels $i$ and $k$ with reference bond
+vector $\bm{e}_h^{0} = \bm{x}_k^{0} - \bm{x}_i^{0}$ and unit bond direction
+$\hat{\bm{e}}_h = \bm{e}_h^{0}/\lVert\bm{e}_h^{0}\rVert$, we remove the mean
+rotation of the two adjacent panels --- a corotational, total-Lagrangian frame ---
+and read off three scalar deformation measures,
 \begin{equation}
-  \bm{\varepsilon}_h(\bm{q}) = \bigl(a_h,\ s_h,\ \vartheta_h\bigr),
+  \epsh_h(\bm{q}) = \bigl(a_h,\ s_h,\ \vartheta_h\bigr),
   \label{eq:hinge-strain}
 \end{equation}
-namely an axial (stretch) measure $a_h$, a shear measure $s_h$, and the relative
-rotation $\vartheta_h = \phi_k - \phi_i$. By construction $\bm{\varepsilon}_h$
-vanishes under any rigid-body motion of the structure, including arbitrarily large
-global rotations, and depends only on the \emph{current} configuration relative to
-the reference geometry --- the ligament is treated as memoryless. 
-
-\begin{figure}
-    \centering
-    \includegraphics[width=1\linewidth]{Images/pipeline_overview.png}
-    \caption{Enter Caption}
-    \label{fig:placeholder}
-\end{figure}
+namely an axial (opening) measure $a_h$ along $\hat{\bm{e}}_h$, a shear measure
+$s_h$ transverse to it, and the relative rotation $\vartheta_h = \phi_k - \phi_i$.
+By construction $\epsh_h$ vanishes under any rigid-body motion of the structure,
+including arbitrarily large global rotations, and it depends only on the
+\emph{current} configuration relative to the reference geometry: the ligament is
+memoryless (H4). The triple $(a,s,\vartheta)$ is the minimal rigid-body-invariant
+coordinate of the relative panel motion and is the argument of every constitutive
+statement below.
 
 \subsection{Energy functional}
 
 We equip each hinge with a stored-energy function $W$ of its own deformation
-measures and design attributes,
+measures and geometric descriptors,
 \begin{equation}
-  W_h = W\!\bigl(\bm{\varepsilon}_h;\ \bm{g}_h\bigr),
+  W_h = W\!\bigl(\epsh_h;\ \bm{g}_h\bigr),
   \qquad
-  \bm{g}_h = \bigl(w_{\mathrm{lig},h},\ \beta_h\bigr),
+  \bm{g}_h = \bigl(w_{\mathrm{lig},h},\ \beta_h,\ \rho_f\bigr),
   \label{eq:hinge-energy}
 \end{equation}
-where $\bm{g}_h$ collects the per-hinge design attributes (ligament width and cut
-angle), and take the total elastic energy of the assembly to be the sum of
-independent hinge contributions,
+and take the total elastic energy of the assembly to be the sum of independent
+hinge contributions (H3),
 \begin{equation}
   U(\bm{q};\,\bm{\theta}) = \sum_{h\in\mathcal{H}}
-    W\!\bigl(\bm{\varepsilon}_h(\bm{q});\ \bm{g}_h\bigr).
+    W\!\bigl(\epsh_h(\bm{q});\ \bm{g}_h\bigr).
   \label{eq:total-energy}
 \end{equation}
-We deliberately leave the constitutive form of $W$ abstract: any objective,
-frame-invariant function of $\bm{\varepsilon}=(a,s,\vartheta)$, parameterised by
-the hinge descriptors $\bm{g}_h$, is admissible, and different choices --- from a
-simple quadratic spring to a data-driven surrogate calibrated against
-high-fidelity simulation --- can be substituted without altering the surrounding
-kinematics or topology. The only requirements are that $W$ be non-negative,
-minimised at the undeformed state, and differentiable in both its kinematic
-arguments and its design attributes.
+We deliberately leave the constitutive form of $W$ abstract. Any objective,
+frame-invariant function of $\epsh=(a,s,\vartheta)$, parameterised by the hinge
+descriptors $\bm{g}_h$, is admissible, and different choices --- from a simple
+quadratic spring to the data-driven surrogate of
+Section~\ref{sec:surrogate} --- can be substituted without altering the
+surrounding kinematics or topology. The only requirements are that $W$ be
+non-negative, minimised at the undeformed state, and twice differentiable in both
+its kinematic arguments and its geometric descriptors, the second derivative being
+required for the tangent stiffness of the equilibrium solve.
 
 \subsection{Equilibrium}
 
-Deployment and loading are imposed through boundary conditions on the face
-degrees of freedom: a subset of face DOFs is prescribed (Dirichlet, the clamped
-panels) and generalised forces $\bm{f}$ are applied to others (Neumann). The
-mechanical state at load factor $\lambda\in[0,1]$ is the minimiser of the total
-potential energy over the free degrees of freedom,
+Deployment and loading are imposed through boundary conditions on the panel
+degrees of freedom: a subset of panel degrees of freedom is prescribed (Dirichlet,
+the clamped panels) and generalised forces $\bm{f}$ are applied to others
+(Neumann). The mechanical state at load factor $\lambda\in[0,1]$ is the minimiser
+of the total potential energy over the free degrees of freedom,
 \begin{equation}
   \bm{q}^\star(\lambda;\,\bm{\theta})
     = \arg\min_{\bm{q}\,\in\,\mathcal{C}}
@@ -294,142 +394,184 @@ potential energy over the free degrees of freedom,
   \label{eq:equilibrium}
 \end{equation}
 where $\mathcal{C}$ is the affine space of configurations satisfying the
-prescribed DOFs. The load is applied incrementally in $\lambda$, each increment
-warm-started from the previous equilibrium, so that the model traces a
-quasi-static deformation path from the flat closed sheet to its deployed
-configuration. Everything downstream of \eqref{eq:equilibrium} --- the equilibrium
-map $\bm{\theta} \mapsto \bm{q}^\star$ --- is differentiable with respect to the
-design parameters $\bm{\theta}$, which is what makes the object amenable to
-inverse design.
-
+prescribed degrees of freedom. The load is applied incrementally in $\lambda$,
+each increment warm-started from the previous equilibrium, so that the model
+traces a quasi-static deformation path (H5) from the flat closed sheet to its
+deployed configuration. Everything downstream of \eqref{eq:equilibrium} --- in
+particular the equilibrium map $\bm{\theta} \mapsto \bm{q}^\star$ --- is
+differentiable with respect to the design parameters $\bm{\theta}$, which is what
+makes the object amenable to inverse design.
 
 \subsection{Differentiable physics pipeline}
+\label{sec:pipeline}
 
-In the closed inverse-design setting the trainable parameters are those of
-\eqref{eq:design-params}, $\bm{\theta}=(\bm{z},\bm{\ell},\bm{w}_{\mathrm{lig}})$:
-per-cut logits $\bm{z}$ mapped to Tutte aspect ratios
-$\bm{r}=\sigma(\bm{z})\in(0,1)$, ordered boundary-slider logits $\bm{\ell}$, and
-per-hinge ligament widths $\bm{w}_{\mathrm{lig}}$. A differentiable forward map
-$\mathcal{G}_{\bm{\theta}}$ (the flat RDPQK closed-sheet builder) assembles
-$\bm{r}$ and the boundary sliders into a sparse collinearity linear system whose
-solution gives the flat panel vertices; non-self-intersection holds by
-construction. Deployment is the static solve
-\begin{equation}
-  \bm{q}^\star(\bm{\theta})
-    = \arg\min_{\bm{q}\,\in\,\mathcal{C}}\,\Pi(\bm{q};\,\bm{\theta},\lambda),
-  \qquad
-  \Pi = \sum_{h\in\mathcal{H}} W\!\bigl(\bm{\varepsilon}_h(\bm{q});\,\bm{g}_h\bigr)
-        - W_{\mathrm{ext}},
-  \label{eq:pipeline-solve}
-\end{equation}
-with external work $W_{\mathrm{ext}}=\lambda\,\bm{f}^\top\bm{q}$ and the condensed
-hinge energy $W$ the learned (frozen) $\tanh$-MLP surrogate of
-\eqref{eq:surrogate} below; its automatic-differentiation gradient
-$\nabla_{\bm{\varepsilon}} W=(F_a,F_s,M_\vartheta)$ supplies the internal
-generalised forces and $\nabla^2_{\bm{\varepsilon}} W$ the tangent stiffness.
+The pipeline is summarised in Fig.~\ref{fig:pipeline}. The trainable parameters
+are those of \eqref{eq:design-params},
+$\bm{\theta}=(\bm{z},\bm{\ell},\bm{w}_{\mathrm{lig}})$. A differentiable forward
+map --- the flat RDPQK closed-sheet builder --- assembles $\bm{r}$ and the
+boundary sliders into the sparse collinearity system \eqref{eq:collinearity},
+whose solution gives the flat panel vertices; non-self-intersection holds by
+construction. Deployment is the static solve \eqref{eq:equilibrium}, with the
+condensed hinge energy $W$ given by the learned surrogate of
+Section~\ref{sec:surrogate}: its automatic-differentiation gradient
+$\nabla_{\epsh} W=(F_a,F_s,M_\vartheta)$ supplies the internal generalised forces
+that the solver balances, and $\nabla^2_{\epsh} W$ the tangent stiffness.
 
-The minimisation uses jaxopt L-BFGS under incremental load stepping (in $\lambda$)
-unrolled with \texttt{jax.lax.scan}. Gradients propagate through the argmin by the
-implicit function theorem rather than through the solver iterates,
+The minimisation is performed with a limited-memory BFGS solver under incremental
+load stepping in $\lambda$, the load loop being unrolled as a scan primitive so
+that the whole deployment remains a single compiled program. Gradients propagate
+through the argument-of-the-minimum by the implicit function theorem rather than
+through the solver iterates,
 \begin{equation}
   \frac{\partial \bm{q}^\star}{\partial \bm{\theta}}
     = -\,H^{-1}\,\frac{\partial^2 \Pi}{\partial \bm{q}\,\partial \bm{\theta}},
   \qquad
-  H = \nabla^2_{\bm{q}}\,\Pi,
+  H = \nabla^2_{\bm{q}}\,\Pi ,
+  \label{eq:ift}
 \end{equation}
-exposed as a \texttt{custom\_vjp}. Since plastic softening in the surrogate can
-render $H$ indefinite (a vanishing design gradient), the backward solve is
-Tikhonov-regularised, $H\!\leftarrow\!H+\tau I$
-(\texttt{physics.backward\_reg}), restoring a descent direction. Finally the
-end-to-end objective --- a Chamfer distance between the deployed centroids
-$\{\bm{c}_\alpha(\bm{q}^\star)\}$ and the target shape $\mathcal{T}$, plus a
-physical-stability penalty --- is minimised with Adam through a single
-\texttt{jax.value\_and\_grad}, so gradients flow
-$\mathcal{L}\!\to\!\bm{q}^\star\!\to\!\Pi\!\to\!\bm{\theta}$ back to the cut
-aspect ratios, boundary sliders, and ligament widths jointly.
+exposed as a custom vector--Jacobian product, so that the memory cost is
+independent of the iteration count. Plastic softening in the surrogate can render
+$H$ indefinite, in which case \eqref{eq:ift} does not return a descent direction
+and the design gradient effectively vanishes; the backward solve is therefore
+Tikhonov-regularised, $H\leftarrow H+\mu I$ with $\mu>0$, which restores a descent
+direction at the cost of a controlled bias in the gradient. Finally the end-to-end
+objective --- a Chamfer distance between the deployed panel centroids
+$\{\bm{c}_\alpha(\bm{q}^\star)\}$ and the target point set $\mathcal{T}$, plus a
+penalty on the predicted damage margin --- is minimised with Adam through a single
+value-and-gradient evaluation, so that gradients flow
+$\mathcal{L}\to\bm{q}^\star\to\Pi\to\bm{\theta}$ back to the cut aspect ratios,
+boundary sliders, and ligament widths jointly. The implementation is written in
+JAX and executed in double precision.
+
+\begin{figure}
+    \centering
+    \includegraphics[width=1\linewidth]{Images/pipeline_overview.png}
+    \caption{The differentiable inverse-design pipeline. The design parameters
+    $\bm{\theta}=(\bm{z},\bm{\ell},\bm{w}_{\mathrm{lig}})$ generate a flat,
+    non-self-intersecting cut pattern; the pattern is deployed by minimising the
+    total potential energy \eqref{eq:equilibrium} over the rigid-panel degrees of
+    freedom, with the ligament energy supplied by the learned surrogate
+    \eqref{eq:surrogate}; the deployed centroids are compared to the target, and
+    the resulting mismatch is differentiated back to the design parameters through
+    the implicit function theorem \eqref{eq:ift}.}
+    \label{fig:pipeline}
+\end{figure}
 
 \subsection{Condensed hinge-energy surrogate}
+\label{sec:surrogate}
 
-% Buckling ?
+Each ligament is replaced by a single learned stored-energy function
+$W(\epsh;\bm{g})$, in $\mathrm{N\,mm}$. It condenses a full three-dimensional
+elasto-plastic simulation into a scalar that the deployment solver can minimise,
+and whose gradient is the internal generalised force the solver balances. Its
+kinematic argument is the rigid-body-invariant triple $\epsh=(a,s,\vartheta)$ of
+\eqref{eq:hinge-strain}. The design fixes the per-hinge descriptors
+$\bm{g}=(\wlig,\beta,\rho_f)$ of \eqref{eq:hinge-energy}, with both $\beta$ and
+the bond direction $\hat{\bm{e}}_h$ deterministic functions of the void aspect
+ratios $\bm{r}$ and the boundary sliders. The geometry $\bm{g}(\bm{\theta})$ is
+differentiable and is threaded through the solver as an \emph{explicit} argument,
+so that the shape objective is minimised through the physics, including the effect
+of the design on $\beta(\bm{\theta})$.
 
-Each kirigami hinge (a thin ligament joining two rigid tiles) is replaced by a
-single learned \emph{stored-energy function} $W(\bm{\varepsilon};\bm{g})$
-[N$\cdot$mm]. It condenses a full 3D elasto-plastic simulation into a scalar that
-the deployment solver can minimise, and whose gradient is the internal generalised
-force the solver balances. The relative motion of the two connected faces is the
-minimal rigid-body-invariant coordinate $\bm{\varepsilon}=(a,\,s,\,\vartheta)$ of
-\eqref{eq:hinge-strain}: the corotated axial, shear, and relative-rotation of the
-inter-tile bond. The design fixes the per-hinge attributes
-$\bm{g}=(w_{\mathrm{lig}},\,\beta\,[,\rho_f])$ --- ligament width, cut angle, and
-the cut-tip fillet ratio --- with both $\beta$ and the bond direction
-$\hat{\bm{e}}_\parallel$ deterministic functions of the void aspect ratios
-$\bm{r}$ and boundary sliders. The geometry $\bm{g}(\bm{\theta})$ is differentiable
-and threaded as an \emph{explicit} solver input, so the shape loss $\mathcal{L}$
-(target Chamfer $+$ stability penalty on $D$) is minimised through the physics,
-including the design's effect on $\beta(\bm{\theta})$. With
-$\eta:\mathbb{R}^{6}\!\to\mathbb{R}^m$ a $\tanh$ MLP acting on the standardised
-features
-$\bm{\xi}(\bm{\varepsilon},\bm{g})=[a,s,\vartheta,\log w_{\mathrm{lig}},\beta,\rho_f]$,
+Let $\bm{\eta}:\mathbb{R}^{6}\to\mathbb{R}^m$ be a multilayer perceptron with
+$\tanh$ activations acting on the standardised features
+$\bm{\xi}(\epsh,\bm{g})=[\,a,\ s,\ \vartheta,\ \log\wlig,\ \beta,\ \rho_f\,]$.
+The surrogate is
 \begin{equation}
-  \boxed{\,W(\bm{\varepsilon};\bm{g})
-    = W_{s}\,\bigl\|\,\eta\bigl(\bm{\xi}(\bm{\varepsilon},\bm{g})\bigr)
-      -\eta\bigl(\bm{\xi}(\bm{0},\bm{g})\bigr)\,\bigr\|_2^2\,}.
+  \boxed{\,W(\epsh;\bm{g})
+    = W_{s}\,\bigl\|\,\bm{\eta}\bigl(\bm{\xi}(\epsh,\bm{g})\bigr)
+      -\bm{\eta}\bigl(\bm{\xi}(\bm{0},\bm{g})\bigr)\,\bigr\|_2^2\,},
   \label{eq:surrogate}
 \end{equation}
-The squared form gives, \emph{by construction} and with no penalty terms, no
-spurious negative-energy state, free rigid-body motion, and a smooth tangent
-stiffness for the implicit solve. The internal generalised force is the gradient
+with $W_s>0$ a learned energy scale. Two hidden layers of $64$ units are used
+throughout. The squared form guarantees, by construction and without penalty
+terms, that $W\geq 0$, that $W=0$ at the undeformed state --- hence that
+rigid-body motions are free --- and that the tangent stiffness required by
+\eqref{eq:ift} is smooth. The internal generalised force is the gradient
 \begin{equation}
-  \nabla_{\bm{\varepsilon}}W=(F_a,\,F_s,\,M_\vartheta),
+  \nabla_{\epsh}W=(F_a,\,F_s,\,M_\vartheta),
 \end{equation}
-and a separate head predicts a continuous ductile-damage margin
-$D(\bm{\varepsilon};\bm{g})=\mathrm{softplus}(\cdot)\ge 0$ ($D\!\ge\!1$ =
-fracture), kept distinct so the hard failure boundary does not distort the smooth
-$W$.
+work-conjugate to $(a,s,\vartheta)$. A separate head predicts a continuous ductile
+damage margin $D(\epsh;\bm{g})=\mathrm{softplus}(\cdot)\ge 0$, with $D\ge1$
+denoting fracture; keeping it distinct from $W$ prevents the hard failure boundary
+from distorting the smooth energy landscape.
 
-The scale $W_{s}$ and the maps $\eta,\,D$ are fit on a CalculiX RVE dataset by a
-variance-normalised Sobolev loss (energy priority via the weight $\gamma$),
+The scale $W_{s}$ and the maps $\bm{\eta}$ and $D$ are fit to the finite-element
+data set of Section~\ref{sec:rve} by a variance-normalised Sobolev loss,
 \begin{equation}
   \mathcal{L}_{\mathrm{data}}
-  =\gamma\,\frac{\|W-W^\ast\|^2}{\sigma_W^2}
-  +(1-\gamma)\,\frac{\|\nabla_{\bm{\varepsilon}}W-\bm{F}^\ast\|^2}{\sigma_F^2}
-  +w_f\,\|D-D^\ast\|^2,
+  =\gamma\,\frac{\lVert W-W^\ast\rVert^2}{\sigma_W^2}
+  +(1-\gamma)\,\frac{\lVert\nabla_{\epsh}W-\bm{F}^\ast\rVert^2}{\sigma_F^2}
+  +w_D\,\lVert D-D^\ast\rVert^2,
+  \label{eq:sobolev}
 \end{equation}
-so both the energy landscape and the equilibrium-setting forces are matched, split
-by geometry to test extrapolation to unseen hinges.
+in which starred quantities denote finite-element targets and $\sigma_W,\sigma_F$
+their empirical standard deviations, so that the energy landscape and the
+equilibrium-setting forces are matched on a common scale. The weight
+$\gamma=0.65$ gives priority to the energy. The data are split by hinge geometry
+rather than at random, so that the reported error measures extrapolation to unseen
+ligaments.
 
-\subsubsection{Finite element modeling of the hinges}
+\subsubsection{Finite-element model of the ligament}
+\label{sec:rve}
 
-Each ligament hinge is characterized by a three-dimensional finite-element model of a Saint--Venant representative volume element built around the cut, solved with CalculiX. The domain is discretized with quadratic 15-node pentahedral elements (C3D15) and the S235 structural steel is described by a
-finite-strain $J_2$ (von~Mises) elastoplastic law with isotropic hardening ($E=210\,\mathrm{GPa}$, $\sigma_y\!\approx\!235\,\mathrm{MPa}$, tangent modulus
-$E_t\!\approx\!2.1\,\mathrm{GPa}$), so that yielding, mild hardening, and the
-geometrically nonlinear out-of-plane buckling of the ligament are all captured.
-The RVE is loaded in a co-rotational frame by the three relative face-to-face
-deformation measures $\bm{\varepsilon}=(a,s,\vartheta)$ (axial and shear openings
-and the hinge rotation), imposed as kinematic boundary conditions on the two
-bounding faces while the far field is Saint--Venant--relaxed. For each geometry
-$\bm{g}=(w_{\mathrm{lig}},\beta)$ (ligament width and cut angle) and load state,
-the simulation returns the condensed stored energy
-$W(\bm{\varepsilon};\bm{g})=\!\int_\Omega \psi\,\mathrm{d}V$, its work-conjugate
-generalized forces $\nabla_{\bm{\varepsilon}}W=(F_a,F_s,M_\vartheta)$, the peak
-von~Mises stress, and the 99th-percentile equivalent plastic strain
-$\varepsilon_p^{p99}$, whose ratio to the ductile failure strain $\varepsilon_f$
-defines the damage margin
-$D=\varepsilon_p^{p99}/\varepsilon_f$ ($D\!\ge\!1$ marking fracture).
+The training data are generated by a three-dimensional finite-element model of a
+representative volume element built around a single cut and truncated at a window
+radius $r_{\mathrm{win}}$ (Fig.~\ref{fig:hinge-layout}), solved with CalculiX. The
+domain is discretised with quadratic 15-node pentahedral elements (C3D15) and the
+analysis is geometrically nonlinear, so that yielding, hardening, and the
+out-of-plane buckling of the ligament are all captured. Two material models are
+used. The reference model is S235 structural steel, described by a finite-strain
+$J_2$ (von~Mises) elastoplastic law with isotropic hardening
+($E=210\,\mathrm{GPa}$, $\sigma_y\approx235\,\mathrm{MPa}$, tangent modulus
+$E_t\approx2.1\,\mathrm{GPa}$). The second is the polyethylene terephthalate law
+calibrated in Section~\ref{sec:calibration} and reported in
+Table~\ref{tab:pet-params}, used for every comparison with experiment.
+
+The representative volume element is loaded in a corotational frame by the three
+relative panel-to-panel deformation measures $\epsh=(a,s,\vartheta)$, imposed as
+kinematic boundary conditions on the two bounding panel faces, the far field being
+truncated at $r_{\mathrm{win}}$ as discussed in
+Section~\ref{sec:calibration}. For each geometry $\bm{g}$ and each load state, the
+simulation returns the condensed stored energy
+\begin{equation}
+  W(\epsh;\bm{g})=\int_\Omega \psi\,\mathrm{d}V ,
+\end{equation}
+where $\psi$ is the strain-energy density, together with its work-conjugate
+generalised forces $\nabla_{\epsh}W=(F_a,F_s,M_\vartheta)$, the peak von~Mises
+stress, the maximum out-of-plane displacement $u_z$, and the 99th percentile of
+the equivalent plastic strain, $\varepsilon_p^{p99}$. Failure is measured by the
+ductile damage ratio
+\begin{equation}
+  D=\frac{\varepsilon_p^{p99}}{\varepsilon_f(T)},
+  \qquad
+  \varepsilon_f(T)=\varepsilon_{f0}\exp\!\bigl[-k\,(T-\tfrac13)\bigr],
+  \label{eq:damage}
+\end{equation}
+with $T=\sigma_m/\sigma_{\mathrm{eq}}$ the stress triaxiality and the locus
+normalised so that $\varepsilon_f=\varepsilon_{f0}$ in uniaxial tension;
+$D\geq1$ marks fracture. % CITE: Johnson-Cook / Rice-Tracey ductile failure locus.
 
 \begin{figure}
     \centering
     \includegraphics[width=1\linewidth]{Images/hinge_layout.png}
-    \caption{Enter Caption}
-    \label{fig:hinge_layout}
+    \caption{Geometry of a single ligament and of the representative volume
+    element used to train the surrogate. The ligament width $\wlig$, the cut angle
+    $\beta$ and the fillet ratio $\rho_f$ are the geometric descriptors
+    $\bm{g}$ of \eqref{eq:hinge-energy}; the domain is truncated at the window
+    radius $r_{\mathrm{win}}$, whose role is analysed in
+    Section~\ref{sec:calibration}.}
+    \label{fig:hinge-layout}
 \end{figure}
-
 
 \begin{figure}
     \centering
     \includegraphics[width=1\linewidth]{Images/energy_landscape.png}
-    \caption{Surrogate learned rotation energy landscape of steel hinges}
-    \label{fig:placeholder}
+    \caption{Stored energy $W(\vartheta)$ learned by the surrogate for a steel
+    ligament in pure relative rotation ($a=s=0$), for a family of ligament widths
+    $\wlig$. The departure from the quadratic spring is the signature of yielding
+    followed by out-of-plane buckling, which relieves the fold moment.}
+    \label{fig:energy-landscape}
 \end{figure}
 
 \subsection{Calibration of the surrogate to a physical material}
@@ -439,60 +581,68 @@ The surrogate of \eqref{eq:surrogate} is only as physical as the constitutive la
 handed to the representative volume element that generates its training data. To
 build and cut real specimens we therefore retarget the oracle from the reference
 S235 steel to the sheet actually used in the experiments --- a $0.5\,\mathrm{mm}$
-biaxially-oriented polyethylene terephthalate (PET) film --- through the
+biaxially oriented polyethylene terephthalate (PET) film --- through the
 calibration chain
 \begin{equation}
   \text{coupon}\ \longrightarrow\
   \text{bulk law}\ \longrightarrow\
-  \text{RVE (CalculiX)}\ \longrightarrow\
-  W(\bm{\varepsilon};\bm{g})\ \longrightarrow\
+  \text{RVE}\ \longrightarrow\
+  W(\epsh;\bm{g})\ \longrightarrow\
   \text{deployment},
   \label{eq:calibration-chain}
 \end{equation}
 in which each arrow is identified or verified separately. The guiding principle is
 a strict separation of \emph{material} from \emph{structure}: the bulk law is
-identified from plain tensile coupons alone, and the hinge experiments are then
+identified from plain tensile coupons alone, and the ligament experiments are then
 used to \emph{validate} the resulting predictions rather than to fit them. The
 only genuinely structural quantity left free is the geometric imperfection
-amplitude that seeds the out-of-plane buckling of the ligament, which is not a
-material property and cannot be measured on a coupon. This keeps the surrogate a
-prediction of the hinge response rather than a curve fit to it.
+amplitude that seeds the out-of-plane buckling, which is not a material property
+and cannot be measured on a coupon. This keeps the surrogate a prediction of the
+ligament response rather than a curve fit to it.
 
 \paragraph{Material identification.}
 The sheet was identified from bulk indicators alone: a measured density
-$\rho\simeq1390\,\mathrm{kg\,m^{-3}}$ (excluding PETG, polycarbonate and PMMA), a
-broad-band iridescence indicative of molecular orientation, a $180^\circ$ fold
-without rupture, and a burn test in which the specimen melted, dripped and drew
-into long filaments without sustained burning --- the signature of a thermoplastic
-polyester, which also excludes PVC. Under load the film cold-draws through a
-propagating neck and becomes birefringent, confirming strain-induced orientation.
+$\rho\simeq1390\,\mathrm{kg\,m^{-3}}$, which excludes PETG, polycarbonate and
+poly(methyl methacrylate); a broad-band iridescence indicative of molecular
+orientation; a $180^\circ$ fold without rupture; and a burn test in which the
+specimen melted, dripped and drew into long filaments without sustained burning
+--- the signature of a thermoplastic polyester, which also excludes poly(vinyl
+chloride). Under load the film cold-draws through a propagating neck and becomes
+birefringent, confirming strain-induced orientation.
 
 \paragraph{Bulk law from tensile coupons.}
-Ten rectangular strips (ASTM~D882 geometry, six along the machine direction and
-four across it) were pulled to the cold-draw plateau on a $5\,\mathrm{kN}$
-single-column frame at $1\,\mathrm{mm\,min^{-1}}$, with tape-tabbed flat grips.
-Nine drew stably. The yield stress is direction-independent within scatter
-($48.4\,\mathrm{MPa}$ machine direction versus $49.5\,\mathrm{MPa}$ cross
-direction, pooled $48.8\pm1.6\,\mathrm{MPa}$), so the film is treated as in-plane
-isotropic and modelled with a two-constant \texttt{*ELASTIC} card rather than the
-nine-constant orthotropic route. Because the neck localises the deformation, the
-engineering plateau is not the material law; the post-yield point is instead
-recovered from the measured natural draw ratio $\lambda=A_0/A_{\mathrm{drawn}}$,
+Ten rectangular strips following the ASTM~D882 geometry, six cut along the machine
+direction and four across it, were pulled on a $5\,\mathrm{kN}$ single-column
+frame at $1\,\mathrm{mm\,min^{-1}}$ with tape-tabbed flat grips; nine drew stably
+and one failed prematurely at an edge flaw and was discarded. The yield stress is
+direction-independent within scatter ($48.4\,\mathrm{MPa}$ machine direction
+against $49.5\,\mathrm{MPa}$ cross direction, pooled
+$48.8\pm1.6\,\mathrm{MPa}$), so the film is treated as in-plane isotropic and
+described by a two-constant elastic law rather than by the nine-constant
+orthotropic alternative.
+
+Because the neck localises the deformation, the engineering plateau is not the
+material law. The post-yield point is instead recovered from the measured natural
+draw ratio $\Lambda=A_0/A_{\mathrm{drawn}}$, the ratio of the undeformed to the
+drawn cross-section, through
 \begin{equation}
-  \sigma_{\mathrm{true}} = \lambda\,\sigma_{\mathrm{plateau}},
+  \sigma_{\mathrm{true}} = \Lambda\,\sigma_{\mathrm{plateau}},
   \qquad
-  \varepsilon_{\mathrm{true}} = \ln\lambda,
+  \varepsilon_{\mathrm{true}} = \ln\Lambda,
+  \qquad
+  \varepsilon_p = \ln\Lambda - \frac{\sigma_{\mathrm{true}}}{E},
   \label{eq:draw-anchor}
 \end{equation}
-which for $\lambda=3.28$ and an engineering plateau of $33\,\mathrm{MPa}$ places a
-large-strain anchor at $109\,\mathrm{MPa}$ at a true plastic strain of $1.15$.
-The propagating neck also halves the section at constant volume, confirming
-plastic incompressibility and hence the admissibility of a $J_2$ flow rule. The
-resulting two-point monotonic hardening table (Table~\ref{tab:pet-params})
-replaces the bilinear steel law by a curve anchored in the same large-strain
-regime the ligament actually experiences. No softening branch is retained: a
-ligament loaded in bending forms a crease, not a propagating neck, so the
-relevant plastic response is monotonic.
+the last expression removing the elastic part to give the plastic strain that the
+finite-element hardening table takes as input. With $\Lambda=3.28$ and an
+engineering plateau of $33\,\mathrm{MPa}$, this places a large-strain anchor at
+$109\,\mathrm{MPa}$ and $\varepsilon_p=1.15$. The neck halves the section at
+constant volume, which confirms plastic incompressibility and hence the
+admissibility of a $J_2$ flow rule. The resulting two-point monotonic hardening
+table (Table~\ref{tab:pet-params}) replaces the bilinear steel law by a curve
+anchored in the same large-strain regime the ligament actually experiences. No
+softening branch is retained: a ligament loaded in bending forms a crease rather
+than a propagating neck, so the relevant plastic response is monotonic.
 
 \begin{table}[h!]
 \centering
@@ -500,256 +650,339 @@ relevant plastic response is monotonic.
 \toprule
 \textbf{Quantity} & \textbf{Symbol} & \textbf{Value} & \textbf{Source} \\
 \midrule
-Young's modulus        & $E$                     & $3.0\,\mathrm{GPa}$              & literature (see text) \\
-Poisson's ratio        & $\nu$                   & $0.40$                           & literature \\
-Yield stress           & $\sigma_y$              & $48.8\pm1.6\,\mathrm{MPa}$       & 9 coupons, MD $+$ CD \\
-Cold-draw anchor       & $(\sigma,\varepsilon_p)$& $(109\,\mathrm{MPa},\,1.15)$     & Eq.~\eqref{eq:draw-anchor}, $\lambda=3.28$ \\
-Fracture strain        & $\varepsilon_{f0}$      & $\geq1.2$                        & lower bound (see text) \\
-Sheet thickness        & $t$                     & $0.50\,\mathrm{mm}$              & micrometer \\
-Density                & $\rho$                  & $1390\,\mathrm{kg\,m^{-3}}$      & mass\,/\,area\,/\,$t$ \\
+Young's modulus        & $E$                          & $3.0\,\mathrm{GPa}$              & literature (see text) \\
+Poisson's ratio        & $\nu$                        & $0.40$                           & literature \\
+Yield stress           & $\sigma_y$                   & $48.8\pm1.6\,\mathrm{MPa}$       & 9 coupons, both directions \\
+Cold-draw anchor       & $(\sigma_{\mathrm{true}},\varepsilon_p)$ & $(109\,\mathrm{MPa},\,1.15)$ & Eq.~\eqref{eq:draw-anchor}, $\Lambda=3.28$ \\
+Fracture strain        & $\varepsilon_{f0}$           & $\geq1.2$                        & lower bound (see text) \\
+Triaxiality exponent   & $k$                          & $1.5$                            & assumed, Eq.~\eqref{eq:damage} \\
+Sheet thickness        & $t$                          & $0.50\,\mathrm{mm}$              & micrometer \\
+Density                & $\rho$                       & $1390\,\mathrm{kg\,m^{-3}}$      & mass/area/thickness \\
 \bottomrule
 \end{tabular}
-\caption{Calibrated PET parameters entering the CalculiX RVE. Elastic constants
-are literature values; the plastic table and the failure strain are measured.}
+\caption{Calibrated PET parameters entering the finite-element oracle. The elastic
+constants and the triaxiality exponent are literature or assumed values; the
+hardening table and the fracture strain are measured. The hardening table is
+$\{(\sigma_y,0),\,(109\,\mathrm{MPa},1.15)\}$ in true stress and true plastic
+strain.}
 \label{tab:pet-params}
 \end{table}
 
 \paragraph{What the coupons cannot deliver.}
-Two quantities in Table~\ref{tab:pet-params} are deliberately not taken from the
-crosshead data. First, with no extensometer the crosshead displacement contains
-machine and grip compliance, which inflates the strain and depresses the apparent
-modulus to $\approx1.2\,\mathrm{GPa}$ --- below the entire physical range for PET
---- so a literature value of $3.0\,\mathrm{GPa}$ is used instead. This is
-inconsequential for the quantities the surrogate is calibrated against: repeating
-a hinge opening simulation at $E=1.2$ and $3.0\,\mathrm{GPa}$ changes the peak
-force by $2\%$ while the elastic stiffness scales with $E$, confirming that the
-peak is set by the yield stress, the hardening and the failure strain, and that
-adopting the compliance-corrupted modulus would merely bake machine compliance
-into the material. Second, the specimens were stopped on the draw plateau rather
-than broken, so the fracture strain is reported as a lower bound; it is refined
-from the hinge tests, where fracture is the quantity of interest. Failure is
-modelled as triaxiality-dependent ductile damage,
-$D=\varepsilon_p^{p99}/\varepsilon_f(\eta)$ with
-$\varepsilon_f(\eta)=\varepsilon_{f0}\exp\!\bigl[-k(\eta-\tfrac13)\bigr]$
---- a Johnson--Cook-like locus normalised so that $\varepsilon_f=\varepsilon_{f0}$
-in uniaxial tension --- consistent with the conjugate stress-whitening
-bands observed at $\pm45^\circ$ to the load axis: shear-driven yielding on the
-planes of maximum shear, not $90^\circ$ crazing, which supports the von~Mises
-framework and indicates weak pressure sensitivity. Whitening onset doubles as a
-visible, photographable proxy for $D$ and thereby anchors the level of damage that
-constitutes functional failure.
+Two entries of Table~\ref{tab:pet-params} are deliberately not taken from the
+crosshead data. First, in the absence of an extensometer the crosshead
+displacement contains the machine and grip compliance, which inflates the strain
+and depresses the apparent modulus to $\approx1.2\,\mathrm{GPa}$, below the entire
+physical range for PET; a literature value of $3.0\,\mathrm{GPa}$ is used instead.
+This is inconsequential for the quantities the surrogate is calibrated against:
+repeating a ligament opening simulation at $E=1.2$ and $3.0\,\mathrm{GPa}$ changes
+the peak force by $2\%$ while the elastic stiffness scales with $E$, which
+confirms that the peak is set by the yield stress, the hardening and the fracture
+strain, and that adopting the compliance-corrupted modulus would merely transfer
+machine compliance into the material law. Second, the specimens were stopped on
+the draw plateau rather than broken, so $\varepsilon_{f0}$ is reported as a lower
+bound; it is to be refined from the ligament tests, where fracture is the quantity
+of interest, and the triaxiality exponent $k$ of \eqref{eq:damage} is likewise
+carried as an assumed value pending the mixed-mode sweep described below. The
+ductile-damage form \eqref{eq:damage} is itself supported by the conjugate
+stress-whitening bands observed at $\pm45^\circ$ to the load axis: shear-driven
+yielding on the planes of maximum shear rather than $90^\circ$ crazing, which
+supports the von~Mises framework and indicates weak pressure sensitivity. Whitening
+onset also provides a visible, photographable proxy for $D$, and thereby an
+experimental anchor for the level of damage that constitutes functional failure.
 
-\paragraph{Sweeping the deformation space with a one-degree-of-freedom machine.}
-A uniaxial testing frame cannot directly impose the three hinge measures
-$\bm{\varepsilon}=(a,s,\vartheta)$. The in-plane pair is nonetheless reachable
-without any fixture by rotating the specimen in the grips: with $\varphi$ the
-angle between the pull direction and the cut, a single tensile pull realises the
-ray
+\paragraph{Sweeping the deformation space with a uniaxial machine.}
+A uniaxial testing frame cannot directly impose the three measures
+$\epsh=(a,s,\vartheta)$. The in-plane pair is nonetheless reachable without any
+fixture by rotating the specimen in the grips: with $\chi$ the angle between the
+pull direction and the cut, a single tensile pull realises the ray
 \begin{equation}
-  (\eta_a,\eta_s)=(\sin\varphi,\ \cos\varphi),
+  \hat{\bm{n}}=(\hat a,\hat s)=(\sin\chi,\ \cos\chi),
 \end{equation}
-so that $\varphi=0$ is pure shear along the ligament, $\varphi=90^\circ$ is pure
+so that $\chi=0$ is pure shear along the ligament, $\chi=90^\circ$ is pure
 opening, and intermediate angles are mixed states that additionally sample
 different notch triaxialities --- which is precisely what is needed to calibrate
-the pair $(\varepsilon_{f0},k)$ of the failure locus. The relative rotation
-$\vartheta$, the dominant degree of freedom during deployment, is not accessible
-in force control; it is instead validated kinematically, by folding a hinge to a
-prescribed angle and measuring the out-of-plane amplitude of the buckled ligament.
-The framing is therefore: \emph{calibrate in the accessible in-plane modes,
-predict in rotation}, the same constitutive law serving both.
+the pair $(\varepsilon_{f0},k)$ of the failure locus \eqref{eq:damage}. The
+relative rotation $\vartheta$, the dominant degree of freedom during deployment,
+is not accessible in force control; it is instead validated kinematically, by
+folding a ligament to a prescribed angle and measuring the out-of-plane amplitude
+of the buckle. The framing is therefore: \emph{calibrate in the accessible
+in-plane modes, predict in rotation}, the same constitutive law serving both.
 
 \paragraph{Domain truncation: the grip distance is a physical parameter.}
-The RVE truncates the sheet at a window radius $r_{\mathrm{win}}$ around the
-ligament, which is legitimate only if the disturbance decays over that distance.
-It does not. A convergence study on a $w_{\mathrm{lig}}=18\,\mathrm{mm}$ hinge in
-shear gives a peak force that is logarithmic in the truncation radius,
+The representative volume element truncates the sheet at the window radius
+$r_{\mathrm{win}}$, which is legitimate only if the disturbance created by the
+ligament decays over that distance. It does not. A convergence study on a
+$\wlig=18\,\mathrm{mm}$ ligament in shear gives a peak force that is logarithmic
+in the truncation radius,
 \begin{equation}
-  F_s^{\max}\ [\mathrm{N}] \;=\; 303 - 41.2\,\ln r_{\mathrm{win}}\ [\mathrm{mm}],
-  \qquad R^2=0.997,
+  F_s^{\max}\,[\mathrm{N}] \;=\; 303 - 41.2\,\ln\bigl(r_{\mathrm{win}}\,[\mathrm{mm}]\bigr),
+  \qquad R^2=0.997 ,
+  \label{eq:dcone-log}
 \end{equation}
-the signature of a developable cone anchored at the cut tip, whose energy scales
-as $B\psi^2\ln(R_{\mathrm{out}}/R_{\mathrm{core}})$ and whose field decays as
-$1/r$ --- long-range, with no Saint-Venant plateau. Consequently there is no
-``converged'' domain size, and a hinge coupon gripped close to the ligament measures
-a stiffer hinge than the same ligament embedded in a large sheet: truncating at
-$43\,\mathrm{mm}$ overestimates the force by roughly $60\%$ relative to the
-gravity-bounded outer scale. Comparison between experiment and simulation is
-therefore only meaningful when the physical grip separation equals the simulated
-$r_{\mathrm{win}}$; both are set to $100\,\mathrm{mm}$. In the deployed structure
-the outer scale is set instead by the elasto-gravitational length
-$\ell_{\mathrm{eg}}=(B/\rho_s g)^{1/3}\approx170\,\mathrm{mm}$, to which the
-logarithmic law extrapolates. The same construction underlies the localized-buckling
-analysis of Section~\ref{secD}.
-
-\paragraph{Hinge-level validation.}
-Single-hinge coupons ($w_{\mathrm{lig}}=18\,\mathrm{mm}$, $\alpha=90^\circ$,
-fillet ratio $0.16$, $t=0.5\,\mathrm{mm}$) cut from the same sheet were tested in
-fold and in opening. In fold, the measured out-of-plane buckle height tracks the
-simulated $u_z(\vartheta)$ through $50^\circ$ with no material tuning --- the
-imperfection amplitude being the single adjusted parameter --- and both saturate
-near $25\,\mathrm{mm}$. The measurement collapses onto a one-parameter law
+over $r_{\mathrm{win}}\in[27,108]\,\mathrm{mm}$. This is the signature of a
+developable cone anchored at the cut tip, whose energy scales as
+$B\theta^2\ln(R_{\mathrm{out}}/R_{\mathrm{core}})$ with $B$ the bending stiffness
+and $\theta$ the cone angle, and whose displacement field decays as $1/r$: the
+disturbance is long-ranged and there is no Saint-Venant plateau.
+% CITE: developable cones, Cerda & Mahadevan; conical dislocations in thin sheets.
+Two consequences follow. There is no converged domain size, so $r_{\mathrm{win}}$
+must be reported with any ligament force; and a coupon gripped close to the
+ligament measures a stiffer response than the same ligament embedded in a large
+sheet --- truncating at $43\,\mathrm{mm}$ overestimates the peak force by more
+than $60\%$ relative to the value extrapolated to the outer scale of the deployed
+structure.
+Comparison between experiment and simulation is therefore meaningful only when the
+physical grip separation equals the simulated $r_{\mathrm{win}}$, and the fold
+experiments below are run at $r_{\mathrm{win}}=100\,\mathrm{mm}$ on both sides. In
+the deployed structure the outer scale is set instead by gravity, through the
+elasto-gravitational length
 \begin{equation}
-  u_z(\vartheta) = A\,\sqrt{\sin\vartheta},
-  \qquad A\simeq25.7\,\mathrm{mm},\quad R^2=0.97,
+  \ell_{\mathrm{eg}}=\Bigl(\frac{B}{p}\Bigr)^{1/3},
+  \qquad
+  B=\frac{E t^{3}}{12(1-\nu^{2})},
+  \qquad
+  p=\rho g t,
+  \label{eq:l-eg}
+\end{equation}
+equal to $0.18\,\mathrm{m}$ for the present sheet, at which
+\eqref{eq:dcone-log} gives $F_s^{\max}\approx90\,\mathrm{N}$. The same
+elasto-gravitational length governs the panel-tilting analysis of
+Section~\ref{sec:buckling-locality}.
+
+\paragraph{Ligament-level validation.}
+Single-ligament coupons ($\wlig=18\,\mathrm{mm}$, $\beta=90^\circ$,
+$\rho_f=0.16$, $t=0.5\,\mathrm{mm}$) cut from the same sheet were tested in fold
+and in opening. In fold, the measured out-of-plane buckle height tracks the
+simulated $u_z(\vartheta)$ up to $50^\circ$ with no material tuning --- the
+imperfection amplitude, set to $0.5\,\mathrm{mm}$, being the single adjusted
+parameter --- and both saturate near $25\,\mathrm{mm}$ ($25.0\,\mathrm{mm}$
+simulated against $25.5\,\mathrm{mm}$ measured). The measurement collapses onto
+the one-parameter law
+\begin{equation}
+  u_z(\vartheta) = u_0\,\sqrt{\sin\vartheta},
+  \qquad u_0 = 25.7\,\mathrm{mm},\quad R^2=0.97 ,
   \label{eq:buckle-law}
 \end{equation}
-which reproduces the $\sqrt{\ }$ post-buckling scaling at small angles and
+which reproduces the square-root post-buckling scaling at small angles and
 saturates at large angles as the finite ligament exhausts its developable-cone
-reach; a sweep over a fourfold range of fillet ratios leaves the amplitude
-$A=29\pm1\,\mathrm{mm}$, so the fillet controls the fracture point but not the
-buckling amplitude. In opening the predicted and measured curves share the same
-signature --- elastic rise, yield plateau, tearing drop --- with the model
-over-predicting the peak force; that comparison is confounded because the same
-specimen had previously been folded to $90^\circ$ and was therefore pre-creased,
-and is being repeated on virgin coupons. Two caveats bound the calibration as it
-stands. The effective ligament section is narrower than nominal, the fillet disc
-being centred on the cut tip so that the throat width is
-$w_{\mathrm{lig}}(1-\rho_f)$; and the coupons are quasi-static
-($1\,\mathrm{mm\,min^{-1}}$) whereas deployment proceeds at centimetres per
-second, a regime in which PET stiffens and embrittles, so the slowly-measured
-fracture strain is optimistic and is carried with a rate margin.
+reach; a two-parameter saturating exponential fits marginally better
+($R^2=0.99$) but has no such interpretation. A simulated sweep over a fourfold
+range of fillet ratios, $\rho_f\in[0.08,0.32]$, leaves the amplitude at
+$u_0=29\pm1\,\mathrm{mm}$, so the fillet controls where the ligament tears but not
+how far it buckles; the sharpest tip of that sweep is the least reliable, its
+solve having diverged at $\vartheta=6^\circ$. The residual $13\%$ offset between
+the simulated $u_0$ and the measured $25.7\,\mathrm{mm}$ is the current accuracy
+of the buckling prediction.
 
-\section{Results}\label{sec2}
-\subsection{Flat-sheet Kirigami}
+In opening, the predicted and measured curves share the same signature --- elastic
+rise, yield plateau, tearing drop --- with the model over-predicting the peak
+force ($378\,\mathrm{N}$ against $233\,\mathrm{N}$). That comparison is
+confounded, the same specimen having previously been folded to $90^\circ$ and
+therefore being pre-creased, and is being repeated on virgin coupons; it is
+reported here as an open item rather than as a calibration. Two caveats bound the
+calibration as it stands. The load-bearing section is narrower than the nominal
+ligament width, the fillet disc being centred on the cut tip so that the throat
+width is $\wlig(1-\rho_f)=15.1\,\mathrm{mm}$ for the coupons above, and forces
+must be normalised by that value and not by $\wlig$. And the coupons are
+quasi-static ($1\,\mathrm{mm\,min^{-1}}$) whereas deployment proceeds at
+centimetres per second, a regime in which PET stiffens and embrittles, so the
+slowly measured fracture strain is optimistic and is carried with a rate margin.
 
-Material
+\section{Results}\label{sec:results}
 
-Calibration of the model
+\subsection{Accuracy of the condensed surrogate}
 
-Analysis of motifs of tiles
+% TODO: confirm these numbers against the final trained checkpoint before
+% submission; they correspond to the geometry-split held-out set.
+On the held-out geometry split of the finite-element data set, the surrogate
+\eqref{eq:surrogate} reproduces the condensed energy, the generalised forces and
+the damage margin with coefficients of determination of $0.999$, $0.997$ and
+$0.994$ respectively, corresponding to relative root-mean-square errors of
+$1.9\%$, $5.6\%$ and $3.8\%$. The gradient is reproduced less accurately than the
+energy, as expected from the Sobolev weighting \eqref{eq:sobolev}; since the
+gradient sets the equilibrium, this is the error that propagates to the deployed
+configuration.
 
-Actual kirigami cutting
+\subsection{Flat-sheet kirigami}
 
+% TODO: report (i) the material and cut specification of the fabricated sheet,
+% (ii) the calibrated model against the measured deployment, (iii) the motif study,
+% (iv) the laser-cut physical prototype.
 
 \subsection{Computational efficiency}
 
+% TODO: report wall-clock per forward solve and per design iteration, the cost of
+% the implicit-function-theorem backward solve, and the comparison against
+% differentiating through the solver iterates.
 
-\section{Discussion}\label{secD}
+\section{Discussion}\label{sec:discussion}
 
-\subsection{Locality of out-of-plane buckling of the hinges : comparing paper and steel}
+\subsection{Localisation of out-of-plane buckling in the ligaments}
+\label{sec:buckling-locality}
 
-In the thin-hinge regime $\delta\gg t$, the tension-induced instability need not
-tilt the square domains out of plane: when they are held coplanar by gravity or an
-overburden of areal weight $w=\rho g t+q$, buckling can instead localize in the
-ligaments. The selection between this localized mode and the domain-tilting mode,
-together with the fold geometry, follows in closed form.
+Hypothesis (H2) asserts that the panels stay coplanar while the ligaments deform
+out of plane. This section derives the condition under which that holds, and shows
+that it is a competition between gravity acting on the panels and the bending
+stiffness of the ligament. Throughout, $\wlig$ denotes the ligament width as
+elsewhere in the paper, $t$ the sheet thickness, $Y=Et$ the stretching modulus,
+$B=Et^{3}/[12(1-\nu^{2})]$ the bending stiffness, and $\theta$ the local fold
+angle of the crease that forms in the ligament --- a quantity related to, but
+distinct from, the hinge rotation $\vartheta$ of \eqref{eq:hinge-strain}.
 
-The relative motion of two adjacent domains shares only the primary-cut tip $O$, and
-by Chasles' theorem a rigid motion with a fixed point is a rotation about it. That $O$
-is fixed follows energetically: translating it strains the junction (cost $\sim Yu^2$,
-with $Y=Et$), whereas holding it fixed and folding costs only bending
-($\sim B\theta^2/\delta$, with $B=Et^3/[12(1-\nu^2)]$), the former larger by
-$(\delta/t)^2\gg1$; symmetry about the fold plane suppresses the remaining out-of-fold
-rotations. The fold apex localizes at $O$ rather than in the ligament interior because
-a developable fold concentrates an angle deficit $\sim 2\theta$ that, in the interior,
-would form a disclination requiring stretching ($\sim Y\theta^2\delta^2$), whereas at
-the free edge it is absorbed by the cut opening at no stretching cost---that is, by the
-cut-opening angle $2\theta_o$.
+In the thin-ligament regime $\wlig\gg t$, the tension-induced instability need not
+tilt the panels out of plane: when they are held coplanar by gravity or by an
+overburden, of combined areal load $p=\rho g t+q$, buckling can instead localise
+in the ligaments. The selection between this localised mode and the panel-tilting
+mode, together with the fold geometry, follows in closed form.
 
-The bulge is therefore a developable cone anchored at $O$; with $\delta$ the only
-available transverse length, its width is $\lambda\simeq\delta$. The idealized cone's
-curvature discontinuities are smoothed over a bending boundary layer
-$\ell_B=[B/(Y\theta^2)]^{1/2}$; since the buckling angle
-$\theta\simeq\sqrt{2\varepsilon_c}=t/\delta$ (with $\varepsilon_c\simeq\tfrac12(t/\delta)^2$),
-one has $\ell_B\sim\delta$ and the fold is a single smooth mound of finite curvature.
+The relative motion of two adjacent panels shares only the primary-cut tip $O$,
+and by Chasles' theorem a rigid motion with a fixed point is a rotation about it.
+That $O$ is fixed follows energetically: translating it by $u$ strains the
+junction, at a cost $\sim Y u^{2}$, whereas holding it fixed and folding costs only
+bending, $\sim B\theta^{2}$; with $u\sim\theta\,\wlig$ the former exceeds the
+latter by $12(1-\nu^{2})(\wlig/t)^{2}\gg1$. Symmetry about the fold plane
+suppresses the remaining out-of-fold rotations. The fold apex localises at $O$
+rather than in the ligament interior because a developable fold concentrates an
+angle deficit $\sim2\theta$ that, in the interior, would form a disclination
+requiring stretching, at a cost $\sim Y\theta^{2}\wlig^{2}$, whereas at the free
+edge it is absorbed by the opening of the cut at no stretching cost --- that is,
+by the cut-opening angle $2\theta_{o}$.
 
-Mode selection follows from a moment balance about the hinge axis of one domain.
-Gravity resists tilting with $\mathcal{M}_{\mathrm{grav}}\simeq\tfrac12 wL^3$, while the
-folded hinge drives it with $\mathcal{M}_{\mathrm{el}}=E I_o\,\theta/\lambda\simeq
-Et^4/(12\delta)$ (with $I_o=\delta t^3/12$). Introducing the elasto-gravity length
-$\ell_{\mathrm{eg}}=(B/w)^{1/3}$, their ratio is
+The bulge is therefore a developable cone anchored at $O$, the same object that
+produces the logarithmic domain dependence \eqref{eq:dcone-log}. With $\wlig$ the
+only available transverse length, its width is $\ell_f\simeq\wlig$. The idealised
+cone's curvature discontinuities are smoothed over a bending boundary layer
+$\ell_B=[B/(Y\theta^{2})]^{1/2}$; since the buckling angle is
+$\theta\simeq\sqrt{2\varepsilon_c}=t/\wlig$, with
+$\varepsilon_c\simeq\tfrac12(t/\wlig)^{2}$ the critical strain, one obtains
+$\ell_B=\wlig/\sqrt{12(1-\nu^{2})}\approx0.3\,\wlig$, so that the fold is a single
+smooth mound of finite curvature rather than a sharp crease.
+
+Mode selection follows from a moment balance about the hinge axis of one panel of
+edge length $L$. Gravity resists tilting with
+$\mathcal{M}_{\mathrm{grav}}\simeq\tfrac12 p L^{3}$, while the folded ligament
+drives it with $\mathcal{M}_{\mathrm{el}}=E I_{O}\,\theta/\ell_f\simeq
+Et^{4}/(12\,\wlig)$, where $I_{O}=\wlig t^{3}/12$. Their ratio is
 \begin{equation}
 \Gamma\equiv\frac{\mathcal{M}_{\mathrm{grav}}}{\mathcal{M}_{\mathrm{el}}}
-=\frac{6\,w\,L^{3}\,\delta}{E\,t^{4}}
-=C\left(\frac{L}{\ell_{\mathrm{eg}}}\right)^{3}\frac{\delta}{t},
-\qquad C=O(1).
+=\frac{6\,p\,L^{3}\,\wlig}{E\,t^{4}}
+=\frac{1}{2(1-\nu^{2})}\left(\frac{L}{\ell_{\mathrm{eg}}}\right)^{3}\frac{\wlig}{t},
+\label{eq:gamma}
 \end{equation}
-The domains remain coplanar (localized buckling) for $\Gamma>1$, i.e.\ above a critical
-edge length $L^{\star}\sim\ell_{\mathrm{eg}}(t/\delta)^{1/3}$, and tilt below it. The single
-inequality $\delta\gg t$ underlies both the pinning of $O$ and the isometry of the fold;
-as $\delta\to t$ the junction stretches and peels, $O$ unpins, and the planar auxetic
-response of the thick limit is recovered.
+with $\ell_{\mathrm{eg}}$ the elasto-gravitational length \eqref{eq:l-eg}. The
+panels remain coplanar, and buckling localises in the ligaments, for $\Gamma>1$.
+Taking $p=\rho g t$, the condition $\Gamma=1$ defines a critical panel edge length
+\begin{equation}
+  L^{\star}=\Bigl(\frac{E\,t^{3}}{6\,\rho\,g\,\wlig}\Bigr)^{1/3},
+  \label{eq:l-star}
+\end{equation}
+in which the Poisson ratio cancels; panels larger than $L^{\star}$ stay flat and
+panels smaller than $L^{\star}$ tilt. Values for several thin sheet materials are
+given in Table~\ref{tab:critical-length}. The prefactor is of order unity and
+follows from the choices made above, so $L^{\star}$ should be read as a scale
+rather than as a threshold.
 
-
+For the PET specimens of Section~\ref{sec:calibration}
+($\wlig=18\,\mathrm{mm}$, panels of edge length $\sim0.5\,\mathrm{m}$),
+\eqref{eq:gamma} gives $\Gamma\approx5\times10^{2}$ and
+\eqref{eq:l-star} gives $L^{\star}\approx6\,\mathrm{cm}$, an order of magnitude
+below the panel size: the panels are held flat by their own weight while the
+ligament buckles freely, which is exactly the mechanism observed in the fold
+experiments and assumed by the representative volume element, whose bounding
+panel faces are rigid and coplanar. The single inequality $\wlig\gg t$ --- here
+$\wlig/t=36$ --- underlies both the pinning of $O$ and the isometry of the fold;
+as $\wlig\to t$ the junction stretches and peels, $O$ unpins, and the planar
+auxetic response of the thick limit is recovered.
 
 \begin{table}[h!]
 \centering
-\begin{tabular}{lcc}
+\begin{tabular}{lcccc}
 \toprule
-\textbf{Material} & \textbf{Sheet Thickness $t$ (mm)} & \textbf{Critical Length $L^\star$ (cm)} \\
+\textbf{Material} & $E$ (GPa) & $\rho$ (kg\,m$^{-3}$) & $t$ (mm) & $L^{\star}$ (cm) \\
 \midrule
-Paper & 0.2 & 7.3 \\
-Polypropylene & 0.8 & 22.2 \\
-Aluminium & 1.0 & 69.4 \\
-Soft Steel & 1.5 & 103.7 \\
+Paper           & 3   & 800  & 0.2 & 4.7 \\
+PET (this work) & 3.0 & 1390 & 0.5 & 9.7 \\
+Polypropylene   & 1.5 & 910  & 0.8 & 14.2 \\
+Aluminium       & 70  & 2700 & 1.0 & 44.5 \\
+Mild steel      & 210 & 7850 & 1.5 & 67.4 \\
 \bottomrule
 \end{tabular}
-\caption{Critical lengths $L^\star$ for several thin materials
-($\bar{\varepsilon}=1.2$, $\delta=5$~mm).}
-\label{tab:longueur_critique}
+\caption{Critical panel edge length $L^{\star}$, Eq.~\eqref{eq:l-star}, for
+several thin sheet materials, at ligament width $\wlig=5\,\mathrm{mm}$ and
+$g=9.81\,\mathrm{m\,s^{-2}}$; the Poisson ratio cancels, so only $E$, $\rho$ and
+$t$ enter. Panels larger than $L^{\star}$ remain coplanar while the ligament
+buckles. Elastic and density values are nominal literature figures for the
+material class, except for PET, which is the sheet characterised in
+Section~\ref{sec:calibration}.}
+\label{tab:critical-length}
 \end{table}
 
+\section{Conclusion}\label{sec:conclusion}
 
-\section{Conclusion}\label{sec13}
-
-Conclusions may be used to restate your hypothesis or research question, restate your major findings, explain the relevance and the added value of your work, highlight any limitations of your study, describe future directions for research and recommendations. 
-
-In some disciplines use of Discussion or 'Conclusion' is interchangeable. It is not mandatory to use both. Please refer to Journal-level guidance for any specific requirements. 
+% TODO: restate the contribution, summarise the quantitative results, state the
+% limitations (rate dependence of the calibration, single cut family, in-plane
+% mechanism only) and the intended extensions.
 
 \backmatter
 
 \bmhead{Supplementary information}
 
-If your article has accompanying supplementary file/s please state so here. 
+Not applicable.
 
-Authors reporting data from electrophoretic gels and blots should supply the full unprocessed scans for key as part of their Supplementary information. This may be requested by the editorial team/s if it is missing.
+\bmhead{Acknowledgements}
 
-Please refer to Journal-level guidance for any specific requirements.
+% TODO
 
+\section*{Declarations}
 
-\noindent
-If any of the sections are not relevant to your manuscript, please include the heading and write `Not applicable' for that section. 
-
-%%===================================================%%
-%% For presentation purpose, we have included        %%
-%% \bigskip command. Please ignore this.             %%
-%%===================================================%%
-\bigskip
-\begin{flushleft}%
-Editorial Policies for:
-
-\bigskip\noindent
-Springer journals and proceedings: \url{https://www.springer.com/gp/editorial-policies}
-
-\bigskip\noindent
-Nature Portfolio journals: \url{https://www.nature.com/nature-research/editorial-policies}
-
-\bigskip\noindent
-\textit{Scientific Reports}: \url{https://www.nature.com/srep/journal-policies/editorial-policies}
-
-\bigskip\noindent
-BMC journals: \url{https://www.biomedcentral.com/getpublished/editorial-policies}
-\end{flushleft}
+\begin{itemize}
+\item \textbf{Funding.} % TODO
+\item \textbf{Competing interests.} The authors declare no competing interests.
+\item \textbf{Data availability.} % TODO: deposit the tensile and ligament test
+% data, and the finite-element data set used to train the surrogate.
+\item \textbf{Code availability.} % TODO
+\item \textbf{Author contribution.} % TODO
+\end{itemize}
 
 \begin{appendices}
 
-\section{Section title of first appendix}\label{secA1}
+\section{Notation}\label{sec:notation}
 
-An appendix contains supplementary information that is not an essential part of the text itself but which may be helpful in providing a more comprehensive understanding of the research problem or it is information that is too cumbersome to be included in the body of the paper.
-
-%%=============================================%%
-%% For submissions to Nature Portfolio Journals %%
-%% please use the heading ``Extended Data''.   %%
-%%=============================================%%
-
-%%=============================================================%%
-%% Sample for another appendix section			       %%
-%%=============================================================%%
-
-%% \section{Example of another appendix section}\label{secA2}%
-%% Appendices may be used for helpful, supporting or essential material that would otherwise 
-%% clutter, break up or be distracting to the text. Appendices can consist of sections, figures, 
-%% tables and equations etc.
+\begin{table}[h!]
+\centering
+\small
+\begin{tabular}{lll}
+\toprule
+\textbf{Symbol} & \textbf{Meaning} & \textbf{Introduced} \\
+\midrule
+$n$, $P_\alpha$, $\mathcal{H}$        & panel count, panels, set of hinges        & Sec.~\ref{sec:methods} \\
+$\bm{\theta}=(\bm z,\bm\ell,\bm w_{\mathrm{lig}})$ & design parameters            & Eq.~\eqref{eq:design-params} \\
+$\bm{r}$, $\bm{\tau}$                 & cut aspect ratios, boundary slider positions & Eq.~\eqref{eq:design-params} \\
+$\bm{c}_\alpha$, $\bm{d}_{\alpha j}$  & panel centroid, centroid-to-corner vector & Sec.~\ref{sec:methods} \\
+$\bm{q}=(\bm u_\alpha,\phi_\alpha)$   & panel translations and rotations          & Sec.~\ref{sec:methods} \\
+$\epsh=(a,s,\vartheta)$               & hinge axial, shear, relative rotation     & Eq.~\eqref{eq:hinge-strain} \\
+$\bm{g}=(\wlig,\beta,\rho_f)$         & ligament width, cut angle, fillet ratio   & Eq.~\eqref{eq:hinge-energy} \\
+$W$, $U$, $\Pi$                       & hinge energy, total energy, potential     & Eqs.~\eqref{eq:hinge-energy}--\eqref{eq:equilibrium} \\
+$\lambda$, $\bm f$, $\mathcal{C}$     & load factor, generalised forces, admissible set & Eq.~\eqref{eq:equilibrium} \\
+$H$, $\mu$                            & equilibrium Hessian, Tikhonov parameter   & Eq.~\eqref{eq:ift} \\
+$\bm{\eta}$, $W_s$, $\gamma$          & surrogate network, energy scale, Sobolev weight & Eqs.~\eqref{eq:surrogate}--\eqref{eq:sobolev} \\
+$D$, $\varepsilon_{f0}$, $k$, $T$     & damage, fracture strain, exponent, triaxiality & Eq.~\eqref{eq:damage} \\
+$r_{\mathrm{win}}$                    & finite-element truncation radius          & Sec.~\ref{sec:rve} \\
+$\Lambda$, $\sigma_y$                 & natural draw ratio, yield stress          & Eq.~\eqref{eq:draw-anchor} \\
+$\chi$, $\hat{\bm n}$                 & grip angle, in-plane loading direction    & Sec.~\ref{sec:calibration} \\
+$u_z$, $u_0$                          & out-of-plane buckle height and its amplitude & Eq.~\eqref{eq:buckle-law} \\
+$t$, $Y=Et$, $B$                      & thickness, stretching and bending moduli  & Sec.~\ref{sec:buckling-locality} \\
+$p$, $\ell_{\mathrm{eg}}$             & areal load, elasto-gravitational length   & Eq.~\eqref{eq:l-eg} \\
+$\Gamma$, $L^\star$                   & moment ratio, critical panel size         & Eqs.~\eqref{eq:gamma}--\eqref{eq:l-star} \\
+$\theta$, $\theta_o$                  & crease fold angle, cut-opening angle      & Sec.~\ref{sec:buckling-locality} \\
+$\ell_f$, $\ell_B$                    & fold width, bending boundary layer        & Sec.~\ref{sec:buckling-locality} \\
+\bottomrule
+\end{tabular}
+\caption{Principal symbols. Bold denotes vectors or tuples. The hinge rotation
+$\vartheta$ and the local crease angle $\theta$ are distinct.}
+\label{tab:notation}
+\end{table}
 
 \end{appendices}
 
