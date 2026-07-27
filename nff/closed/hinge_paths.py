@@ -210,6 +210,14 @@ def path_diagnostics(paths: HingePaths, domain: dict = DOMAIN) -> dict:
     mono = [float(np.mean(np.all(np.sign(d[:, :, k]) >= -1e-12, axis=0) |
                           np.all(np.sign(d[:, :, k]) <= 1e-12, axis=0))) for k in range(3)]
 
+    # COMPRESSION. The oracle samples eta_a in [0, 1] and `_domain_barrier` penalizes a < 0
+    # ("tension only" -- a closed hinge is expected to OPEN). Any compression observed here is
+    # therefore a regime the surrogate was never trained on and is actively pushed out of, so it is
+    # reported as a first-class quantity rather than left to be read off the ranges.
+    ea_signed = eta[..., 0]
+    hinge_min = ea_signed.min(axis=0)                          # (n_hinges,) most-compressive value
+    compressive = ea_signed < -1e-6
+
     ea, es, th = np.abs(eta[..., 0]), np.abs(eta[..., 1]), np.abs(eta[..., 2])
     in_box = ((eta[..., 0] >= 0.0) & (eta[..., 0] <= domain['eta_a_max']) &
               (es <= domain['eta_s_max']) & (th <= domain['theta_max']))
@@ -223,6 +231,12 @@ def path_diagnostics(paths: HingePaths, domain: dict = DOMAIN) -> dict:
         'straightness_mean': float(np.mean(per_hinge)),
         'straightness_per_hinge': [float(x) for x in per_hinge],
         'monotonic_frac': {'eta_a': mono[0], 'eta_s': mono[1], 'theta': mono[2]},
+        'compression': {
+            'n_hinges_compressive': int((hinge_min < -1e-6).sum()),
+            'sample_frac': float(np.mean(compressive)),
+            'min_eta_a': float(ea_signed.min()),
+            'min_eta_a_per_hinge': [float(x) for x in hinge_min],
+        },
         'in_domain_frac': float(np.mean(in_box)),
         'endpoint_in_domain_frac': float(np.mean(in_box[-1])),
         # how much of the SAMPLED box the deployment actually occupies (wasted-budget indicator)
