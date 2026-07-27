@@ -85,13 +85,14 @@ class PhysicsConfig(eqx.Module):
     solver_tol: float
     updated_lagrangian: bool
     backward_reg: float
+    prescribed_displacements: tuple
 
     def __init__(self, domain_restriction: float, use_contact: bool,
                  k_contact: float, min_angle: float, cutoff_angle: float,
                  linearized_strains: bool, incremental: bool,
                  num_load_steps: int, solver_maxiter: int = 1000,
                  solver_tol: float = 1e-5, updated_lagrangian: bool = False,
-                 backward_reg: float = 0.0):
+                 backward_reg: float = 0.0, prescribed_displacements: tuple = ()):
         self.domain_restriction = domain_restriction
         self.use_contact = use_contact
         self.k_contact = k_contact
@@ -106,6 +107,10 @@ class PhysicsConfig(eqx.Module):
         # Tikhonov ridge on the implicit-diff backward solve (0 = off). Lifts the near-singular/
         # indefinite tangent stiffness to PD so the IFT gradient is well-conditioned.
         self.backward_reg = backward_reg
+        # Raw `displacement_control` specs — imposed Stage-2 motion instead of (or alongside)
+        # applied force. Kept raw here because nff/config must not import from nff/stages;
+        # nff.stages.physics.displacement parses and validates them.
+        self.prescribed_displacements = tuple(prescribed_displacements or ())
 
 
 class LossWeights(eqx.Module):
@@ -359,9 +364,17 @@ def _parse_validity_config(weights_raw: dict) -> ValidityConfig:
     )
 
 
-def _parse_physics_config(physics_raw: dict, domain_restriction: float) -> PhysicsConfig:
-    """Parse the [physics] YAML section. Angles are converted from degrees to radians."""
+def _parse_physics_config(physics_raw: dict, domain_restriction: float,
+                          displacement_raw: list | None = None) -> PhysicsConfig:
+    """Parse the [physics] YAML section. Angles are converted from degrees to radians.
+
+    ``displacement_raw`` is the top-level [displacement_control] list — a sibling of [loads],
+    carried here because both are Stage-2 boundary conditions.
+    """
     deg_to_rad = float(jnp.pi / 180.0)
+    if displacement_raw is not None and not isinstance(displacement_raw, list):
+        raise TypeError("[displacement_control] must be a list of {face, dof, value} entries, "
+                        f"got {type(displacement_raw).__name__}.")
     return PhysicsConfig(
         domain_restriction=domain_restriction,
         use_contact=bool(physics_raw.get("use_contact", True)),
@@ -375,6 +388,7 @@ def _parse_physics_config(physics_raw: dict, domain_restriction: float) -> Physi
         solver_tol=float(physics_raw.get("solver_tol", 1e-5)),
         updated_lagrangian=bool(physics_raw.get("updated_lagrangian", False)),
         backward_reg=float(physics_raw.get("backward_reg", 0.0)),
+        prescribed_displacements=tuple(displacement_raw or ()),
     )
 
 
@@ -477,6 +491,7 @@ def merge_arch_problem(arch_raw: dict, problem: dict) -> dict:
     merged = dict(arch_raw)
     merged['boundary_conditions'] = problem.get('boundary_conditions', {})
     merged['loads'] = problem.get('loads', [])
+    merged['displacement_control'] = problem.get('displacement_control', [])
     merged['physics'] = problem.get('physics', {})
     merged['material'] = problem.get('material', {})
     return merged
@@ -501,7 +516,8 @@ def _parse_full_raw(raw: dict, config_dir: str) -> 'ExperimentConfig':
     pattern_obj = _load_pattern(topo_raw, config_dir)
     mapping_cfg = _parse_mapping_config(mapping_raw)
     validity_cfg = _parse_validity_config(raw.get("optimization_weights", {}))
-    physics_cfg = _parse_physics_config(raw.get("physics", {}), mapping_cfg.domain_restriction)
+    physics_cfg = _parse_physics_config(raw.get("physics", {}), mapping_cfg.domain_restriction,
+                                        raw.get("displacement_control"))
     target_cfg = _parse_target_config(raw.get("target", {}))
     training_cfg = _parse_training_config(raw.get("training", {}), raw.get("loss_weights", {}))
     vis_cfg = _parse_visualization_config(raw.get("visualization", {}))
