@@ -6,6 +6,10 @@ one the oracle and the surrogate use, and the whole point (feeding observed path
 training) silently breaks.
 """
 import numpy as np
+import jax
+jax.config.update("jax_enable_x64", True)   # the exact-invariance assertions below need float64;
+                                            # without this the file only passes when some earlier
+                                            # test module happens to have enabled it first
 import jax.numpy as jnp
 import pytest
 

@@ -44,6 +44,49 @@ from nff.stages.physics.kinematics import face_to_node_kinematics_fn
 
 # ── hinge geometry, independent of the hinge model ────────────────────────────────
 
+def build_hinge_geometry_fn(config, static_features, state, w_lig_mm: Optional[float] = None):
+    """Build ``map_params -> HingeGeometry`` once, so many designs can be reduced cheaply.
+
+    The expensive part (the hinge descriptor structure and the design-invariant bond-order
+    permutation) depends only on the topology, not on the design, so it is hoisted out of the
+    returned closure. An ensemble that sweeps hundreds of random starts pays it once instead of
+    per sample; ``build_hinge_geometry`` below is the one-shot convenience wrapper.
+    """
+    from nff.closed.setup import (_flat_coords_from_design, _bond_order_perm, _alpha_sec_bond_order)
+    from nff.topology.hinge_descriptor import build_hinge_descriptor_structure
+    from nff.models.hinge_surrogate import w_lig_from_logit
+
+    topo = config.topology
+    M, N = int(topo['M']), int(topo['N'])
+    r_init = float(topo.get('r_init', 0.45))
+    hs = build_hinge_descriptor_structure(M, N, ref_r=r_init)
+    n_hinges = np.asarray(state.bond_connectivity).shape[0]
+
+    if w_lig_mm is None:
+        hm = getattr(config, 'hinge_model', None)
+        w_lig_mm = float(getattr(hm, 'w_lig_mm', 5.0)) if hm is not None else 5.0
+    w_lig_default = jnp.full((n_hinges,), float(w_lig_mm))
+
+    # The bond-order permutation must be matched on the UNIFORM-r sheet, because `state` is always
+    # built from build_closed_tessellation at r_init -- matching against a perturbed (non-uniform)
+    # design would misalign the position-based nearest-pivot search. Same argument as setup.py:181.
+    # It is topological, hence shared by every design in an ensemble.
+    z_uniform = float(np.log(r_init / (1.0 - r_init)))
+    struct = static_features['struct']
+    uni = {'z': jnp.full((struct['rows'], struct['cols']), z_uniform),
+           'bnd_logits': jnp.zeros((np.asarray(static_features['sliders']['init_logits']).size,))}
+    perm = _bond_order_perm(state, hs, _flat_coords_from_design(static_features, uni))
+
+    def geometry_from_design(map_params) -> HingeGeometry:
+        alpha, sec_dir = _alpha_sec_bond_order(
+            hs, perm, _flat_coords_from_design(static_features, map_params))
+        w_lig = (w_lig_from_logit(map_params['w_lig_logit'])
+                 if isinstance(map_params, dict) and 'w_lig_logit' in map_params else w_lig_default)
+        return HingeGeometry(w_lig=w_lig, alpha=alpha, sec_dir=sec_dir)
+
+    return geometry_from_design
+
+
 def build_hinge_geometry(config, static_features, state, map_params,
                          w_lig_mm: Optional[float] = None) -> HingeGeometry:
     """Per-hinge ``HingeGeometry(w_lig, alpha, sec_dir)`` for the CURRENT design.
@@ -57,34 +100,7 @@ def build_hinge_geometry(config, static_features, state, map_params,
     ``w_lig_mm`` / ``config.hinge_model.w_lig_mm`` / 5.0 mm as a uniform fallback -- the ROM has no
     learnable ligament width, so its hinges are all the manufactured width.
     """
-    from nff.closed.setup import (_flat_coords_from_design, _bond_order_perm, _alpha_sec_bond_order)
-    from nff.topology.hinge_descriptor import build_hinge_descriptor_structure
-    from nff.models.hinge_surrogate import w_lig_from_logit
-
-    topo = config.topology
-    M, N = int(topo['M']), int(topo['N'])
-    r_init = float(topo.get('r_init', 0.45))
-    hs = build_hinge_descriptor_structure(M, N, ref_r=r_init)
-
-    # The bond-order permutation must be matched on the UNIFORM-r sheet, because `state` is always
-    # built from build_closed_tessellation at r_init -- matching against a trained (non-uniform)
-    # design would misalign the position-based nearest-pivot search. Same argument as setup.py:181.
-    z_uniform = float(np.log(r_init / (1.0 - r_init)))
-    uni = {'z': jnp.full_like(jnp.asarray(map_params['z']), z_uniform),
-           'bnd_logits': jnp.zeros_like(jnp.asarray(map_params['bnd_logits']))}
-    perm = _bond_order_perm(state, hs, _flat_coords_from_design(static_features, uni))
-
-    alpha, sec_dir = _alpha_sec_bond_order(hs, perm, _flat_coords_from_design(static_features, map_params))
-
-    n_hinges = np.asarray(state.bond_connectivity).shape[0]
-    if isinstance(map_params, dict) and 'w_lig_logit' in map_params:
-        w_lig = w_lig_from_logit(map_params['w_lig_logit'])
-    else:
-        if w_lig_mm is None:
-            hm = getattr(config, 'hinge_model', None)
-            w_lig_mm = float(getattr(hm, 'w_lig_mm', 5.0)) if hm is not None else 5.0
-        w_lig = jnp.full((n_hinges,), float(w_lig_mm))
-    return HingeGeometry(w_lig=w_lig, alpha=alpha, sec_dir=sec_dir)
+    return build_hinge_geometry_fn(config, static_features, state, w_lig_mm)(map_params)
 
 
 # ── the extraction itself ─────────────────────────────────────────────────────────
