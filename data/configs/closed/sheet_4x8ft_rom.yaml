@@ -36,15 +36,33 @@ tessellation:
   hinge_margin: 0.13
   clamped_dofs: [1]          # bottom edge: y only (rollers in x, free rotation)
   y_pin_faces: [3]           # centre bottom tile also pinned in x -> no rigid translation/rotation
-  # FIXED target (never auto-fit). Measured untrained deploy at 60 N/tile: x [-0.337, 3.341],
-  # y [-0.053, 6.254]. The target asks for MORE lateral spread (half_w 1.84 -> 2.05, +11%) and
-  # slightly LESS extension (half_h 3.15 -> 3.00), i.e. convert the same pull into transverse
-  # expansion. Its bottom edge is anchored on the clamped edge (y_lo = -0.053) so the pinned tiles
-  # stay inside the target — otherwise their chamfer error is unfixable.
-  target_cx: 1.502
-  target_cy: 2.947
-  target_half_w: 2.05
-  target_half_h: 3.00
+  # ── FIXED target, CALIBRATED TO A 45 deg DEPLOYMENT (2026-07-27) ─────────────────────────────
+  # Never auto-fit. Derived by `nff/scripts/diagnostics/calibrate_target.py --angle 45`, which is
+  # the tool to re-run whenever the tessellation or the springs change.
+  #
+  # THE LAW. Two rigid tiles hinged at a shared CORNER: the hinge is offset from the
+  # centre-to-centre line by an angle psi, and opening the pair by a relative angle theta swings it
+  # toward that line, so the panel pitch grows as
+  #     lam(theta) = cos(psi - theta/2) / cos(psi),   maximal at FULL deployment theta = 2*psi,
+  #     lam_max = 1/cos(psi).
+  # A SQUARE tile has psi = 45 deg -> lam_max = sqrt(2) at theta = 90 deg, the familiar
+  # rotating-squares result. ⚠ THIS SHEET IS NOT SQUARE: pitch 1 x 2 gives
+  #     psi_x = 63.43 deg  ->  lam_max 2.2361, full deployment at 126.9 deg
+  #     psi_y = 26.57 deg  ->  lam_max 1.1180, full deployment at  53.1 deg
+  # so deployment is strongly ANISOTROPIC and the y axis LOCKS at 53.1 deg — which is exactly the
+  # saturation seen in the load sweep. Applying sqrt(2)-at-90 here would be wrong by ~25%.
+  #
+  # At theta = 45 deg:  lam_x = 1.6892,  lam_y = 1.1152  on a flat 3.0 x 6.0 sheet
+  #   -> half_w = 1.6892 * 3.0 / 2 = 2.5339      half_h = 1.1152 * 6.0 / 2 = 3.3457
+  # Measured deployed bbox is +3.3% / +0.9% larger than these (5.237 x 6.749): the excess is the
+  # tile CORNERS swinging outside the pitch, so the target is a slight PULL-IN of the deployed
+  # envelope — reachable, which is the whole point. Anchored with its bottom edge ON the deployed
+  # bottom edge (y_lo = -0.1377): the clamped tiles cannot leave it, so a target floating above or
+  # below would put the clamp permanently outside and make its chamfer error unfixable.
+  target_cx: 1.5442
+  target_cy: 3.2080
+  target_half_w: 2.5339
+  target_half_h: 3.3457
 
 mapping:
   map_type: closed_les
@@ -111,21 +129,45 @@ material:                    # LIVE under the ROM (inert with the surrogate + ca
 boundary_conditions:
   clamped_faces: [0, 3, 6]   # bottom edge (j = 0)
 
-loads:                       # top edge (j = 2) pulled +y — distributed, not a single grip.
-  - {face: 2, dof: 1, value: 60.0}    # 60 N per tile (180 N total). Measured untrained sweep:
-  - {face: 5, dof: 1, value: 60.0}    #   10 N -> rigid (maxD 0.08); 30 N -> maxD 0.92, 0/12 past
-  - {face: 8, dof: 1, value: 60.0}    #   fracture initiation; 60 N -> +23% lateral spread, maxD
-                                      #   2.30, 10/12 past; 160 N -> +78% spread but saturating.
-                                      # 60 N is the regime with real deployment AND reducible damage.
+loads:                       # top edge (j = 2) pulled +y — distributed, not a single grip. The
+                             # clamp is the opposite (bottom) edge: pull one side against the other.
+  # ★ 60 N/tile SETS THE 45 deg DEPLOYMENT with the calibrated springs — measured theta_mean =
+  # 45.01 deg (per-hinge spread 2.3 deg, i.e. the whole sheet opens together). The bisection in
+  # calibrate_target.py lands on 59.60 N; 60.0 is kept because the 0.7% difference is 0.06 deg.
+  # Angle vs load (untrained, mean relative hinge rotation):
+  #     15 N -> 29.0 deg | 30 -> 37.9 | 60 -> 45.0 | 120 -> 49.0 | 600 -> 52.3 | 6000 -> 53.0
+  # It SATURATES at 53.1 deg = 2*psi_y, the kinematic lock of the short axis — not a spring effect,
+  # and no load can pass it. The 40-45 deg band is therefore F in [35, 60] N/tile.
+  - {face: 2, dof: 1, value: 60.0}
+  - {face: 5, dof: 1, value: 60.0}
+  - {face: 8, dof: 1, value: 60.0}
 
-target:
+target:                      # fallback TargetConfig; run_closed overrides it with the rectangle above
   type: rectangle
-  center: [1.5, 2.95]
-  radius: 3.0
+  center: [1.5442, 3.2080]
+  radius: 3.3457
 
 loss_weights:
   chamfer: 50.0
-  coverage: 1.0
+  # ★ coverage = 0 (was 1.0). `chamfer_loss = precision + coverage * coverage_loss`, where
+  # `precision` = each deployed BOUNDARY VERTEX to its nearest target point (the thing we want) and
+  # `coverage` = each of the 400 sampled TARGET points to its nearest boundary vertex. This sheet
+  # has only 12 boundary vertices against a 23.5-unit perimeter, so the coverage term has a hard
+  # floor of ~(perimeter/12)^2/12 = 0.32 that NO design can beat -- 77% of the old "best chamfer"
+  # 0.416 was that floor. Worse, it actively fought precision: minimizing it spreads the 12 vertices
+  # out, which pushed the boundary error UP (18.3mm untrained -> 29.5mm trained) and dragged the
+  # deployment angle from 45 to 62.7 deg. Measured, 12 boundary vertices vs the target perimeter:
+  #     coverage   1.0      0.1     0.01     0.0
+  #     mean       16.8mm   8.8mm   6.3mm    5.7mm
+  #     max        54.3mm  18.5mm  14.9mm   14.1mm
+  #     theta      47.6deg 46.5deg 45.3deg  45.6deg
+  # At 0 the angle HOLDS ITSELF at 45 deg — a boundary that matches a 45-deg-derived rectangle IS a
+  # 45-deg deployment, so no angle constraint is needed. Coverage exists to stop a collapse to a
+  # point; that cannot happen here (fixed target + rigid connected tiles + physics-bounded deploy),
+  # verified stable to 600 epochs. Raise it to ~0.01 if a future target ever does collapse.
+  # ⚠ side benefit: at 0, `chamfer_total` IS the precision term, so run_closed's best-checkpoint
+  # selection ranks by the metric we actually care about instead of by the floor.
+  coverage: 0.0
   stretching: 0.0
   shearing: 0.0
   bending: 0.0
