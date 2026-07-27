@@ -346,9 +346,13 @@ def sampling_spec(ens: PathEnsemble, *, q_lo: float = 1.0, q_hi: float = 99.0, p
             'quantiles': [q_lo, q_hi], 'pad_frac': pad,
             'n_designs': ens.n_samples, 'n_path_points': int(pts.shape[0]),
         },
-        'PROVISIONAL': 'Measured under an UNCALIBRATED ROM (linear springs, k_* not yet fitted to '
-                       'coupon data) against a target shape that is not yet the one we mean to '
-                       'match. Re-measure before spending oracle budget on it.',
+        'PROVISIONAL': 'ROM springs ARE calibrated as of 2026-07-27 (PET t=0.5, w_lig=18: '
+                       'k_stretch 238.1 N/mm, k_shear 127.4 N/mm provisional, k_rot 487 N.mm/rad '
+                       'as the buckled secant at 20 deg). Two caveats remain: (1) k_rot is a single '
+                       'quadratic secant taken at 20 deg while deployment rides to 45-55 deg, so '
+                       'rotation is OVER-stiff here -- the real hinge is softer and would rotate '
+                       'further; (2) the target shape is still not the one we mean to match. '
+                       'Re-measure once the target is fixed.',
     }
 
 

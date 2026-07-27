@@ -6,14 +6,18 @@
 # `material:` k_stretch / k_shear / k_rot below. Those constants are INERT in the surrogate run and
 # LIVE here — this is the abstract spring model, not the condensed CalculiX energy.
 #
-# ⚠ UNITS. `length_scale` / `energy_scale` are read ONLY in the surrogate branch of
-# `nff/closed/setup.py`, so under the ROM they do nothing and **`loads.value` is NOT in newtons** —
-# it is an abstract force against k_stretch=1000. Kept at 60.0 purely to match the surrogate run's
-# config; do not read it as 60 N. Measured untrained ROM sweep (state rebuilt per force):
+# ⚠ UNITS — NOW DIMENSIONAL (2026-07-27). `length_scale` / `energy_scale` are read only in the
+# surrogate branch of `nff/closed/setup.py`, so under the ROM they do NOT scale anything at run
+# time; the scaling is instead BAKED INTO `material:` below. With that done, `loads.value` IS in
+# newtons here (see the material block for the derivation).
+#
+# History — before calibration the springs were abstract (k_stretch = 1000, k_rot = 0.5) and the
+# loads were abstract with them. Measured untrained ROM sweep at that setting:
 #   F=60 -> w 5.483 h 6.892 | 300 -> 5.512 / 7.382 | 1000 -> 5.501 / 8.789 | 20000 -> 5.486 / 46.796
-# Width is force-INDEPENDENT (hinge opening is set by k_rot, saturated at ~0 load) while height is
-# exactly LINEAR in force and never saturates — springs that cannot yield. Contrast the surrogate,
-# which spreads auxetically (+23% lateral at 60 N) and saturates by 160 N.
+# Width was force-INDEPENDENT (hinge opening set by k_rot, saturated at ~0 load) while height was
+# exactly LINEAR in force and never saturated — springs that cannot yield. Contrast the surrogate,
+# which spreads auxetically (+23% lateral at 60 N) and saturates by 160 N. Those numbers are NOT
+# comparable to the calibrated run below: k_stretch is now ~97x stiffer in pipeline units.
 #
 # ⚠ NO DAMAGE. The ROM branch returns `(None,)*5`, so there is no damage_fn: `w_damage`, `w_fail`,
 # `w_ood`, `m_safe`, `fail_line` and `learn_w_lig` are all inert, the maxD/meanD/over columns vanish
@@ -75,10 +79,33 @@ physics:
   backward_reg: 0.01         # ridge on the IFT adjoint (plastic softening makes the Hessian indefinite)
   updated_lagrangian: false
 
-material:                    # inert with the surrogate + calibrate:false (kept for reference)
-  k_stretch: 1000.0
-  k_shear: 1000.0
-  k_rot: 0.5
+material:                    # LIVE under the ROM (inert with the surrogate + calibrate:false)
+  # ── CALIBRATED SPRINGS (2026-07-27) ───────────────────────────────────────────────────────────
+  # Physical values from the FEA hinge-condensation campaign, PET t = 0.5 mm, w_lig = 18 mm,
+  # RVE half-disk r_win = 100 mm:
+  #     k_stretch = 238.1  N/mm
+  #     k_shear   = 127.4  N/mm      (seeded cross-check still running — treat as provisional)
+  #     k_rot     = 487    N.mm/rad  ← the BUCKLED SECANT at 20 deg, not the pre-buckling tangent.
+  # k_rot deliberately does NOT use the elastic tangent (34231 N.mm/rad, or 19534 about the elastic
+  # centre): 0.5 mm PET buckles out of plane immediately (uz ~ 4t by 0.25 deg) and the moment
+  # SATURATES, so the pre-buckling number describes a hinge that does not exist at deployment
+  # rotations. 487 is the secant that actually carries the sheet at ~20 deg. A single quadratic
+  # spring is still the wrong functional form for a saturating moment — that is precisely the gap
+  # the learned surrogate exists to close; this is the best one-number stand-in.
+  #
+  # ── UNIT CONVERSION (N/mm -> pipeline) ────────────────────────────────────────────────────────
+  # `ligament_energy_linearized` evaluates k * (displacement in PIPELINE length units)^2 / 2, and
+  # that displacement is exactly the surrogate's `a` before its x length_scale. So the Gap-2
+  # matching relation of `hinge_surrogate.py::calibrate_scales` applies verbatim, inverted:
+  #     k_stretch_pipe = energy_scale * length_scale^2 * k_phys = 406.4 * 238.1 = 96763.84
+  #     k_shear_pipe   = energy_scale * length_scale^2 * k_phys = 406.4 * 127.4 = 51775.36
+  #     k_rot_pipe     = energy_scale               * k_phys    =   487 / 406.4 =     1.1983
+  # with length_scale = 406.4 mm/u (the real panel pitch) and energy_scale = 1/length_scale.
+  # That choice of energy_scale is what makes `loads.value` newtons: pipeline work = energy_scale *
+  # F[N] * length_scale * u_pipe = F[N] * u_pipe.
+  k_stretch: 96763.84         # = 238.1 N/mm
+  k_shear:   51775.36         # = 127.4 N/mm
+  k_rot:         1.1983       # = 487 N.mm/rad
   density: 1.0
 
 boundary_conditions:
