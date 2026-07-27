@@ -12,9 +12,15 @@ Toolpath convention via ``--mode``:
 - ``outline``  (default): exact kerf-slot / fillet / sheet-edge loops (what we simulated).
 - ``centerline``: sheet outline + slot centrelines + hinge-tip relief circles (thin-kerf).
 
+Laser-cutting extras:
+- ``--kerf MM`` (default 0.5): slot width for the DXF. Wider than the simulation-faithful 0.2 mm so
+  closely-spaced cut lines separate into a clean slot instead of burning together. Tune to your stock.
+- pierce points (``--no-pierce`` to disable): a POINT inside each fillet disc, on the ``PIERCE`` layer,
+  so the laser's burn-in (which removes extra material) lands in scrap, off every finished edge.
+
 Run:
     JAX_PLATFORMS=cpu conda run -n kgnn_mac python nff/scripts/figures/export_cut_dxf.py \
-        --run-dir data/outputs/runs/run_<ts>_<config> [--mode outline] [--out path.dxf]
+        --run-dir data/outputs/runs/run_<ts>_<config> [--mode outline] [--kerf 0.5] [--out path.dxf]
 """
 
 import os
@@ -36,7 +42,7 @@ from nff.topology.cut_dxf import export_cut_geometry_dxf, render_dxf_png
 from nff.topology.cut_pattern import measure_cut_geometry
 
 
-def _reconstruct_geometry(config, params_override=None):
+def _reconstruct_geometry(config, params_override=None, w_c_mm=None):
     """(geom, w_lig, length_scale, hinge_model) for a config's design (override params = trained)."""
     initial_state, _ = build_closed_initial_state(config)
     params, static_features = init_closed_les_params(config)
@@ -55,7 +61,7 @@ def _reconstruct_geometry(config, params_override=None):
         struct, boundary_flat_from_logits(sliders, params['bnd_logits']),
         jax.nn.sigmoid(params['z'])))
     geom, w_lig, length_scale = build_run_cut_geometry(
-        initial_state, cut_coords, struct, config, config.hinge_model, hinge_w_lig)
+        initial_state, cut_coords, struct, config, config.hinge_model, hinge_w_lig, w_c_mm=w_c_mm)
     return geom, w_lig, length_scale
 
 
@@ -67,6 +73,10 @@ def main():
     src.add_argument("--config-name", help="closed config name -> untrained flat design")
     ap.add_argument("--config-dir", default="closed")
     ap.add_argument("--mode", choices=["outline", "centerline"], default="outline")
+    ap.add_argument("--kerf", type=float, default=0.5,
+                    help="kerf/slot width [mm] for the DXF (default 0.5; widen so close lines separate)")
+    ap.add_argument("--no-pierce", dest="pierce", action="store_false",
+                    help="do NOT add pierce points inside the fillets (on by default)")
     ap.add_argument("--out", default=None, help="output .dxf (default: cut_pattern.dxf next to the source)")
     ap.add_argument("--preview", action="store_true", help="also write a PNG preview beside the DXF")
     args = ap.parse_args()
@@ -83,15 +93,16 @@ def main():
         params_override = None
         out = args.out or f"data/outputs/{args.config_name}_cut_pattern.dxf"
 
-    geom, w_lig, length_scale = _reconstruct_geometry(config, params_override)
+    geom, w_lig, length_scale = _reconstruct_geometry(config, params_override, w_c_mm=args.kerf)
     rt = measure_cut_geometry(geom)
     print(f"  geometry: {len(geom['hinge_info'])} hinges, w_lig {w_lig.min():.1f}-{w_lig.max():.1f}mm, "
-          f"scale {length_scale:.1f} mm/unit, round-trip err {rt.get('max_w_lig_err', 0.0):.1e}mm")
+          f"kerf {args.kerf:.2f}mm, scale {length_scale:.1f} mm/unit, "
+          f"round-trip err {rt.get('max_w_lig_err', 0.0):.1e}mm")
 
-    res = export_cut_geometry_dxf(geom, out, mode=args.mode)
+    res = export_cut_geometry_dxf(geom, out, mode=args.mode, pierce=args.pierce)
     sw, sh = res["sheet_mm"]
     print(f"  DXF ({args.mode}): {res['n_loops']} loops, {res['n_lines']} lines, "
-          f"sheet {sw:.1f} x {sh:.1f} mm @ 1:1 (units mm) -> {out}")
+          f"{res['n_pierce']} pierce pts, sheet {sw:.1f} x {sh:.1f} mm @ 1:1 (units mm) -> {out}")
 
     if args.preview:
         png = os.path.splitext(out)[0] + "_preview.png"

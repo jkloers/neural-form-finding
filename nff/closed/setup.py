@@ -32,8 +32,9 @@ def build_closed_initial_state(config):
     N = int(topo['N'])
     r_init = float(topo.get('r_init', 0.45))
     spacing = float(topo.get('spacing', 1.0))
+    spacing_y = float(topo.get('spacing_y', spacing))
 
-    tessellation = build_closed_tessellation(M, N, r=r_init, spacing=spacing)
+    tessellation = build_closed_tessellation(M, N, r=r_init, spacing=spacing, spacing_y=spacing_y)
     configure_tessellation(tessellation, SimpleNamespace(**topo))  # material, clamps, loads
 
     # Optional: restrict which DOFs the clamp fixes (default all 3 = [x, y, theta]).
@@ -75,9 +76,10 @@ def init_closed_les_params(config):
     M, N = int(topo['M']), int(topo['N'])
     r_init = float(topo.get('r_init', 0.45))
     spacing = float(topo.get('spacing', 1.0))
+    spacing_y = float(topo.get('spacing_y', spacing))
 
     struct = build_deploy_structure(M, N)
-    sliders = build_boundary_edges(struct, spacing=spacing)
+    sliders = build_boundary_edges(struct, spacing=spacing, spacing_y=spacing_y)
 
     z_init = float(np.log(r_init / (1.0 - r_init)))         # sigmoid(z_init) = r_init
     z = np.full((struct['rows'], struct['cols']), z_init)

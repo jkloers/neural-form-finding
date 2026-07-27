@@ -51,6 +51,126 @@ def fracture_locus(eta: np.ndarray, eps_f0: float = 0.25, k: float = 1.5,
     return np.minimum(eps_f0 * np.exp(-k * (eta_c - 1.0 / 3.0)), eps_f_cap)
 
 
+def max_principal_strain(tostrain: np.ndarray) -> np.ndarray:
+    """Per-element maximum principal (tensile) strain from a TOSTRAIN block.
+
+    Args:
+        tostrain: (N, 6) total strain ``[exx, eyy, ezz, exy, eyz, ezx]`` (CalculiX order).
+
+    Returns:
+        (N,) largest eigenvalue of the strain tensor per element (the tensile principal strain).
+    """
+    e = np.asarray(tostrain, float)
+    out = np.zeros(len(e))
+    for i, (xx, yy, zz, xy, yz, zx) in enumerate(e):
+        T = np.array([[xx, xy, zx], [xy, yy, yz], [zx, yz, zz]])
+        out[i] = np.linalg.eigvalsh(T)[-1]
+    return out
+
+
+def _triax_tear_margin(principal: np.ndarray, S: np.ndarray | None, eps_tear0: float,
+                       k: float, q: float) -> float:
+    """Robust percentile of the triaxiality-aware tear damage ``D = principal / eps_f(eta)``.
+
+    The tolerable tensile strain rises in shear/compression and falls in biaxial tension via the
+    same Johnson-Cook-like locus used for steel ductile damage (``eps_f(eta)=eps_tear0*exp(-k(eta-
+    1/3))``, so ``eps_f=eps_tear0`` at uniaxial tension). When no stress is supplied the locus
+    collapses to the constant ``eps_tear0`` (uniaxial criterion).
+    """
+    if S is not None and np.size(S):
+        S = np.asarray(S, float)
+        if S.ndim == 2 and S.shape[1] >= 6 and S.shape[0] == principal.shape[0]:
+            eps_f = fracture_locus(stress_triaxiality(S[:, :6]), eps_f0=eps_tear0, k=k)
+            return float(np.percentile(principal / eps_f, q))
+    return float(np.percentile(principal, q)) / eps_tear0
+
+
+def _column_average(coords: np.ndarray, arrays, tol: float = 0.05):
+    """Average per-node ``arrays`` over through-thickness columns (nodes sharing an in-plane x,y).
+
+    Groups nodes by their reference in-plane position (rounded to ``tol`` mm) — one group per
+    extruded column — and returns each array averaged within its column, one row per column. This
+    removes the bending strain gradient (tension outer / compression inner), leaving the membrane
+    (mid-surface) response.
+    """
+    key = np.round(coords[:, :2] / tol).astype(np.int64)
+    _, inv = np.unique(key, axis=0, return_inverse=True)
+    n = int(inv.max()) + 1
+    cnt = np.bincount(inv, minlength=n)
+    out = []
+    for A in arrays:
+        A = np.asarray(A, float)
+        acc = np.stack([np.bincount(inv, weights=A[:, c], minlength=n) for c in range(A.shape[1])],
+                       axis=1)
+        out.append(acc / cnt[:, None])
+    return out
+
+
+def tear_from_frame(frame: dict, *, eps_tear0: float = 0.03, k: float = 1.5,
+                    q: float = 99.0) -> float:
+    """Surface tensile-tear margin ``D`` (>=1 => tear), triaxiality-aware.
+
+    Uses the per-node max principal strain and (when the stress field is present) the
+    triaxiality-dependent fracture locus. This still sees the full bending surface strain; for
+    the bending-aware measure use :func:`membrane_tear_from_frame`.
+    """
+    E = frame.get("TOSTRAIN")
+    if E is None or not np.size(E):
+        return float("nan")
+    principal = max_principal_strain(np.asarray(E, float))
+    return _triax_tear_margin(principal, frame.get("STRESS"), eps_tear0, k, q)
+
+
+def membrane_tear_from_frame(frame: dict, coords: np.ndarray, *, eps_tear0: float = 0.03,
+                             k: float = 1.5, q: float = 99.0) -> float:
+    """Bending- AND triaxiality-aware tear margin ``D`` (>=1 => tear).
+
+    Averages the strain and stress tensors through the thickness (per in-plane column) so the
+    bending gradient cancels and the membrane (mid-surface) state remains, then applies the
+    triaxiality-dependent fracture locus. This is the physically-faithful paper criterion: a pure
+    fold (no membrane stretch) accumulates little membrane strain and does not tear regardless of
+    fold angle, matching that paper creases to 180 deg without membrane-tearing.
+    """
+    E = frame.get("TOSTRAIN")
+    if E is None or not np.size(E) or coords is None:
+        return tear_from_frame(frame, eps_tear0=eps_tear0, k=k, q=q)
+    coords = np.asarray(coords, float)
+    E = np.asarray(E, float)
+    S = frame.get("STRESS")
+    if S is not None and np.size(S) and np.asarray(S).shape == E.shape:
+        E_col, S_col = _column_average(coords, [E, np.asarray(S, float)])
+    else:
+        (E_col,) = _column_average(coords, [E]); S_col = None
+    return _triax_tear_margin(max_principal_strain(E_col), S_col, eps_tear0, k, q)
+
+
+def damage_from_frame(frame: dict, *, eps_f0: float = 0.25, k: float = 1.5, q: float = 99.0) -> float:
+    """Robust ductile-damage percentile ``D`` from a parsed CalculiX frame (PEEQ + STRESS).
+
+    Single source of truth for turning a raw .frd frame into the scalar failure margin, shared
+    by the parser and by :meth:`SteelJ2.failure`. Returns NaN if either field is absent or the
+    element counts disagree. ``D >= 1`` => fracture.
+
+    Args:
+        frame: parsed frame dict with keys ``PEEQ``/``PE`` (per-element plastic strain) and
+            ``STRESS`` (N x 6 Cauchy tensor).
+    """
+    peeq = None
+    for key in ("PEEQ", "PE"):
+        if key in frame and np.size(frame[key]):
+            arr = np.abs(np.asarray(frame[key], float))
+            peeq = arr[:, 0] if arr.ndim > 1 else arr
+            break
+    S = frame.get("STRESS")
+    if peeq is None or S is None or not np.size(S):
+        return float("nan")
+    S = np.asarray(S, float)
+    if S.ndim != 2 or S.shape[1] < 6 or S.shape[0] != peeq.shape[0]:
+        return float("nan")
+    _, D_p99, _ = ductile_damage(peeq, S[:, :6], eps_f0=eps_f0, k=k, q=q)
+    return D_p99
+
+
 def ductile_damage(peeq: np.ndarray, S: np.ndarray, *, eps_f0: float = 0.25, k: float = 1.5,
                    q: float = 99.0):
     """Continuous per-element damage and a robust scalar margin.

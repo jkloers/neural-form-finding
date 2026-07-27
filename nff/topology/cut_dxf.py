@@ -12,6 +12,11 @@ simulated. Two toolpath conventions:
   line (the laser's own kerf gives the width), with a small relief circle of radius ``rho`` at each
   retracted hinge tip. Faster to cut; drops the exact slot width.
 
+Optionally emits **pierce points** (``pierce=True``): a POINT at each fillet centre (hinge tip), on a
+separate ``PIERCE`` layer, drawn as a circle+X. The pierce sits INSIDE the fillet disc — scrap that
+drops out — so the laser's initial burn-in (which removes extra material) lands off every finished
+edge. One per fillet; skip cuts with no fillet.
+
 Pure geometry + ezdxf — no ``nff`` runtime dependencies beyond the sibling ``cut_pattern`` module.
 """
 
@@ -39,8 +44,31 @@ def _add_ring(msp, ring, layer):
     return 1
 
 
+def _add_pierce_points(doc, msp, geom, pierce_layer, pierce_size_mm):
+    """Drop a POINT inside each fillet disc (hinge tip) as the laser's pierce/burn-in location.
+
+    The fillet interior is scrap that drops out, so the pierce burn -- which eats extra material --
+    never touches a finished edge. Returns the number of pierce points written.
+    """
+    rhos = [float(h["rho"]) for h in geom["hinge_info"] if float(h["rho"]) > 1e-9]
+    if not rhos:
+        return 0
+    sz = float(pierce_size_mm) if pierce_size_mm else min(0.5 * min(rhos), 0.5)
+    doc.header["$PDMODE"] = 35                        # POINT glyph = circle + X (a clear pierce mark)
+    doc.header["$PDSIZE"] = sz                        # absolute glyph size [mm]
+    n = 0
+    for h in geom["hinge_info"]:
+        if float(h["rho"]) <= 1e-9:
+            continue
+        tip = np.asarray(h["tip"], float)
+        msp.add_point((float(tip[0]), float(tip[1])), dxfattribs={"layer": pierce_layer})
+        n += 1
+    return n
+
+
 def export_cut_geometry_dxf(geom, out_path, *, mode="outline", cut_layer="CUT",
                             perimeter_layer="PERIMETER", frame_layer="FRAME", note_layer="NOTES",
+                            pierce=True, pierce_layer="PIERCE", pierce_size_mm=None,
                             add_frame=True, frame_margin_mm=10.0, note=True, dxfversion="R2010"):
     """Write the flat cut pattern to a 1:1 DXF (units = mm).
 
@@ -53,6 +81,10 @@ def export_cut_geometry_dxf(geom, out_path, *, mode="outline", cut_layer="CUT",
         perimeter_layer: layer for the outer sheet perimeter (cut last so the part stays registered).
         frame_layer: layer for the raw-stock reference rectangle (not a cut).
         note_layer: layer for the size / scale text note.
+        pierce: emit a POINT at each fillet centre (inside the fillet disc = scrap) so the laser's
+            burn-in lands off every finished edge. See :func:`_add_pierce_points`.
+        pierce_layer: layer for the pierce points (kept separate so the laser reads them as burn-ins).
+        pierce_size_mm: pierce-glyph size [mm]; ``None`` -> half the smallest fillet radius (<= 0.5).
         add_frame: draw a stock-outline rectangle ``frame_margin_mm`` beyond the pattern bounds.
         frame_margin_mm: margin of the stock rectangle around the pattern [mm].
         note: write a size + "1:1, units mm" text note under the pattern.
@@ -60,7 +92,7 @@ def export_cut_geometry_dxf(geom, out_path, *, mode="outline", cut_layer="CUT",
 
     Returns:
         dict: ``path``, ``mode``, ``n_loops`` (closed loops written), ``n_lines`` (open lines),
-        ``sheet_mm`` (w, h), ``bounds_mm`` (minx, miny, maxx, maxy).
+        ``n_pierce`` (pierce points), ``sheet_mm`` (w, h), ``bounds_mm`` (minx, miny, maxx, maxy).
     """
     doc = ezdxf.new(dxfversion, setup=True)
     doc.units = ezdxf.units.MM                       # $INSUNITS = 4 -> CAD reads the drawing as mm
@@ -69,10 +101,11 @@ def export_cut_geometry_dxf(geom, out_path, *, mode="outline", cut_layer="CUT",
     doc.layers.add(cut_layer, color=1)               # red — interior cuts (separate layer for cut order)
     doc.layers.add(frame_layer, color=8)             # gray — stock reference (do NOT cut)
     doc.layers.add(note_layer, color=4)              # cyan — annotation (not a cut)
+    doc.layers.add(pierce_layer, color=3)            # green — pierce points (burn-in, inside fillets)
 
     minx, miny, maxx, maxy = geom["sheet"].bounds
     sheet_w, sheet_h = maxx - minx, maxy - miny
-    n_loops = n_lines = 0
+    n_loops = n_lines = n_pierce = 0
 
     if mode == "outline":
         # Boundary of (sheet - kerf slots): exact closed loops. Largest polygon's exterior = the
@@ -100,6 +133,9 @@ def export_cut_geometry_dxf(geom, out_path, *, mode="outline", cut_layer="CUT",
     else:
         raise ValueError(f"mode must be 'outline' or 'centerline', got {mode!r}")
 
+    if pierce:
+        n_pierce = _add_pierce_points(doc, msp, geom, pierce_layer, pierce_size_mm)
+
     if add_frame:
         m = float(frame_margin_mm)
         fx0, fy0, fx1, fy1 = minx - m, miny - m, maxx + m, maxy + m
@@ -107,13 +143,15 @@ def export_cut_geometry_dxf(geom, out_path, *, mode="outline", cut_layer="CUT",
                            close=True, dxfattribs={"layer": frame_layer})
 
     if note:
-        txt = f"kirigami cut pattern  {sheet_w:.1f} x {sheet_h:.1f} mm  |  1:1 scale, units = mm  |  {mode}"
+        pierce_txt = f"  |  {n_pierce} pierce pts" if pierce and n_pierce else ""
+        txt = (f"kirigami cut pattern  {sheet_w:.1f} x {sheet_h:.1f} mm  |  1:1 scale, units = mm  |  "
+               f"{mode}{pierce_txt}")
         h_txt = max(2.0, 0.02 * max(sheet_w, sheet_h))
         msp.add_text(txt, height=h_txt,
                      dxfattribs={"layer": note_layer}).set_placement((minx, miny - 2.5 * h_txt))
 
     doc.saveas(out_path)
-    return dict(path=out_path, mode=mode, n_loops=n_loops, n_lines=n_lines,
+    return dict(path=out_path, mode=mode, n_loops=n_loops, n_lines=n_lines, n_pierce=n_pierce,
                 sheet_mm=(sheet_w, sheet_h), bounds_mm=(minx, miny, maxx, maxy))
 
 
