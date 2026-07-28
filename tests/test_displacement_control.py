@@ -17,8 +17,20 @@ from nff.stages.physics.displacement import (
 
 
 CFG = "data/configs/closed/sheet_4x8ft_rom.yaml"
-TOP_FACES = [2, 5, 8]        # the loaded (top) edge of the 3x3 sheet
-LOAD_PER_TILE = 60.0         # N, as configured
+
+
+def pulled_edge(state):
+    """The config's own dy-loaded faces and their forces — never hardcode, the load is calibrated."""
+    pairs = np.asarray(state.loaded_face_DOF_pairs, dtype=np.int32).reshape(-1, 2)
+    values = np.asarray(state.load_values, dtype=float)
+    keep = pairs[:, 1] == 1
+    return pairs[keep, 0].tolist(), values[keep]
+
+
+def unloaded_copy(state):
+    """The same sheet with its loads stripped — they live on the state, not in load_specs."""
+    return state._replace(loaded_face_DOF_pairs=np.zeros((0, 2), dtype=np.int32),
+                          load_values=jnp.zeros(0, dtype=float))
 
 
 # ── Spec parsing ──────────────────────────────────────────────────────────────
@@ -117,22 +129,20 @@ def test_force_control_reports_no_reactions(sheet):
 
 
 def test_prescribing_the_force_solution_reproduces_it_and_returns_the_force(sheet):
-    """The round trip. Impose the dy that 60 N/tile produced; expect the same shape and 60 N back."""
+    """The round trip. Impose the dy the configured load produced; expect that shape and force back."""
     config, state, deploy, forced, replace = sheet
+    top_faces, load_per_tile = pulled_edge(state)
     forced_disp = np.asarray(forced['solution'].fields[-1])
-    imposed = forced_disp[TOP_FACES, 1]                     # per-face dy at full deployment
+    imposed = forced_disp[top_faces, 1]                     # per-face dy at full deployment
 
-    # Same problem, actuated the other way: drop the loads from the state (they live there, not in
-    # load_specs) and prescribe the measured motion instead.
-    unloaded = state._replace(loaded_face_DOF_pairs=np.zeros((0, 2), dtype=np.int32),
-                              load_values=jnp.zeros(0, dtype=float))
+    # Same problem, actuated the other way: strip the loads and prescribe the measured motion.
     physics_cfg = replace(config.physics, prescribed_displacements=tuple(
-        {'face': int(f), 'dof': 1, 'value': float(u)} for f, u in zip(TOP_FACES, imposed)))
-    pulled = deploy(unloaded, physics_cfg, [])
+        {'face': int(f), 'dof': 1, 'value': float(u)} for f, u in zip(top_faces, imposed)))
+    pulled = deploy(unloaded_copy(state), physics_cfg, [])
 
     # 1. The prescribed DOFs hold exactly the imposed values.
     pulled_disp = np.asarray(pulled['solution'].fields[-1])
-    np.testing.assert_allclose(pulled_disp[TOP_FACES, 1], imposed, rtol=0, atol=1e-12)
+    np.testing.assert_allclose(pulled_disp[top_faces, 1], imposed, rtol=0, atol=1e-12)
 
     # 2. Every other DOF relaxes to the SAME equilibrium — the two actuations are one physics.
     np.testing.assert_allclose(pulled_disp, forced_disp, rtol=1e-4, atol=1e-6)
@@ -140,19 +150,18 @@ def test_prescribing_the_force_solution_reproduces_it_and_returns_the_force(shee
     # 3. The reaction hands the applied force back.
     rr = pulled['reactions']
     np.testing.assert_array_equal(np.asarray(rr.face_DOF_pairs),
-                                  np.array([[f, 1] for f in TOP_FACES], dtype=np.int32))
-    np.testing.assert_allclose(np.asarray(rr.values)[-1], LOAD_PER_TILE, rtol=2e-3)
-    assert np.asarray(rr.values).shape == (config.physics.num_load_steps, len(TOP_FACES))
+                                  np.array([[f, 1] for f in top_faces], dtype=np.int32))
+    np.testing.assert_allclose(np.asarray(rr.values)[-1], load_per_tile, rtol=2e-3)
+    assert np.asarray(rr.values).shape == (config.physics.num_load_steps, len(top_faces))
 
 
 def test_reaction_grows_monotonically_along_the_ramp(sheet):
     """The step history is a force-displacement curve: pulling further costs more."""
     config, state, deploy, _, replace = sheet
-    unloaded = state._replace(loaded_face_DOF_pairs=np.zeros((0, 2), dtype=np.int32),
-                              load_values=jnp.zeros(0, dtype=float))
+    top_faces, _ = pulled_edge(state)
     physics_cfg = replace(config.physics, prescribed_displacements=(
-        {'face': TOP_FACES, 'dof': 1, 'value': 0.46},))
-    total = np.asarray(deploy(unloaded, physics_cfg, [])['reactions'].values).sum(axis=1)
+        {'face': top_faces, 'dof': 1, 'value': 0.46},))
+    total = np.asarray(deploy(unloaded_copy(state), physics_cfg, [])['reactions'].values).sum(axis=1)
     assert np.all(np.diff(total) > 0.0)
 
 
@@ -167,11 +176,10 @@ def test_reactions_are_a_real_force_field_in_global_equilibrium(sheet):
     from nff.stages.physics.params import ReferenceGeometry, build_control_params
     from nff.stages.physics.displacement import compute_reaction_forces
 
-    unloaded = state._replace(loaded_face_DOF_pairs=np.zeros((0, 2), dtype=np.int32),
-                              load_values=jnp.zeros(0, dtype=float))
+    top_faces, _ = pulled_edge(state)
     physics_cfg = replace(config.physics, prescribed_displacements=(
-        {'face': TOP_FACES, 'dof': 1, 'value': 0.46},))
-    res = deploy(unloaded, physics_cfg, [])
+        {'face': top_faces, 'dof': 1, 'value': 0.46},))
+    res = deploy(unloaded_copy(state), physics_cfg, [])
     vs, disp = res['valid_state'], res['solution'].fields[-1]
 
     geometry = ReferenceGeometry.from_centroidal_state(vs)
@@ -208,11 +216,11 @@ def test_a_jitted_training_step_runs_under_displacement_control():
 
     config = load_and_parse_config(CFG)
     state, _ = build_closed_initial_state(config)
-    state = state._replace(loaded_face_DOF_pairs=np.zeros((0, 2), dtype=np.int32),
-                           load_values=jnp.zeros(0, dtype=float))
+    top_faces, _ = pulled_edge(state)
+    state = unloaded_copy(state)
     params, sf = init_closed_les_params(config)
     physics_cfg = dataclasses.replace(config.physics, prescribed_displacements=(
-        {'face': TOP_FACES, 'dof': 1, 'value': 0.46},))
+        {'face': top_faces, 'dof': 1, 'value': 0.46},))
 
     optimizer, step = create_train_step(
         state, config.target, config.validity, physics_cfg, config.training,
@@ -228,9 +236,8 @@ def test_a_jitted_training_step_runs_under_displacement_control():
 def test_updated_lagrangian_is_rejected(sheet):
     """UL maps each increment back with the total t — an imposed value would be inconsistent."""
     config, state, deploy, _, replace = sheet
-    unloaded = state._replace(loaded_face_DOF_pairs=np.zeros((0, 2), dtype=np.int32),
-                              load_values=jnp.zeros(0, dtype=float))
+    top_faces, _ = pulled_edge(state)
     physics_cfg = replace(config.physics, updated_lagrangian=True, prescribed_displacements=(
-        {'face': TOP_FACES, 'dof': 1, 'value': 0.46},))
+        {'face': top_faces, 'dof': 1, 'value': 0.46},))
     with pytest.raises(NotImplementedError, match="updated_lagrangian"):
-        deploy(unloaded, physics_cfg, [])
+        deploy(unloaded_copy(state), physics_cfg, [])

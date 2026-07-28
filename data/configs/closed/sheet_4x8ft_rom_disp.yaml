@@ -20,36 +20,49 @@
 #      that removes exactly the directions that make the Hessian indefinite.
 #
 # ── HOW THE IMPOSED VALUE WAS PICKED ─────────────────────────────────────────────────────────────
-# 0.46 pipeline length units, uniform on the three top tiles. It is the FORCE-CONTROLLED RUN'S OWN
-# ANSWER: the untrained 60 N/tile deploy of sheet_4x8ft_rom.yaml lands at
-#     dy(face 2) = 0.4510   dy(face 5) = 0.4720   dy(face 8) = 0.4556   -> mean 0.4596
-# so 0.46 reproduces the calibrated 45 deg deployment the target rectangle below was derived for.
-# In physical units, x length_scale = 406.4 mm/u -> 187 mm of crosshead travel on a 2438 mm sheet.
+# 0.4575 pipeline length units, uniform on the three top tiles. It is the FORCE-CONTROLLED RUN'S OWN
+# ANSWER: the untrained 55.33 N/tile deploy of sheet_4x8ft_rom.yaml (that load is itself calibrated
+# to put the WORST hinge at 45 deg — see the loads block there) lands at
+#     dy(face 2) = 0.4489   dy(face 5) = 0.4699   dy(face 8) = 0.4537   -> mean 0.4575
+# so this reproduces the 45 deg deployment the target rectangle below was derived for. In physical
+# units, x length_scale = 406.4 mm/u -> 186 mm of crosshead travel on a 2438 mm sheet.
+# ⚠ Re-derive this whenever the springs, the geometry, or that load change — it is a MEASURED echo
+# of the force-controlled twin, not an independent number.
 #
-# ⚠ UNIFORM, NOT PER-FACE. The three values above differ by ~4% (the centre tile rides higher), so
-# a uniform 0.46 is a RIGID CROSSHEAD, not a re-run of the force case: it forces the three top tiles
+# ⚠ UNIFORM, NOT PER-FACE. The three values above differ by ~4.7% (the centre tile rides higher), so
+# a uniform value is a RIGID CROSSHEAD, not a re-run of the force case: it forces the three top tiles
 # to move together, which is what a real grip bar does, and the per-tile reaction then differs
-# instead. Prescribing the three measured values individually would reproduce the force run exactly
-# and return 60.00 N at each tile — that round trip is asserted in tests/test_displacement_control.py.
+# instead. Prescribing the three measured values individually reproduces the force run exactly and
+# returns 55.33 N at each tile — that round trip is asserted in tests/test_displacement_control.py.
 #
 # ── WHAT YOU GET BACK ────────────────────────────────────────────────────────────────────────────
 # `run_closed.py` prints the reaction at every prescribed DOF and the total, per load step — the
 # force-displacement curve of the sheet, in newtons (see the units note in the material block).
 # The pipeline also returns it as `result['reactions']` (a `ReactionReport`).
 #
-# ★ THE RIGID BAR COSTS A LOT. Measured untrained at u = 0.46:
-#     face 2  +580.5 N     face 5  -869.9 N     face 8  +586.3 N     total +296.9 N
-# The centre tile has to be HELD DOWN. Left free it rides 4.7% higher than its neighbours (0.4720
-# vs 0.4510), and with k_stretch = 238 N/mm an 8.5 mm differential is expensive — so the grip bar
-# spends ~870 N flattening the top edge and only +297 N net actually deploys the sheet, against
-# 180 N for the same deployment under force control. That force is INTERNAL and self-equilibrated:
-# the bottom clamp mirrors it exactly (-586 / +870 / -581), all reactions summing to 0 to 3e-6.
-# The deployment itself is unaffected (per-tile dtheta within 2% of the force-controlled run).
+# ★ THE RIGID BAR COSTS A LOT. Measured untrained at u = 0.4575:
+#     face 2  +562.5 N     face 5  -857.8 N     face 8  +568.2 N     total +273.0 N
+# The centre tile has to be HELD DOWN. Left free it rides 4.7% higher than its neighbours (0.4699
+# vs 0.4489), and with k_stretch = 238 N/mm an 8.5 mm differential is expensive — so the grip bar
+# spends ~858 N flattening the top edge and only +273 N net actually deploys the sheet, against
+# 166 N for the same deployment under force control. That force is INTERNAL and self-equilibrated:
+# the bottom clamp mirrors it exactly, all reactions summing to 0 within 3e-6 (asserted in
+# tests/test_displacement_control.py). The deployment itself is barely affected — per-tile dtheta
+# lands within ~4% of the force-controlled run.
 # ⚠ If you want the free deployment rather than a flat top edge, prescribe the three tiles
-# individually — that is the round trip, and it returns exactly 60.00 N at each tile.
+# individually — that is the round trip, and it returns exactly 55.33 N at each tile.
 #
 # ⚠ NO DAMAGE, as in the ROM twin: the ROM branch returns `(None,)*5`, so `w_damage`, `w_fail`,
 # `w_ood`, `m_safe`, `fail_line` and `learn_w_lig` are all inert and w_lig stays uniform at 5.0 mm.
+#
+# ── MEASURED, 200 epochs (2026-07-27) ────────────────────────────────────────────────────────────
+#   chamfer 3.5e-3 -> 9.92e-4 (converged by epoch ~60)   boundary 9.94 mm mean / 25.75 mm max
+#   deployment 43.60 deg mean [43.15, 43.95]             twisted 0, overlap 3.9e-06
+#   trained reactions -30.6 / -47.1 / +150.4 N, total +72.7 N
+# The rigid bar lands ~1.4 deg SHORT of the 45 deg the target rectangle was derived for (force
+# control on the same sheet reaches 44.35 mean / 44.96 max), because flattening the top edge
+# stiffens the sheet. Raise `value` if you want the trained deployment to hit 45 exactly — that is
+# precisely the handle displacement control gives you, and it stays one-to-one where force does not.
 
 tessellation:
   tessellation_type: closed_rdpqk
@@ -130,7 +143,7 @@ boundary_conditions:
 # both may coexist (mixed control) as long as no single face/DOF appears in both, which raises.
 # `value` is in pipeline length units for dof 0/1; for dof 2 use `value_deg` (or `value` in radians).
 displacement_control:
-  - {face: [2, 5, 8], dof: 1, value: 0.46}
+  - {face: [2, 5, 8], dof: 1, value: 0.4575}
 
 target:                      # fallback TargetConfig; run_closed overrides it with the rectangle above
   type: rectangle
