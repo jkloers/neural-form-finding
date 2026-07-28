@@ -70,7 +70,7 @@ def run_rehearsal(parallel, timeout):
                              uz_over_t=uzt, W_final=wfin, ok=resp.ok,
                              regime=[REGIME_NAME[int(x)] for x in resp.regime],
                              theta_deg=resp.theta_deg.tolist(), W=resp.W.tolist(),
-                             M_theta=resp.M_theta.tolist(), peeq_p99=resp.peeq_p99.tolist()))
+                             M_theta=resp.M_theta.tolist(), damage=resp.damage.tolist()))
     out = "data/outputs/hinge_rehearsal.json"
     with open(out, "w") as f:
         json.dump(rows, f, indent=2, default=float)
@@ -81,7 +81,7 @@ def run_rehearsal(parallel, timeout):
 
 def run_campaign(args):
     const = HingeConstants(fillet_ratio=args.fillet_ratio, n_through=args.n_through,
-                           thickness=args.thickness, r_win=args.r_win,
+                           thickness=args.thickness, r_win=args.r_win, material=args.material,
                            lc_fillet_frac=args.lc_fillet_frac, lc_min_floor=args.lc_min_floor)
     jobs = sample_jobs(args.n, seed=args.seed, n_steps=args.steps,
                        theta1_deg=(args.angle, args.angle),
@@ -99,6 +99,9 @@ def run_campaign(args):
           f"({summary['n_errored']} errored, {summary['n_finished_to_cap']} survived to cap)")
     print(f"  samples       : {summary['n_samples']}  "
           f"(elastic {summary['n_elastic']} / plastic {summary['n_plastic']} / failed {summary['n_failed']})")
+    dt = summary["delta_tear"]
+    print(f"  Delta_tear    : {'—  (nothing tore)' if dt is None else f'{dt:.3f}'}"
+          f"  (n={summary['n_tear_observations']} torn jobs)   <- the calibrated fracture line")
     print(f"  wrote {args.out}.npz + {args.out}.json")
 
 
@@ -118,6 +121,9 @@ def main():
     ap.add_argument("--angle", type=float, default=60.0, help="full-deployment rotation [deg]")
     ap.add_argument("--fillet-ratio", dest="fillet_ratio", type=float, default=0.16)
     ap.add_argument("--n-through", dest="n_through", type=int, default=2)
+    ap.add_argument("--material", default="steel", choices=["steel", "pet", "paper"],
+                    help="RVE material; sets the constitutive cards AND eps_f (the damage "
+                         "normaliser and the stop-at-fracture threshold)")
     # geometry + displacement envelope (exposed so a deeper campaign is one command)
     ap.add_argument("--w-lig-min", dest="w_lig_min", type=float, default=1.0, help="ligament width lo [mm]")
     ap.add_argument("--w-lig-max", dest="w_lig_max", type=float, default=20.0, help="ligament width hi [mm]")

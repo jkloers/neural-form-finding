@@ -175,11 +175,16 @@ def _bc_marks(initial_state, config, load_specs, length_scale):
             face_mm[loaded_f] if loaded_f else None, pull_dir, len(clamped_f), len(loaded_f))
 
 
-def build_run_cut_geometry(initial_state, cut_coords, struct, config, hinge_model, hinge_w_lig=None):
+def build_run_cut_geometry(initial_state, cut_coords, struct, config, hinge_model, hinge_w_lig=None,
+                           w_c_mm=None):
     """Per-hinge flat cut geometry (mm) for a run: learned ``w_lig`` + fillet at the physical scale.
 
     Single source of truth for the kerf / ligament / fillet / ``length_scale`` a run cuts at, shared
     by :func:`write_cut_patterns` and the standalone DXF script.
+
+    Args:
+        w_c_mm: kerf (slot) width [mm]; ``None`` -> the simulation-faithful ``_W_C_MM``. Pass a larger
+            value for the laser DXF to widen every cut so closely-spaced lines separate cleanly.
 
     Returns:
         (geom, w_lig, length_scale): the :func:`build_cut_geometry` dict, the (H,) per-hinge ligament
@@ -188,11 +193,16 @@ def build_run_cut_geometry(initial_state, cut_coords, struct, config, hinge_mode
     w_lig_mm = float(getattr(hinge_model, 'w_lig_mm', 5.0))
     spacing = float(config.topology.get('spacing', 1.0))
     fillet_ratio = float(getattr(hinge_model, 'fillet_ratio', 0.16) or 0.16)   # may be unset/None
-    length_scale = _PHYS_TILE * w_lig_mm / spacing
+    # Physical scale: an explicit stock size wins (a real sheet is cut to a real width), otherwise
+    # fall back to the w_lig ~ 1/10 tile convention.
+    sheet_w_mm = float(config.topology.get('sheet_width_mm', 0.0) or 0.0)
+    length_scale = (sheet_w_mm / (int(config.topology['M']) * spacing) if sheet_w_mm > 0.0
+                    else _PHYS_TILE * w_lig_mm / spacing)
+    w_c = float(w_c_mm) if w_c_mm is not None else _W_C_MM
     T, cols = np.asarray(struct['T']), struct['cols']
     hinge_lookup, w_lig = _per_hinge_lookup(initial_state, hinge_w_lig, w_lig_mm,
                                             fillet_ratio, length_scale)
-    geom = build_cut_geometry(cut_coords, T, cols, w_c=_W_C_MM, w_lig=w_lig_mm,
+    geom = build_cut_geometry(cut_coords, T, cols, w_c=w_c, w_lig=w_lig_mm,
                               rho=fillet_ratio * w_lig_mm, length_scale=length_scale,
                               hinge_lookup=hinge_lookup)
     return geom, w_lig, length_scale

@@ -3,6 +3,15 @@
 Assumptions behind the single-hinge condensation RVE, as of the plastic-deployment
 step. These are deliberate, first-pass choices; everything here is meant to be swept.
 
+> ⚠ **The project standard is now PET, not steel** (4ft×8ft sheet, t = 0.5 mm, 9 tiles,
+> hinge domain r_win = 100 mm, w_lig = 18 mm reference over a 5–50 mm design range).
+> `nff/rve/materials/` now carries three materials behind one `Material` seam:
+> `SteelJ2` (S235, below), `PETIsotropic` (the standard — coupon-measured `*PLASTIC`,
+> ε_f = 1.784 from a run-to-break) and `PaperOrthotropic` (80 gsm, parked).
+> The steel section below is retained because `hinge_surrogate_v2.pkl` was condensed
+> from it and still reports ε_f = 0.25 — retargeting the surrogate to PET needs a new
+> CalculiX campaign. See `nff/rve/materials/pet.py` for the PET numbers and provenance.
+
 ## Material — mild structural steel (S235 / A36)
 
 | Quantity | Symbol | Value | Note |
@@ -61,4 +70,7 @@ takes a permanent set without tearing.
 - Self-contact of the faces at large folds.
 - Anisotropy, rolling texture, strain-rate, temperature, heat-affected zones.
 - Fatigue / cyclic deployment (single deployment only).
-- The failure flag (ε > ε_f) is post-hoc, not a damage model.
+- Damage is post-hoc, not a coupled damage model: `Δ = ⟨PEEQ⟩_lig / ε_f` (normalized plastic
+  dissipation, `nff/rve/damage.py`) is read off the solved fields and does not feed back into the
+  constitutive law — no stiffness degradation, no element deletion.
+- Tearing is a calibrated value of Δ (`Δ_tear`, reported per campaign), not a separate criterion.

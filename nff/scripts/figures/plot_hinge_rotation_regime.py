@@ -33,7 +33,7 @@ import matplotlib.patheffects as pe
 from nff.scripts.figures.render_hinge_3d import STRESS_CMAP     # shared green von Mises ramp (inset ↔ scale)
 
 # ── project charter (Princeton palette) ───────────────────────────────────────────
-ORANGE, RED, GREY, INK = "#F58025", "#D62828", "#6C757D", "#1A1A1A"
+from nff.utils.figstyle import ORANGE, RED, GREY, INK, apply_charter
 SLATE = "#5A5A5A"    # standard neutral grey for the uz/t buckle iso-lines
 ROM_GREY = "#AEB4BD"  # light neutral for the (failing) paraboloid ROM -- deliberately understated
 
@@ -47,15 +47,6 @@ def build_damage_cmap(dcap):
     return LinearSegmentedColormap.from_list("dmg_orange", nodes)
 
 
-def apply_charter():
-    plt.rcParams.update({
-        "axes.spines.top": False, "axes.spines.right": False,
-        "axes.grid": True, "grid.alpha": 0.18, "grid.linewidth": 0.6,
-        "axes.edgecolor": INK, "axes.linewidth": 0.9, "axes.labelcolor": INK,
-        "text.color": INK, "xtick.color": GREY, "ytick.color": GREY,
-        "figure.facecolor": "white", "axes.facecolor": "white",
-        "legend.frameon": True, "legend.framealpha": 0.92, "legend.edgecolor": "#D3D6DB",
-    })
 
 
 def surrogate_grid(ckpt, w_min, w_max, n_w=56, alpha_deg=90.0, n_theta=180, theta_max_rad=0.656):

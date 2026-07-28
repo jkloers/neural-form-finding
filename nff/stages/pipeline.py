@@ -36,6 +36,11 @@ from nff.stages.physics.force_types import (
     has_geometry_dependent_loads,
     build_geometry_dependent_loading,
 )
+from nff.stages.physics.displacement import (
+    build_displacement_control,
+    compute_reaction_forces,
+    ReactionReport,
+)
 from nff.config.targets import get_target_points
 from nff.config.experiment import TargetConfig, PhysicsConfig, ValidityConfig
 
@@ -64,6 +69,10 @@ def forward_pipeline(
 
     ``bond_energy_fn``: optional Stage-2 single-bond energy override (e.g. the learned hinge-energy
     surrogate). Default ``None`` = the linear-spring ROM, so existing behavior is unchanged.
+
+    Under displacement control (``physics_cfg.prescribed_displacements``) the returned dict also
+    carries a ``ReactionReport`` under ``reactions`` — the support forces sustaining the imposed
+    motion at each load step. It is ``None`` under pure force control.
     """
 
     # ── Stage 0: Initial Mapping ──
@@ -84,7 +93,7 @@ def forward_pipeline(
     # ── Stage 2: Static Physics Solver ──
     # Forward: valid_state → solution (equilibrium displacements, strain energy)
     # Backward: VJP flows automatically through the physics minimizer
-    solution, geometry = _execute_stage2_physics(
+    solution, geometry, reactions = _execute_stage2_physics(
         valid_state, physics_cfg, load_specs, bond_energy_fn=bond_energy_fn,
         hinge_geometry=hinge_geometry
     )
@@ -100,6 +109,7 @@ def forward_pipeline(
         'reference_bond_vectors': geometry.reference_bond_vectors if geometry else jnp.zeros((0, 2), dtype=float),
         'mapping_fn':             mapping_fn,
         'map_params':             map_params,
+        'reactions':              reactions,
     }
 
 
@@ -184,7 +194,7 @@ def _execute_stage2_physics(valid_state, physics_cfg, load_specs, bond_energy_fn
         dummy_energies = {k: jnp.zeros(1, dtype=float)
                          for k in ('stretch', 'shear', 'rot', 'contact')}
         solution = SolutionData(fields=zero_fields, energies=dummy_energies)
-        return solution, None
+        return solution, None, None
 
     geometry = ReferenceGeometry.from_centroidal_state(valid_state)
 
@@ -203,12 +213,30 @@ def _execute_stage2_physics(valid_state, physics_cfg, load_specs, bond_energy_fn
         loaded_face_DOF_pairs = valid_state.loaded_face_DOF_pairs if loading_fn else None
         force_vals_jax = None
 
+    # Displacement control (optional): prescribed DOFs join the Dirichlet set and ramp with t.
+    # None -> pure force control, and the solver call below is exactly what it always was.
+    disp_control = build_displacement_control(
+        getattr(physics_cfg, 'prescribed_displacements', ()),
+        valid_state.constrained_face_DOF_pairs,
+        loaded_face_DOF_pairs=loaded_face_DOF_pairs,
+    )
+    if disp_control is not None and physics_cfg.updated_lagrangian:
+        # The UL scan solves each increment with t = delta_t but maps it back with the TOTAL t,
+        # so a non-zero imposed value would be applied inconsistently across increments.
+        raise NotImplementedError(
+            "displacement_control is not supported with physics.updated_lagrangian: true.")
+    constrained_pairs = (valid_state.constrained_face_DOF_pairs if disp_control is None
+                         else disp_control.constrained_face_DOF_pairs)
+    dirichlet_kwargs = ({} if disp_control is None
+                        else {'constrained_DOFs_fn': disp_control.constrained_DOFs_fn})
+
     solve_statics_fn = setup_static_solver(
         geometry=geometry,
         energy_fn=potential_energy_fn,
         loaded_face_DOF_pairs=loaded_face_DOF_pairs,
         loading_fn=loading_fn,
-        constrained_face_DOF_pairs=valid_state.constrained_face_DOF_pairs,
+        constrained_face_DOF_pairs=constrained_pairs,
+        **dirichlet_kwargs,
         incremental=physics_cfg.incremental,
         num_steps=physics_cfg.num_load_steps,
         solver_maxiter=physics_cfg.solver_maxiter,
@@ -244,4 +272,12 @@ def _execute_stage2_physics(valid_state, physics_cfg, load_specs, bond_energy_fn
     )
     solution = solution._replace(energies=energies_dict)
 
-    return solution, geometry
+    # The force is an OUTPUT under displacement control: dU_int/du at the prescribed DOFs, per step.
+    reactions = None if disp_control is None else ReactionReport(
+        values=compute_reaction_forces(potential_energy_fn, solution.fields, control_params,
+                                       disp_control.prescribed_face_DOF_pairs),
+        face_DOF_pairs=disp_control.prescribed_face_DOF_pairs,
+        prescribed_values=disp_control.prescribed_values,
+    )
+
+    return solution, geometry, reactions

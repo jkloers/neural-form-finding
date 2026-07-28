@@ -1,4 +1,5 @@
 import os
+import warnings
 import yaml
 import numpy as np
 from typing import Any, Dict, Tuple, Union
@@ -76,7 +77,9 @@ class PhysicsConfig(eqx.Module):
     domain_restriction: float
     use_contact: bool
     k_contact: float
-    min_angle: float   # radians
+    # Radians HERE, but the YAML supplies DEGREES -- `_parse_physics_config` converts. Writing
+    # radians in a config double-converts them (a "-0.0349 # rad" entry ran at -0.035 deg).
+    min_angle: float
     cutoff_angle: float
     linearized_strains: bool
     incremental: bool
@@ -85,13 +88,14 @@ class PhysicsConfig(eqx.Module):
     solver_tol: float
     updated_lagrangian: bool
     backward_reg: float
+    prescribed_displacements: tuple
 
     def __init__(self, domain_restriction: float, use_contact: bool,
                  k_contact: float, min_angle: float, cutoff_angle: float,
                  linearized_strains: bool, incremental: bool,
                  num_load_steps: int, solver_maxiter: int = 1000,
                  solver_tol: float = 1e-5, updated_lagrangian: bool = False,
-                 backward_reg: float = 0.0):
+                 backward_reg: float = 0.0, prescribed_displacements: tuple = ()):
         self.domain_restriction = domain_restriction
         self.use_contact = use_contact
         self.k_contact = k_contact
@@ -106,6 +110,10 @@ class PhysicsConfig(eqx.Module):
         # Tikhonov ridge on the implicit-diff backward solve (0 = off). Lifts the near-singular/
         # indefinite tangent stiffness to PD so the IFT gradient is well-conditioned.
         self.backward_reg = backward_reg
+        # Raw `displacement_control` specs — imposed Stage-2 motion instead of (or alongside)
+        # applied force. Kept raw here because nff/config must not import from nff/stages;
+        # nff.stages.physics.displacement parses and validates them.
+        self.prescribed_displacements = tuple(prescribed_displacements or ())
 
 
 class LossWeights(eqx.Module):
@@ -220,15 +228,13 @@ class HingeModelConfig(eqx.Module):
     energy_scale: float
     barrier: float
     w_damage: float
-    w_fail: float
     w_ood: float
-    m_safe: float
     fail_line: float
     learn_w_lig: bool
 
     def __init__(self, type='rom', checkpoint='data/surrogates/hinge_surrogate.pkl', material='S235',
                  thickness_mm=1.0, w_lig_mm=5.0, calibrate=True, length_scale=0.0,
-                 energy_scale=0.0, barrier=0.05, w_damage=0.0, w_fail=0.0, w_ood=0.0, m_safe=1.0,
+                 energy_scale=0.0, barrier=0.05, w_damage=0.0, w_ood=0.0,
                  fail_line=1.0, learn_w_lig=False):
         self.type = type
         self.checkpoint = checkpoint
@@ -240,16 +246,12 @@ class HingeModelConfig(eqx.Module):
         self.energy_scale = energy_scale
         self.barrier = barrier
         # Design-loss damage/stability weights (0 = off):
-        #   w_damage: PRIMARY continuous term, weight on mean(D^2) over ALL hinges (threshold-free);
-        #   w_fail:   legacy one-sided break barrier at onset m_safe (kept for older configs);
+        #   w_damage: THE damage term, weight on mean(D^2) over ALL hinges (no failure threshold);
         #   w_ood:    out-of-training-box barrier.
-        # fail_line: REPORTING-only D threshold (count of hinges above it); never enters the loss --
-        #   calibrate it against the real printed experiment (D=1 = model fracture-initiation, likely
-        #   conservative for a foldable plastic hinge).
+        # fail_line: REPORTING-only threshold (count of hinges above it); never enters the loss --
+        #   set it to the campaign's calibrated Delta_tear, NOT to 1.
         self.w_damage = w_damage
-        self.w_fail = w_fail
         self.w_ood = w_ood
-        self.m_safe = m_safe
         self.fail_line = fail_line
         self.learn_w_lig = learn_w_lig    # per-hinge ligament width as a learnable design DOF
 
@@ -324,8 +326,8 @@ def _parse_mapping_config(mapping_raw: dict) -> MappingConfig:
         params_raw = {k: v for k, v in params_raw.items()
                       if k not in ('use_shirley_chiu', 's_val')}
 
-    # Pour les types GNN, map_params contient la config d'initialisation
-    # (hidden_dim, seed…), pas des poids entraînables. On la garde brute.
+    # For GNN types, map_params holds the initialization config (hidden_dim, seed, ...), not
+    # trainable weights, so it is kept raw.
     if m_type.startswith('gnn_'):
         parsed_params = params_raw if isinstance(params_raw, dict) else {}
     else:
@@ -359,9 +361,17 @@ def _parse_validity_config(weights_raw: dict) -> ValidityConfig:
     )
 
 
-def _parse_physics_config(physics_raw: dict, domain_restriction: float) -> PhysicsConfig:
-    """Parse the [physics] YAML section. Angles are converted from degrees to radians."""
+def _parse_physics_config(physics_raw: dict, domain_restriction: float,
+                          displacement_raw: list | None = None) -> PhysicsConfig:
+    """Parse the [physics] YAML section. Angles are converted from degrees to radians.
+
+    ``displacement_raw`` is the top-level [displacement_control] list — a sibling of [loads],
+    carried here because both are Stage-2 boundary conditions.
+    """
     deg_to_rad = float(jnp.pi / 180.0)
+    if displacement_raw is not None and not isinstance(displacement_raw, list):
+        raise TypeError("[displacement_control] must be a list of {face, dof, value} entries, "
+                        f"got {type(displacement_raw).__name__}.")
     return PhysicsConfig(
         domain_restriction=domain_restriction,
         use_contact=bool(physics_raw.get("use_contact", True)),
@@ -375,10 +385,17 @@ def _parse_physics_config(physics_raw: dict, domain_restriction: float) -> Physi
         solver_tol=float(physics_raw.get("solver_tol", 1e-5)),
         updated_lagrangian=bool(physics_raw.get("updated_lagrangian", False)),
         backward_reg=float(physics_raw.get("backward_reg", 0.0)),
+        prescribed_displacements=tuple(displacement_raw or ()),
     )
 
 
 def _parse_hinge_model_config(raw: dict) -> HingeModelConfig:
+    # w_fail/m_safe were the second damage criterion (a softplus break barrier). Removed 2026-07-28:
+    # there is now ONE damage term. Warn rather than ignore, so an old config that actually relied
+    # on the barrier cannot change meaning silently.
+    if float(raw.get("w_fail", 0.0)) != 0.0:
+        warnings.warn("hinge_model.w_fail is removed (the break barrier was a second damage "
+                      "criterion); the single term is w_damage. Ignoring it.", stacklevel=2)
     return HingeModelConfig(
         type=str(raw.get("type", "rom")),
         checkpoint=str(raw.get("checkpoint", "data/surrogates/hinge_surrogate.pkl")),
@@ -390,9 +407,7 @@ def _parse_hinge_model_config(raw: dict) -> HingeModelConfig:
         energy_scale=float(raw.get("energy_scale", 0.0)),
         barrier=float(raw.get("barrier", 0.05)),
         w_damage=float(raw.get("w_damage", 0.0)),
-        w_fail=float(raw.get("w_fail", 0.0)),
         w_ood=float(raw.get("w_ood", 0.0)),
-        m_safe=float(raw.get("m_safe", 1.0)),
         fail_line=float(raw.get("fail_line", 1.0)),
         learn_w_lig=bool(raw.get("learn_w_lig", False)),
     )
@@ -477,6 +492,7 @@ def merge_arch_problem(arch_raw: dict, problem: dict) -> dict:
     merged = dict(arch_raw)
     merged['boundary_conditions'] = problem.get('boundary_conditions', {})
     merged['loads'] = problem.get('loads', [])
+    merged['displacement_control'] = problem.get('displacement_control', [])
     merged['physics'] = problem.get('physics', {})
     merged['material'] = problem.get('material', {})
     return merged
@@ -501,7 +517,8 @@ def _parse_full_raw(raw: dict, config_dir: str) -> 'ExperimentConfig':
     pattern_obj = _load_pattern(topo_raw, config_dir)
     mapping_cfg = _parse_mapping_config(mapping_raw)
     validity_cfg = _parse_validity_config(raw.get("optimization_weights", {}))
-    physics_cfg = _parse_physics_config(raw.get("physics", {}), mapping_cfg.domain_restriction)
+    physics_cfg = _parse_physics_config(raw.get("physics", {}), mapping_cfg.domain_restriction,
+                                        raw.get("displacement_control"))
     target_cfg = _parse_target_config(raw.get("target", {}))
     training_cfg = _parse_training_config(raw.get("training", {}), raw.get("loss_weights", {}))
     vis_cfg = _parse_visualization_config(raw.get("visualization", {}))

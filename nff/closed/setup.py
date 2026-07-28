@@ -32,8 +32,9 @@ def build_closed_initial_state(config):
     N = int(topo['N'])
     r_init = float(topo.get('r_init', 0.45))
     spacing = float(topo.get('spacing', 1.0))
+    spacing_y = float(topo.get('spacing_y', spacing))
 
-    tessellation = build_closed_tessellation(M, N, r=r_init, spacing=spacing)
+    tessellation = build_closed_tessellation(M, N, r=r_init, spacing=spacing, spacing_y=spacing_y)
     configure_tessellation(tessellation, SimpleNamespace(**topo))  # material, clamps, loads
 
     # Optional: restrict which DOFs the clamp fixes (default all 3 = [x, y, theta]).
@@ -75,9 +76,10 @@ def init_closed_les_params(config):
     M, N = int(topo['M']), int(topo['N'])
     r_init = float(topo.get('r_init', 0.45))
     spacing = float(topo.get('spacing', 1.0))
+    spacing_y = float(topo.get('spacing_y', spacing))
 
     struct = build_deploy_structure(M, N)
-    sliders = build_boundary_edges(struct, spacing=spacing)
+    sliders = build_boundary_edges(struct, spacing=spacing, spacing_y=spacing_y)
 
     z_init = float(np.log(r_init / (1.0 - r_init)))         # sigmoid(z_init) = r_init
     z = np.full((struct['rows'], struct['cols']), z_init)
@@ -167,9 +169,8 @@ def build_surrogate_energy(config, static_features, state, init_map_params):
     net, stats, eps_f = load_hinge_surrogate(hm.checkpoint)
     fr = float(getattr(hm, 'fillet_ratio', 0.16))     # design cut-tip fillet (3rd g DOF for 6-feat nets)
     dom = stats.get("domain", DOMAIN)                 # data-driven OOD box (wide v2 auto-widens it)
-    w_damage = float(getattr(hm, 'w_damage', 0.0))
-    w_fail = float(getattr(hm, 'w_fail', 0.0)); w_ood = float(getattr(hm, 'w_ood', 0.0))
-    m_safe = float(getattr(hm, 'm_safe', 1.0)); fail_line = float(getattr(hm, 'fail_line', 1.0))
+    w_damage = float(getattr(hm, 'w_damage', 0.0)); w_ood = float(getattr(hm, 'w_ood', 0.0))
+    fail_line = float(getattr(hm, 'fail_line', 1.0))
     bond_pairs = np.asarray(state.bond_connectivity)
     w_lig_arr = jnp.full(state.hinge_node_pairs.shape[0], float(hm.w_lig_mm))
 
@@ -197,8 +198,8 @@ def build_surrogate_energy(config, static_features, state, init_map_params):
     print(f"[hinge_model] SURROGATE  material={hm.material} t={hm.thickness_mm}mm w_lig={hm.w_lig_mm}mm "
           f"eps_f={eps_f}  |  {len(alpha0)} hinges  alpha {a0.min():.0f}-{a0.max():.0f}deg (RVE-frame)"
           f"  length_scale={ls:.3g}mm/u  energy_scale={es:.3g}  barrier={hm.barrier}")
-    if w_damage or w_fail or w_ood:
-        print(f"[hinge_model]   + damage loss  w_damage={w_damage} (mean D^2)  w_fail={w_fail}  "
+    if w_damage or w_ood:
+        print(f"[hinge_model]   + damage loss  w_damage={w_damage} (mean D^2, D=<PEEQ>_lig/eps_f)  "
               f"w_ood={w_ood}  fail_line(report only)={fail_line}")
 
     w_lig_logit0 = None
@@ -212,8 +213,8 @@ def build_surrogate_energy(config, static_features, state, init_map_params):
     bond_energy = build_hinge_bond_energy_fn(net, stats, length_scale=ls, energy_scale=es,
                                              barrier=hm.barrier, domain=dom, fillet_ratio=fr)
     stability_fn = build_hinge_stability_fn(net, stats, bond_pairs=bond_pairs, length_scale=ls,
-                                            domain=dom, w_damage=w_damage, w_fail=w_fail, w_ood=w_ood,
-                                            m_safe=m_safe, fail_line=fail_line, fillet_ratio=fr)
+                                            domain=dom, w_damage=w_damage, w_ood=w_ood,
+                                            fail_line=fail_line, fillet_ratio=fr)
     damage_fn = build_hinge_damage_fn(net, stats, bond_pairs=bond_pairs, length_scale=ls, fillet_ratio=fr)
 
     def hinge_geometry_from_design(map_params):

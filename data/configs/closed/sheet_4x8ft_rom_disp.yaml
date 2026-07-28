@@ -1,0 +1,197 @@
+# Closed-state RDPQK — 4 ft x 8 ft sheet (1219.2 x 2438.4 mm), 9 panels, 12 hinges.
+# DISPLACEMENT-CONTROLLED TWIN of sheet_4x8ft_rom.yaml — identical in every respect EXCEPT how the
+# sheet is actuated: the `loads:` block is gone and the top edge is PULLED BY A PRESCRIBED AMOUNT
+# instead of by a prescribed force. Same target, same clamps, same calibrated springs, same ROM.
+#
+# ── WHY DISPLACEMENT CONTROL ─────────────────────────────────────────────────────────────────────
+# Force control prescribes the load and solves for the motion; displacement control prescribes the
+# motion and reads back the force. Three reasons this is the better actuation for this sheet:
+#
+#   1. IT IS WHAT THE MACHINE DOES. The Instron 34SC-5 is a screw-driven crosshead: it imposes a
+#      displacement and MEASURES the force. A force-controlled simulation is not the experiment.
+#   2. IT DOES NOT SATURATE. The measured force sweep (see sheet_4x8ft_rom.yaml) is brutally
+#      non-injective near full deployment — 15 N -> 29.0 deg, 60 -> 45.0, 120 -> 49.0, 600 -> 52.3,
+#      6000 -> 53.0 — because the short axis LOCKS at 2*psi_y = 53.1 deg. Past ~45 deg the force is
+#      a useless handle on the deployment: enormous force changes buy fractions of a degree, and
+#      the training gradient d(shape)/d(force) collapses with it. The imposed displacement stays a
+#      one-to-one handle right up to the kinematic lock.
+#   3. IT STABILIZES THE SOLVE. Prescribed DOFs leave the free set entirely, so the tangent
+#      stiffness the L-BFGS sees is the CONSTRAINED one. Under the surrogate (plastic softening)
+#      that removes exactly the directions that make the Hessian indefinite.
+#
+# ── HOW THE IMPOSED VALUE WAS PICKED ─────────────────────────────────────────────────────────────
+# 0.4575 pipeline length units, uniform on the three top tiles. It is the FORCE-CONTROLLED RUN'S OWN
+# ANSWER: the untrained 55.33 N/tile deploy of sheet_4x8ft_rom.yaml (that load is itself calibrated
+# to put the WORST hinge at 45 deg — see the loads block there) lands at
+#     dy(face 2) = 0.4489   dy(face 5) = 0.4699   dy(face 8) = 0.4537   -> mean 0.4575
+# so this reproduces the 45 deg deployment the target rectangle below was derived for. In physical
+# units, x length_scale = 406.4 mm/u -> 186 mm of crosshead travel on a 2438 mm sheet.
+# ⚠ Re-derive this whenever the springs, the geometry, or that load change — it is a MEASURED echo
+# of the force-controlled twin, not an independent number.
+#
+# ⚠ UNIFORM, NOT PER-FACE. The three values above differ by ~4.7% (the centre tile rides higher), so
+# a uniform value is a RIGID CROSSHEAD, not a re-run of the force case: it forces the three top tiles
+# to move together, which is what a real grip bar does, and the per-tile reaction then differs
+# instead. Prescribing the three measured values individually reproduces the force run exactly and
+# returns 55.33 N at each tile — that round trip is asserted in tests/test_displacement_control.py.
+#
+# ── WHAT YOU GET BACK ────────────────────────────────────────────────────────────────────────────
+# `run_closed.py` prints the reaction at every prescribed DOF and the total, per load step — the
+# force-displacement curve of the sheet, in newtons (see the units note in the material block).
+# The pipeline also returns it as `result['reactions']` (a `ReactionReport`).
+#
+# ★ THE RIGID BAR COSTS A LOT. Measured untrained at u = 0.4575:
+#     face 2  +562.5 N     face 5  -857.8 N     face 8  +568.2 N     total +273.0 N
+# The centre tile has to be HELD DOWN. Left free it rides 4.7% higher than its neighbours (0.4699
+# vs 0.4489), and with k_stretch = 238 N/mm an 8.5 mm differential is expensive — so the grip bar
+# spends ~858 N flattening the top edge and only +273 N net actually deploys the sheet, against
+# 166 N for the same deployment under force control. That force is INTERNAL and self-equilibrated:
+# the bottom clamp mirrors it exactly, all reactions summing to 0 within 3e-6 (asserted in
+# tests/test_displacement_control.py). The deployment itself is barely affected — per-tile dtheta
+# lands within ~4% of the force-controlled run.
+# ⚠ If you want the free deployment rather than a flat top edge, prescribe the three tiles
+# individually — that is the round trip, and it returns exactly 55.33 N at each tile.
+#
+# ⚠ NO DAMAGE, as in the ROM twin: the ROM branch returns `(None,)*5`, so `w_damage`, `w_ood`,
+# `fail_line` and `learn_w_lig` are all inert and w_lig stays uniform at 18.0 mm.
+#
+# ── MEASURED, 200 epochs (2026-07-27) ────────────────────────────────────────────────────────────
+#   chamfer 3.5e-3 -> 9.92e-4 (converged by epoch ~60)   boundary 9.94 mm mean / 25.75 mm max
+#   deployment 43.60 deg mean [43.15, 43.95]             twisted 0, overlap 3.9e-06
+#   trained reactions -30.6 / -47.1 / +150.4 N, total +72.7 N
+# The rigid bar lands ~1.4 deg SHORT of the 45 deg the target rectangle was derived for (force
+# control on the same sheet reaches 44.35 mean / 44.96 max), because flattening the top edge
+# stiffens the sheet. Raise `value` if you want the trained deployment to hit 45 exactly — that is
+# precisely the handle displacement control gives you, and it stays one-to-one where force does not.
+
+tessellation:
+  tessellation_type: closed_rdpqk
+  M: 3
+  N: 3
+  r_init: 0.45
+  spacing: 1.0
+  spacing_y: 2.0             # elongated panels -> 1:2 sheet from a 3x3 grid
+  sheet_width_mm: 1219.2     # 4 ft of stock across M panels -> cut pattern exports at true size
+  hinge_margin: 0.13
+  clamped_dofs: [1]          # bottom edge: y only (rollers in x, free rotation)
+  y_pin_faces: [3]           # centre bottom tile also pinned in x -> no rigid translation/rotation
+  # ── FIXED target, CALIBRATED TO A 45 deg DEPLOYMENT (2026-07-27) ─────────────────────────────
+  # Unchanged from sheet_4x8ft_rom.yaml — the whole point is that the two configs are twins. See
+  # that file for the derivation of lam(theta) = cos(psi - theta/2)/cos(psi), psi_x = 63.43 deg,
+  # psi_y = 26.57 deg, and the 53.1 deg kinematic lock of the short axis.
+  #   At theta = 45 deg:  lam_x = 1.6892, lam_y = 1.1152 on a flat 3.0 x 6.0 sheet
+  #     -> half_w = 2.5339      half_h = 3.3457
+  target_cx: 1.5433
+  target_cy: 3.2086
+  target_half_w: 2.5339
+  target_half_h: 3.3457
+
+mapping:
+  map_type: closed_les
+
+optimization_weights:
+  validity_method: none
+
+hinge_model:
+  # ⚠ Under `type: rom`, build_surrogate_energy returns (None,)*5 before reading any of
+  # `checkpoint` / `material` / `thickness_mm`, so those three are INERT here and describe the
+  # checkpoint, not this run. `w_lig_mm` and `length_scale` ARE live: w_lig_mm drives the physical
+  # cut geometry and the DXF export (nff/closed/cut_export.py), so it must match the width the
+  # springs below were condensed at.
+  type: rom
+  checkpoint: data/surrogates/hinge_surrogate_v2.pkl   # merged campaign (S235, D-label)
+  material: S235             # the CHECKPOINT's training material, not this sheet's
+  thickness_mm: 0.5          # PET stock, the standard sheet gauge
+  w_lig_mm: 18.0             # width the ROM springs were condensed at.
+                             # Design range 5-50 mm; surrogate valid on [1, 20] only.
+  calibrate: false
+  length_scale: 406.4        # mm per pipeline unit = the real panel pitch
+  energy_scale: 2.4606e-3    # 1 / length_scale -> reaction values come out in newtons
+  barrier: 0.05
+  w_damage: 10.0
+  w_ood: 1.0e-3
+  fail_line: 1.0
+  learn_w_lig: true
+
+physics:
+  # ⚠ CONTACT IS OFF HERE, deliberately, unlike the force-controlled twin. The barrier has only
+  # been characterised under force control; combining it with prescribed motion (where the imposed
+  # DOFs join the Dirichlet set) is untested, and a barrier fighting an imposed displacement is a
+  # different numerical problem. Enable it only alongside a re-run of the overlap measurement.
+  use_contact: false
+  linearized_strains: true
+  incremental: true
+  num_load_steps: 6          # the prescribed motion ramps t*u_target over these steps, so the
+                             # reaction history IS a 6-point force-displacement curve
+  solver_maxiter: 1500
+  solver_tol: 1.0e-5
+  backward_reg: 0.01         # ridge on the IFT adjoint (harmless under the ROM, load-bearing under
+                             # the surrogate's plastic softening)
+  updated_lagrangian: false  # ⚠ REQUIRED false: the UL scan solves each increment at t = delta_t
+                             # but maps it back with the total t, so an imposed value would be
+                             # applied inconsistently. The pipeline raises if you set it true.
+
+material:                    # LIVE under the ROM — CALIBRATED SPRINGS (2026-07-27), PET t = 0.5 mm,
+                             # w_lig = 18 mm, RVE half-disk r_win = 100 mm. See sheet_4x8ft_rom.yaml
+                             # for the full derivation and the k_rot buckled-secant argument.
+                             #     k_stretch = 238.1 N/mm    k_shear = 127.4 N/mm
+                             #     k_rot     = 487 N.mm/rad  (buckled secant at 20 deg)
+                             # Converted to pipeline units by x406.4 (translations) / /406.4 (rotation),
+                             # which is what makes the REACTION READOUT newtons.
+  k_stretch: 96763.84         # = 238.1 N/mm
+  k_shear:   51775.36         # = 127.4 N/mm
+  k_rot:         1.1983       # = 487 N.mm/rad
+  density: 1.0
+
+boundary_conditions:
+  clamped_faces: [0, 3, 6]   # bottom edge (j = 0)
+
+# ── THE ACTUATION ────────────────────────────────────────────────────────────────────────────────
+# Top edge (j = 2) pulled +y by a prescribed amount — the crosshead. Sibling block to `loads:`;
+# both may coexist (mixed control) as long as no single face/DOF appears in both, which raises.
+# `value` is in pipeline length units for dof 0/1; for dof 2 use `value_deg` (or `value` in radians).
+displacement_control:
+  - {face: [2, 5, 8], dof: 1, value: 0.4575}
+
+target:                      # fallback TargetConfig; run_closed overrides it with the rectangle above
+  type: rectangle
+  center: [1.5433, 3.2086]
+  radius: 3.3457
+
+loss_weights:
+  # ★ coverage = 0 — see sheet_4x8ft_rom.yaml: with only 12 boundary vertices against a 23.5-unit
+  # perimeter the coverage term has a ~0.32 floor no design can beat, and it actively FIGHTS
+  # precision. At 0, `chamfer_total` IS the precision term, so best-checkpoint selection ranks by
+  # the metric we care about.
+  chamfer: 50.0
+  coverage: 0.0
+  stretching: 0.0
+  shearing: 0.0
+  bending: 0.0
+  contact: 0.0
+  material_area: 0.0
+  hinge_gap: 0.0
+  openness: 0.0
+  deformation: 0.0
+  void_closure: 0.0
+  closure_delta: 0.0
+  regularization: 1.0e-4
+
+training:
+  num_epochs: 200
+  learning_rate: 0.01
+  optimizer: adam
+  lr_schedule: cosine
+  grad_clip: 1.0
+  geometric_loss_type: boundary_vertices
+
+visualization:
+  stage0: true               # flat trained sheet (the design the map produced)
+  stage1: false              # Stage 1 is BYPASSED here (validity_method: none)
+  stage2: true               # deployed equilibrium + target
+  energy_plot: true
+  animation: true            # deployment animation over the prescribed-displacement steps
+  show_plots: false
+  save_outputs: true
+  show_external_forces: false   # there are no external forces to draw — the actuation is kinematic
+  show_kinematic_blocks: true

@@ -1,0 +1,151 @@
+# Closed-state RDPQK — a standard 4 ft x 8 ft sheet (1219.2 x 2438.4 mm), 9 panels, 12 hinges.
+#
+# GEOMETRY. The closed builder needs M, N >= 3 and (until now) a single grid pitch, so the sheet
+# aspect was locked to M:N — a 1:2 sheet with square panels would need 3x6 = 18 panels. `spacing_y`
+# gives the y pitch independently, so 3x3 = 9 panels span the true 1:2 stock size: each panel is
+# 406.4 x 812.8 mm (16 in x 32 in). Validity is unaffected (any convex outline keeps the Tutte
+# embedding: twisted=0, overlap=0, area fraction 1.0000 measured on this sheet).
+#
+# REDUCED-ORDER MODEL. `hinge_model: surrogate` — the condensed CalculiX hinge energy
+# W(a,s,theta; w_lig,alpha) for S235 steel with J2 plasticity, out-of-plane buckling and a continuous
+# ductile-damage label D. That is the ROM that makes sense here: the linear-spring ligament (`rom`)
+# is an abstract spring that never yields, and a 1.5 mm laser-cut steel ligament folded through tens
+# of degrees is deep in plasticity. Checkpoint = the merged-campaign net (val: 4.8% energy /
+# 11% force / 0.72 fail-RMSE).
+#
+# UNITS — this run is dimensional, unlike the abstract-unit configs. `calibrate: false` pins the two
+# Gap-2 bridges to the real stock size instead of co-solving them against the abstract springs:
+#   length_scale = 1219.2 / (M * spacing) = 406.4 mm per pipeline unit  (so 1 panel = 406.4 mm)
+#   energy_scale = 1 / length_scale                                     (so `loads.value` is NEWTONS)
+# With the surrogate bond energy the `material:` k_* only ever fed `calibrate`, so they are inert
+# here; they are kept at the canonical values for reference.
+
+tessellation:
+  tessellation_type: closed_rdpqk
+  M: 3
+  N: 3
+  r_init: 0.45
+  spacing: 1.0
+  spacing_y: 2.0             # elongated panels -> 1:2 sheet from a 3x3 grid
+  sheet_width_mm: 1219.2     # 4 ft of stock across M panels -> cut pattern exports at true size
+  hinge_margin: 0.13
+  clamped_dofs: [1]          # bottom edge: y only (rollers in x, free rotation)
+  y_pin_faces: [3]           # centre bottom tile also pinned in x -> no rigid translation/rotation
+  # FIXED target (never auto-fit). Measured untrained deploy at 60 N/tile: x [-0.337, 3.341],
+  # y [-0.053, 6.254]. The target asks for MORE lateral spread (half_w 1.84 -> 2.05, +11%) and
+  # slightly LESS extension (half_h 3.15 -> 3.00), i.e. convert the same pull into transverse
+  # expansion. Its bottom edge is anchored on the clamped edge (y_lo = -0.053) so the pinned tiles
+  # stay inside the target — otherwise their chamfer error is unfixable.
+  target_cx: 1.502
+  target_cy: 2.947
+  target_half_w: 2.05
+  target_half_h: 3.00
+
+mapping:
+  map_type: closed_les
+
+optimization_weights:
+  validity_method: none
+
+hinge_model:
+  # ⚠ THIS CONFIG DOES NOT RUN THE PET STANDARD. The project standard is PET, t = 0.5 mm, but
+  # `hinge_surrogate_v2.pkl` was condensed from S235 STEEL -- the checkpoint reports eps_f = 0.25
+  # (steel's fracture strain), not PET's 1.784. Under `type: surrogate` these values are LIVE and
+  # must keep describing the checkpoint, otherwise the energies are meaningless. Retargeting to PET
+  # needs a new CalculiX campaign, not a config edit. Until then use `sheet_4x8ft_rom.yaml`, whose
+  # springs ARE the PET-calibrated ones.
+  type: surrogate
+  checkpoint: data/surrogates/hinge_surrogate_v2.pkl   # merged campaign (S235, D-label)
+  material: S235             # what the net was trained on -- do not edit without retraining
+  thickness_mm: 1.5          # ditto; documentation only (no thickness feature in the net)
+  w_lig_mm: 18.0             # the physical standard; inside the net's trained [1, 20] window
+  calibrate: false
+  length_scale: 406.4        # mm per pipeline unit = the real panel pitch
+  energy_scale: 2.4606e-3    # 1 / length_scale -> load values are newtons
+  barrier: 0.05
+  w_damage: 10.0             # THE damage term: continuous mean(D^2) over all hinges
+  w_ood: 1.0e-3
+  fail_line: 1.0             # reporting overlay only (count of hinges past fracture initiation)
+  learn_w_lig: true
+
+physics:
+  # ── CONTACT: tiles cannot interpenetrate. Same block as sheet_4x8ft_rom.yaml, which carries the
+  # full derivation. It matters MOST here: the 71.7%-of-harvested-deployments-overlap measurement
+  # is an argument about what may reach the SURROGATE, and this is the surrogate config.
+  # ⚠ min_angle/cutoff_angle are DEGREES (the parser converts); see experiment.py.
+  use_contact: true
+  k_contact: 1000000.0
+  min_angle: -2.0            # DEGREES; asymptote just below the closed state
+  cutoff_angle: 0.0          # barrier is exactly zero for every OPEN hinge
+  linearized_strains: true
+  incremental: true
+  num_load_steps: 6
+  solver_maxiter: 1500
+  solver_tol: 1.0e-5
+  backward_reg: 0.01         # ridge on the IFT adjoint (plastic softening makes the Hessian indefinite)
+  updated_lagrangian: false
+
+material:                    # inert with the surrogate + calibrate:false (kept for reference)
+  k_stretch: 1000.0
+  k_shear: 1000.0
+  k_rot: 0.5
+  density: 1.0
+
+boundary_conditions:
+  clamped_faces: [0, 3, 6]   # bottom edge (j = 0)
+
+loads:                       # top edge (j = 2) pulled +y — distributed, not a single grip.
+  - {face: 2, dof: 1, value: 60.0}    # 60 N per tile (180 N total). Measured untrained sweep:
+  - {face: 5, dof: 1, value: 60.0}    #   10 N -> rigid (maxD 0.08); 30 N -> maxD 0.92, 0/12 past
+  - {face: 8, dof: 1, value: 60.0}    #   fracture initiation; 60 N -> +23% lateral spread, maxD
+                                      #   2.30, 10/12 past; 160 N -> +78% spread but saturating.
+                                      # 60 N is the regime with real deployment AND reducible damage.
+
+target:
+  type: rectangle
+  center: [1.5, 2.95]
+  radius: 3.0
+
+loss_weights:
+  chamfer: 50.0
+  # coverage = 0, same as the ROM twin. With only 12 boundary vertices against a 23.5-unit
+  # perimeter the coverage term has a ~0.32 floor no design can beat, and it actively fights
+  # precision. The measured sweep and the full argument are in sheet_4x8ft_rom.yaml; it is a
+  # property of this 3x3 tessellation, so it applies here identically.
+  coverage: 0.0
+  stretching: 0.0
+  shearing: 0.0
+  bending: 0.0
+  contact: 0.0
+  material_area: 0.0
+  hinge_gap: 0.0
+  openness: 0.0
+  deformation: 0.0
+  void_closure: 0.0
+  closure_delta: 0.0
+  regularization: 1.0e-4
+
+training:
+  num_epochs: 200
+  learning_rate: 0.01
+  optimizer: adam
+  lr_schedule: cosine
+  grad_clip: 1.0
+  geometric_loss_type: boundary_vertices
+
+visualization:
+  stage0: true               # flat trained sheet (the design the map produced)
+  stage1: false              # Stage 1 is BYPASSED here (validity_method: none) — the plot is empty
+  stage2: true               # deployed equilibrium + target
+  energy_plot: true          # ⚠ energy_balance.png is NOT valid for a surrogate run: the
+                             # decomposition (build_decompose_energy_fn) is hard-wired to the
+                             # linear-spring ligament and has no bond_energy_fn hook, so it reports
+                             # U_int from springs this solve never used (~0 here, since closed hinges
+                             # have ~zero reference bond length) and the balance Sigma≈0 fails by
+                             # construction. `work` is derived from that same U_int, so it is off too.
+                             # The solver's own total potential (solution.energies) IS correct.
+  animation: true            # deployment animation over the load steps
+  show_plots: false
+  save_outputs: true
+  show_external_forces: false   # per-face arrows are clutter; the loading diagram carries the BCs
+  show_kinematic_blocks: true

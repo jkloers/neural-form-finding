@@ -40,6 +40,7 @@ from nff.config.targets import get_target_points
 from nff.stages.pipeline import forward_pipeline
 from nff.stages.geometry import reconstruct_vertices, compute_face_areas, deformed_vertices
 from nff.stages.physics.kinematics import face_to_node_kinematics_fn
+from nff.stages.physics.displacement import parse_displacement_specs, DOF_NAMES
 from nff.training.trainer import create_train_step, TrainState
 from nff.utils.visualization import (
     write_deformed_into, plot_loading_diagram, plot_area_change, animate_closed_evolution,
@@ -50,6 +51,7 @@ from nff.closed.cut_export import write_cut_patterns
 from nff.closed.setup import (build_closed_initial_state, init_closed_les_params,
                               build_surrogate_energy)
 from nff.closed.deploy import _fit_circle, _boundary_cloud, _global_verts, _deployed_hinge_xy
+from nff.closed.hinge_path_ensemble import resolve_length_scale   # mm per pipeline unit, for reporting
 
 
 def _overlap(tess):
@@ -71,6 +73,16 @@ def main():
     config = load_and_parse_config(cfg_path)
     circle_fit = config.training.geometric_loss_type == "circle_fit"
     load_specs = config.topology.get('loads', [])
+
+    # Displacement control: the actuation is an imposed motion, so the schematics draw the
+    # prescribed DOFs where they would otherwise draw force arrows (same {face, dof, value} shape,
+    # rotations already in radians). Empty under force control -> every diagram is unchanged.
+    prescribed = parse_displacement_specs(config.physics.prescribed_displacements)
+    disp_specs = [{'face': p.face, 'dof': p.dof, 'value': p.value} for p in prescribed]
+    bc_specs = load_specs or disp_specs
+    if prescribed:
+        print(f"  displacement control: {len(prescribed)} prescribed DOFs — " +
+              ", ".join(f"face {p.face} {DOF_NAMES[p.dof]}={p.value:+.4f}" for p in prescribed))
 
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = os.path.join("data", "outputs", "runs", f"run_{ts}_{args.config_name}")
@@ -184,6 +196,15 @@ def main():
                               static_features=static_features, load_specs=load_specs,
                               bond_energy_fn=bond_energy, hinge_geometry=geom_best)
 
+    # ── Reaction readout: under displacement control the force is an OUTPUT. ──
+    if result['reactions'] is not None:
+        rr = result['reactions']
+        R = np.asarray(rr.values)                       # (n_steps, n_prescribed)
+        for (f, d), u, r in zip(np.asarray(rr.face_DOF_pairs), np.asarray(rr.prescribed_values), R[-1]):
+            print(f"  reaction: face {int(f)} {DOF_NAMES[int(d)]}={float(u):+.4f} -> {float(r):+.2f}")
+        print(f"  reaction total = {float(R[-1].sum()):+.2f}   (per step: "
+              + ", ".join(f"{float(s):.1f}" for s in R.sum(axis=1)) + ")")
+
     # ── Target params for the pretty viz (fitted circle is size-adaptive). ──
     vs, disp = result['valid_state'], result['solution'].fields[-1]
     if circle_fit:
@@ -208,8 +229,32 @@ def main():
         struct, boundary_flat_from_logits(sliders, best_params['bnd_logits']),
         jax.nn.sigmoid(best_params['z'])))
     write_cut_patterns(run_dir, initial_state=initial_state, cut_coords=cut_coords, struct=struct,
-                       config=config, hinge_model=config.hinge_model, load_specs=load_specs,
+                       config=config, hinge_model=config.hinge_model, load_specs=bc_specs,
                        config_name=args.config_name, hinge_w_lig=hinge_w_lig_best)
+
+    # ── How precisely did the deployed boundary land on the target? ──
+    # `chamfer_total` cannot answer this. It is `precision + coverage * coverage_loss`, and the
+    # coverage half asks every one of the 400 sampled target points to have a boundary vertex near
+    # it -- which a handful of boundary vertices can never do. Its floor is ~(perimeter/n_verts)^2/12
+    # regardless of the design, so chamfer_total is mostly a constant and a design can lower it
+    # while moving the boundary AWAY from the target. Report the honest thing instead: the exact
+    # distance from each boundary vertex to the target perimeter, in millimetres.
+    _cloud = _boundary_cloud(vs, disp)
+    if rect_mode:
+        _cen, _hw, _hh = rect_geom
+        _d = np.abs(_cloud - np.asarray(_cen)) - np.array([_hw, _hh])
+        _err = np.abs(np.linalg.norm(np.maximum(_d, 0.0), axis=-1)
+                      + np.minimum(np.max(_d, axis=-1), 0.0))     # outside + inside distance
+        _ls = resolve_length_scale(config)
+        print(f"  boundary vs target ({len(_err)} vertices): mean={_err.mean()*_ls:.2f}mm  "
+              f"max={_err.max()*_ls:.2f}mm  rms={np.sqrt((_err**2).mean())*_ls:.2f}mm"
+              f"   [{_err.mean()/(2*_hh):.3%} of target height]")
+    # Deployment angle = relative rotation across each hinge; the sheet's single kinematic coordinate.
+    _bc = np.asarray(vs.bond_connectivity)
+    _nn2 = np.asarray(vs.centroid_node_vectors).shape[1]
+    _th = np.asarray(disp[:, 2])
+    _dth = np.degrees(np.abs(_th[_bc[:, 1] // _nn2] - _th[_bc[:, 0] // _nn2]))
+    print(f"  deployment angle: mean={_dth.mean():.2f}deg  [{_dth.min():.2f}, {_dth.max():.2f}]")
 
     # ── Validity audit + per-panel area change (flat vs deployed). ──
     s0 = write_deformed_into(tessellation, deformed_vertices(vs, jnp.zeros_like(disp)))
@@ -228,8 +273,10 @@ def main():
     plot_area_change(s0, s2, rel, os.path.join(run_dir, "stages.png"))
 
     # One clean loading schematic.
-    plot_loading_diagram(s2, config.topology.get('bc_clamped', []), load_specs,
-                         os.path.join(run_dir, "loading_diagram.png"))
+    plot_loading_diagram(s2, config.topology.get('bc_clamped', []), bc_specs,
+                         os.path.join(run_dir, "loading_diagram.png"),
+                         title="Prescribed displacement" if disp_specs and not load_specs else "Loading",
+                         clamped_dofs=config.topology.get('clamped_dofs'))
 
     # ── Training-evolution animation. ──
     frames = []

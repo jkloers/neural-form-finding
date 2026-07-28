@@ -1,9 +1,10 @@
 # Hinge Condensation Surrogate — Design Brief
 
-> Status: **design / pre-implementation**. This document captures WHAT we are building
-> and WHY, precisely enough to restart the conversation from scratch. It is deliberately
-> not an implementation plan (step ordering comes later, once the de-risking probes fix
-> the open decisions).
+> Status: **SHIPPED** (banner corrected 2026-07-28; it still read "design /
+> pre-implementation" long after the code landed). The surrogate lives in
+> `nff/models/hinge_surrogate.py`, the oracle in `nff/rve/`, and checkpoints in
+> `data/surrogates/`. This document remains the WHAT and WHY — read it for the design
+> rationale, not for current status. Where it disagrees with the code, the code wins.
 
 ---
 

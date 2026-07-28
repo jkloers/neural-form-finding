@@ -1,3 +1,9 @@
+# macOS
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -8,6 +14,11 @@ data/*
 
 # SOFA / CalculiX simulation + dataset outputs (regenerable, large)
 sofa/output/
+# CalculiX scratch job dirs written next to the diagnostic that spawned them.
+# A single deck is ~3.3 MB of generated mesh; regenerate, never commit.
+ccx_*_job*/
+*.frd
+*.inp
 
 # Claude
 *CLAUDE.md
@@ -37,9 +48,6 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
-
-#Data directory
-src/neural_form_finding/data
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
