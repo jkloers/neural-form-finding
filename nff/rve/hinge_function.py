@@ -200,7 +200,7 @@ class HingeResponse:
     F_a: np.ndarray
     F_s: np.ndarray
     M_theta: np.ndarray                               # dW/du by the envelope theorem
-    damage: np.ndarray                                # Delta = <PEEQ>_lig / eps_f (nff.rve.damage)
+    damage: np.ndarray                                # Delta = sum_window V*PEEQ / (V_lig*eps_f)
     peeq_lig: np.ndarray                              # hottest ligament element -- the tear indicator
     eta_mean_lig: np.ndarray                          # <eta> over the ligament (diagnostic)
     uz_max: np.ndarray                                # out-of-plane amplitude [mm]
@@ -209,6 +209,9 @@ class HingeResponse:
     n_elems: int
     ok: bool
     failure_theta_deg: float                          # first theta with regime==FAILED (nan if survives)
+    stop_reason: str = "unknown"                      # completed | fractured | diverged | timeout
+    # ^ a truncated job still contributes its solved increments, so without this the fraction of the
+    # dataset that stopped early -- and WHY -- is unrecoverable after the run.
 
     @property
     def n_samples(self) -> int:
@@ -301,6 +304,7 @@ def assemble_response(geo, ray, const, parsed) -> HingeResponse:
                          damage=damage, peeq_lig=peeq_lig, eta_mean_lig=eta_mean_lig,
                          uz_max=uz_max, regime=regime,
                          n_elems=int(parsed.get("n_elems", 0)), ok=bool(parsed.get("ok", False)),
+                         stop_reason=str(parsed.get("stop_reason", "unknown")),
                          failure_theta_deg=failure_theta)
 
 

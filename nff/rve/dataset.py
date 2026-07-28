@@ -106,6 +106,7 @@ def run_jobs(jobs, const=HingeConstants(), *, n_parallel=6, timeout=900,
                              eps_f=const.eps_f if const.stop_at_fracture else None,
                              fracture_margin=fracture_margin).stdout
         except Exception:
+            m["stop_reason"] = "timeout"
             return ""                                             # parse whatever completed
     with ThreadPoolExecutor(max_workers=n_parallel) as ex:
         stdouts = list(ex.map(_solve, metas))
@@ -151,11 +152,15 @@ def responses_to_columns(responses, const, job_id_offset=0):
                "job_id": np.full(n, job_id)}
         for k in keys:
             cols.setdefault(k, []).append(np.asarray(row[k]))
-        meta.append(dict(job_id=job_id, ok=r.ok, tag=r.geo.tag, n_samples=n,
+        meta.append(dict(job_id=job_id, ok=r.ok, stop_reason=r.stop_reason, tag=r.geo.tag,
+                         n_samples=n,
                          failure_theta_deg=r.failure_theta_deg,
                          damage_at_tear=r.damage_at_tear,
                          w_lig=r.geo.w_lig, alpha_deg=r.geo.alpha_deg,
-                         eta_a=r.ray.eta_a, eta_s=r.ray.eta_s, theta1_deg=r.ray.theta1_deg))
+                         # a DeploymentPath has no eta_a/eta_s -- it carries a polyline, not a ray
+                         eta_a=getattr(r.ray, "eta_a", float("nan")),
+                         eta_s=getattr(r.ray, "eta_s", float("nan")),
+                         theta1_deg=r.ray.theta1_deg))
     cols = {k: np.concatenate(v) for k, v in cols.items()}
     return cols, meta
 
@@ -170,7 +175,11 @@ def _write_checkpoint(out_path, acc, meta, const):
     # hottest ligament element first reaches eps_f, pooled over every job that actually tore.
     tears = np.array([m["damage_at_tear"] for m in meta if np.isfinite(m.get("damage_at_tear", np.nan))])
     const_json = {**asdict(const), "material": coerce_material(const.material).name}
+    stops = {}
+    for m in meta:                                    # why each job ended -- see HingeResponse
+        stops[m.get("stop_reason", "unknown")] = stops.get(m.get("stop_reason", "unknown"), 0) + 1
     summary = dict(n_jobs=len(meta), n_usable=n_usable, n_errored=len(meta) - n_usable,
+                   stop_reasons=stops,
                    n_finished_to_cap=sum(m.get("ok", False) for m in meta),  # survived without fracture
                    n_samples=int(len(regime)),
                    n_elastic=int((regime == 0).sum()), n_plastic=int((regime == 1).sum()),

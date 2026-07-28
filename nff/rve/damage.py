@@ -156,15 +156,22 @@ def plastic_damage(frame: dict, xyz: np.ndarray, conn, w_lig: float, eps_f: floa
     The single damage measure for an elasto-plastic hinge material. Returns NaN when the frame
     carries no plastic-strain field (an elastic-only solve, or a material that never yields).
 
-    ``region`` selects what is averaged over. **"whole" (the default) is the RVE window**: the
-    window IS the hinge at the local scale -- it is small compared with the panels it joins -- so
-    every stress raised inside it belongs to the hinge model (user-directed 2026-07-28). "ligament"
-    restricts to the refinement disc instead.
+    ``region`` selects the NUMERATOR's domain. **"whole" (the default) sums plastic work over the
+    entire RVE window** -- the window IS the hinge at the local scale, small compared with the panels
+    it joins, so every stress raised inside it belongs to the hinge model (user-directed
+    2026-07-28). The DENOMINATOR is always the ligament volume, never the window's:
 
-    ⚠ Under "whole" the denominator is the window volume, which scales as ``r_win**2``. That is
-    consistent within a campaign, where ``r_win`` is a fixed constant (and the mesh volume varies
-    <1% with ``w_lig``), but two campaigns at different ``r_win`` do NOT share a damage scale.
-    ``r_win`` is recorded in every campaign's ``const`` block so the normalisation is recoverable.
+        Delta = ( sum_window V*PEEQ ) / ( V_lig * eps_f )
+
+    Dividing by the window would dilute by ~30x (the ligament disc is ~3% of the volume) and put
+    Delta at 1e-5, where the design loss term ``w_damage*mean(D^2)`` becomes ~1e-8 against chamfer
+    terms of order 1 -- i.e. silently dead -- and the softplus damage head sits in its saturated
+    tail. Normalising by the hinge's own size instead keeps Delta at 1e-3..1e-2, keeps it INTENSIVE
+    (``V_lig ~ w_lig**2``, so narrow hinges are penalised), and removes ``r_win**2`` from the scale.
+
+    The two agree exactly when nothing outside the ligament yields, and Delta rises above the
+    ligament-only value precisely when the buckled ligament sheds load into the panel -- which is
+    the behaviour the whole-window numerator exists to capture.
 
     Args:
         frame: parsed ``.frd`` frame; needs ``PEEQ`` (or ``PE``).
@@ -180,9 +187,14 @@ def plastic_damage(frame: dict, xyz: np.ndarray, conn, w_lig: float, eps_f: floa
     peeq = _nodal_peeq(frame)
     if peeq is None or len(peeq) != len(xyz):
         return float("nan")
-    mask = (np.ones(len(np.asarray(conn, int)), bool) if region == "whole"
-            else ligament_elements(xyz, conn, w_lig))
-    return _region_average(peeq, xyz, conn, mask) / eps_f
+    lig = ligament_elements(xyz, conn, w_lig)
+    if region == "ligament":
+        return _region_average(peeq, xyz, conn, lig) / eps_f
+    vol = element_volumes(xyz, conn)
+    v_lig = vol[lig].sum()
+    if not v_lig > 0:
+        return float("nan")
+    return float(np.dot(vol, _element_mean(peeq, conn)) / v_lig / eps_f)
 
 
 def peak_peeq(frame: dict, xyz: np.ndarray, conn, w_lig: float) -> float:

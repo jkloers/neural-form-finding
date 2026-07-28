@@ -64,10 +64,17 @@ def _nodal(xyz, fn):
     return np.array([fn(x, y, z) for x, y, z in xyz], float)
 
 
-def test_uniform_field_is_exactly_peeq_over_eps_f():
+def test_uniform_field_over_the_ligament_is_exactly_peeq_over_eps_f():
     xyz, conn = unit_wedge_mesh()
     frame = {"PEEQ": np.full(len(xyz), 0.42)}
-    assert plastic_damage(frame, xyz, conn, 4.0, eps_f=2.0) == pytest.approx(0.21, rel=1e-12)
+    assert plastic_damage(frame, xyz, conn, 4.0, eps_f=2.0,
+                          region="ligament") == pytest.approx(0.21, rel=1e-12)
+
+    # Whole-window numerator over the SAME (ligament) denominator scales by the volume ratio, so a
+    # uniformly-yielded window reads higher than a uniformly-yielded ligament -- by construction.
+    vol = element_volumes(xyz, conn)
+    ratio = vol.sum() / vol[ligament_elements(xyz, conn, 4.0)].sum()
+    assert plastic_damage(frame, xyz, conn, 4.0, eps_f=2.0) == pytest.approx(0.21 * ratio, rel=1e-12)
 
 
 def test_absent_plastic_field_is_nan_not_zero():
@@ -221,11 +228,11 @@ def test_mean_triaxiality_is_weighted_where_plasticity_actually_is():
 
 
 def test_default_region_is_the_whole_window_not_the_ligament_disc():
-    """Delta averages over the whole RVE: the window IS the hinge at the local scale.
+    """Delta sums plastic work over the whole RVE but normalises by the LIGAMENT volume.
 
-    User-directed 2026-07-28. The consequence to keep in view is that the denominator becomes the
-    window volume, so a hot band confined to the ligament reads LOWER than it would on the disc,
-    and the two normalisations are not interchangeable across different r_win.
+    User-directed 2026-07-28: the window is the hinge at the local scale, so every stress in it
+    counts; but dividing by the window volume would dilute Delta to ~1e-5 and kill the design-loss
+    term, so the denominator stays the hinge's own size.
     """
     w_lig = 4.0
     xyz, conn = unit_wedge_mesh(w_lig=w_lig, n=6, grade=1.0)
@@ -238,8 +245,9 @@ def test_default_region_is_the_whole_window_not_the_ligament_disc():
 
     whole = plastic_damage({"PEEQ": peeq}, xyz, conn, w_lig, 1.0)
     disc = plastic_damage({"PEEQ": peeq}, xyz, conn, w_lig, 1.0, region="ligament")
-    assert whole == pytest.approx(float(np.dot(vol, vals) / vol.sum()), rel=1e-12)
-    assert whole != pytest.approx(disc, rel=1e-6)
+    # numerator over the whole window, denominator always the ligament volume
+    assert whole == pytest.approx(float(np.dot(vol, vals) / vol[mask].sum()), rel=1e-12)
+    assert whole > disc
 
 
 def test_whole_window_damage_counts_plasticity_the_disc_would_miss():
