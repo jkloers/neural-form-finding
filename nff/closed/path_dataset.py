@@ -212,7 +212,7 @@ def harvest_paths(config, *, n_examples: int = 64, noise: float = 0.5, seed0: in
                   n_load_steps: Optional[int] = None, config_path: str = "",
                   grips=None, load_range=None, grip_loads=None, verbose: bool = True,
                   progress_every: int = 1, clear_cache_every: int = 20,
-                  max_overlap: float = 1e-4) -> PathDataset:
+                  max_overlap: float = 5e-4, max_eta: float = 20.0) -> PathDataset:
     """Deploy ``n_examples`` random tessellations and record every hinge's full path.
 
     Three things vary independently, so the ensemble spans design, drive strength and load path:
@@ -238,8 +238,10 @@ def harvest_paths(config, *, n_examples: int = 64, noise: float = 0.5, seed0: in
             fraction of the grip ceiling. ``None`` -> the config's value / (0.02, 1.0).
         progress_every: print every k examples (0 = silent).
         max_overlap: reject any deployment whose tiles overlap by more than this fraction of total
-            face area. With ``use_contact`` on this should never fire; it is the backstop that keeps
-            an unphysical sheet out of the dataset regardless.
+            face area. Contact is a BARRIER, not a constraint, and it only acts on bonded pairs, so
+            this gate is what actually keeps unphysical sheets out of the dataset.
+        max_eta: reject a path whose ``|eta|`` exceeds this. ``isfinite`` alone is not enough -- a
+            diverged solve produced eta_a = -1.1e42, which is finite and passed straight through.
         clear_cache_every: call ``jax.clear_caches()` every k examples (0 = never). REQUIRED for
             long harvests: ``forward_pipeline`` builds a fresh jitted solver closure on every call,
             so JAX caches a new compiled executable each time and never evicts it. Measured
@@ -351,6 +353,12 @@ def harvest_paths(config, *, n_examples: int = 64, noise: float = 0.5, seed0: in
                                         reference_bond_vectors=res.get('reference_bond_vectors'))
             if not np.all(np.isfinite(paths.eta)):
                 raise FloatingPointError("non-finite path (the solve diverged)")
+            # isfinite is NOT enough: a diverged solve produced eta_a = -1.1e42, which is finite
+            # and sailed straight through into a released dataset. Bound the magnitude too.
+            if np.abs(paths.eta[..., :2]).max() > max_eta:
+                raise FloatingPointError(
+                    f"path left the physical range (|eta| up to "
+                    f"{np.abs(paths.eta[..., :2]).max():.3g} > {max_eta})")
             vs = res['valid_state']
             disp = res['solution'].fields[-1]
             ms = res['mapped_state']

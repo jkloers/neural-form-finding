@@ -103,11 +103,16 @@ physics:
   # example with >0.1% overlap had a negative-theta hinge. Those deployments are not physical and
   # must never reach the surrogate. Measured with this block on: overlap 0.0000%, and the offending
   # case moves from theta_min = -9.50 deg to +21.94 deg.
-  # Result is insensitive to k_contact over 1e3..1e5 and to min_angle over -0.5..-2 deg -- the
-  # barrier works structurally, not by tuning. k=1e3 is the mildest that works; min=-2 deg keeps
-  # the barrier band wide enough that a load step cannot jump the asymptote in one increment.
+  # k = 1e6, NOT 1e3. On easy cases every k in 1e3..1e9 is identical, but across a random harvest
+  # k=1e3 lets hinges slide to theta = -1 deg (0.32% overlap) while k=1e6 pins them at -0.00 deg.
+  # min = -2 deg beats tighter bands: the solve is non-convex and a narrow barrier is jumped
+  # (k=1e6 with min=-0.1 deg gave 3.29% overlap where min=-2 deg gave 0.03%).
+  # ⚠ LIMITATION: this barrier acts on BONDED pairs only. Two tiles that are not hinged to each
+  # other can still pass through, and the angle model cannot see it. That is the source of the
+  # ~0.03% residual overlap seen even when every hinge sits at theta >= 0, and it is why the
+  # harvest keeps an independent geometric gate rather than trusting the contact model alone.
   use_contact: true
-  k_contact: 1000.0
+  k_contact: 1000000.0
   min_angle: -0.0349         # rad = -2 deg; asymptote just below the closed state
   cutoff_angle: 0.0          # barrier is exactly zero for every OPEN hinge
   linearized_strains: true
