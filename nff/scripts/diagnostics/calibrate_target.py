@@ -84,32 +84,38 @@ def deploy(config, load_scale: float, n_steps: int = 12):
 
 
 def solve_load_for_angle(config, angle_deg: float, *, n_steps: int = 12, tol: float = 0.05,
-                         max_iter: int = 40, verbose: bool = True):
-    """Bisect the load scale until the MEAN relative hinge rotation hits ``angle_deg``.
+                         max_iter: int = 40, criterion: str = "max", verbose: bool = True):
+    """Bisect the load scale until the relative hinge rotation reaches ``angle_deg``.
 
-    Mean, not max: the angle is a property of the sheet, and the per-hinge spread is tight enough
-    (<1 deg at 45) that the choice barely matters -- but the spread is reported so it can be checked
-    rather than assumed.
+    ``criterion='max'`` (default) drives the WORST hinge to the angle. That is the right reading of
+    a deployment-angle spec: it is a CEILING the material imposes, not a value every hinge must
+    hit. The distinction is invisible when the sheet opens uniformly (the distributed 3-tile grip
+    holds every hinge inside 2.3 deg, so mean and max agree to half a degree) and decisive when it
+    does not -- a single-tile grip funnels everything through one column, and bisecting on the MEAN
+    there asks the loaded hinges to go to 80+ deg, tearing the sheet apart, to drag the mean up.
+
+    ``criterion='mean'`` is kept for the uniform case, where it is the sheet-level number.
     """
+    reduce = (lambda t: t.max()) if criterion == "max" else (lambda t: t.mean())
     lo, hi = 1e-3, 1.0
     theta_hi, _, _ = deploy(config, hi, n_steps)
-    while theta_hi.mean() < angle_deg and hi < 1e5:      # bracket from above first
+    while reduce(theta_hi) < angle_deg and hi < 1e5:      # bracket from above first
         hi *= 4.0
         theta_hi, _, _ = deploy(config, hi, n_steps)
-    if theta_hi.mean() < angle_deg:
+    if reduce(theta_hi) < angle_deg:
         raise SystemExit(f"the mechanism saturates below {angle_deg} deg "
-                         f"(reached {theta_hi.mean():.2f} deg at {hi:g}x load) -- it cannot get there")
+                         f"(reached {reduce(theta_hi):.2f} deg at {hi:g}x load) -- it cannot get there")
     best = None
     for _ in range(max_iter):
         mid = np.sqrt(lo * hi)                           # geometric bisection: load spans decades
         theta, flat, depl = deploy(config, mid, n_steps)
         best = (mid, theta, flat, depl)
         if verbose:
-            print(f"    load x{mid:9.4f}  theta_mean {theta.mean():6.2f} deg  "
-                  f"[{theta.min():.2f}, {theta.max():.2f}]")
-        if abs(theta.mean() - angle_deg) < tol:
+            print(f"    load x{mid:9.4f}  theta_{criterion} {reduce(theta):6.2f} deg  "
+                  f"(mean {theta.mean():.2f}, spread {theta.max()-theta.min():.2f})")
+        if abs(reduce(theta) - angle_deg) < tol:
             break
-        lo, hi = (mid, hi) if theta.mean() < angle_deg else (lo, mid)
+        lo, hi = (mid, hi) if reduce(theta) < angle_deg else (lo, mid)
     return best
 
 
@@ -117,7 +123,10 @@ def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--config", required=True)
-    p.add_argument("--angle", type=float, default=45.0, help="target deployment angle [deg]")
+    p.add_argument("--angle", type=float, default=45.0, help="deployment angle [deg]")
+    p.add_argument("--criterion", choices=("max", "mean"), default="max",
+                   help="drive the WORST hinge to --angle (max, default: the angle is a material "
+                        "CEILING) or the sheet average (mean)")
     p.add_argument("--steps", type=int, default=12, help="load steps in each trial deploy")
     p.add_argument("--tol", type=float, default=0.05, help="angle tolerance [deg]")
     args = p.parse_args()
@@ -143,12 +152,14 @@ def main():
     lam_y = opening_ratio(psi_y, args.angle)
     print(f"\n  OPENING RATIO at theta = {args.angle:g} deg:  lam_x = {lam_x:.4f}   lam_y = {lam_y:.4f}")
 
-    print(f"\n  solving for the load that reaches {args.angle:g} deg ...")
+    print(f"\n  solving for the load whose {args.criterion.upper()} hinge angle is "
+          f"{args.angle:g} deg ...")
     scale, theta, flat, depl = solve_load_for_angle(config, args.angle, n_steps=args.steps,
-                                                    tol=args.tol)
+                                                    tol=args.tol, criterion=args.criterion)
     base = [float(l['value']) for l in topo.get('loads', [])]
-    print(f"\n  LOAD  x{scale:.4f}  ->  " + ", ".join(f"{b*scale:.2f} N" for b in base) +
-          f"   (theta_mean {theta.mean():.2f} deg, spread {theta.max()-theta.min():.2f} deg)")
+    print(f"\n  LOAD  x{scale:.4f}  ->  " + ", ".join(f"{b*scale:.2f} N" for b in base))
+    print(f"    hinge angle: max {theta.max():.2f}  mean {theta.mean():.2f}  min {theta.min():.2f}"
+          f"  spread {theta.max()-theta.min():.2f} deg")
 
     w0 = flat[:, 0].max() - flat[:, 0].min()
     h0 = flat[:, 1].max() - flat[:, 1].min()

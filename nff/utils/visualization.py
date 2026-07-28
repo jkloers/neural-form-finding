@@ -624,13 +624,24 @@ def write_deformed_into(tessellation, node_positions):
 
 
 def plot_loading_diagram(tessellation, clamped_faces, load_specs, filepath,
-                         title="Loading"):
+                         title="Loading", clamped_dofs=None):
     """One clean schematic of the boundary conditions and applied loads.
 
-    Clamped faces are greyed with a hatched fixed-support wall; a distributed edge
-    pull (dof 0) is drawn as a comb of uniform arrows just outside the loaded edge;
-    point loads (dof 1) are single bold arrows at the loaded tile. No per-face arrow
-    clutter — exactly one legible loading picture.
+    Clamped faces are greyed and backed by a hatched fixed-support wall; loads are single bold
+    arrows drawn OUTSIDE the loaded tile, pointing the way the force pushes or pulls.
+
+    Everything here is derived from the actual boundary conditions — nothing about the layout is
+    assumed. Two things used to be hard-coded and were wrong for any edge but the left one:
+
+    * The wall was always a VERTICAL bar at the leftmost clamped vertex, spanning the FULL height
+      of the structure. A bottom-edge clamp was therefore drawn as a left-hand wall running past
+      tiles it does not hold. The wall now takes its normal from the clamped translation DOFs
+      (fixing y -> a floor, fixing x -> a side wall), sits on whichever side of the structure the
+      clamped faces are actually on, and spans only those faces.
+    * An upward load was drawn BELOW its tile (an arrow pushing up into it). For a pull on the top
+      edge that puts the arrow in the middle of the sheet, reading as a load on the tiles it
+      overlaps. Arrows are now placed on the side the force points toward, tail on the tile's outer
+      edge and head away from it, so a pull looks like a pull and never overlaps another tile.
 
     Args:
         tessellation: the tessellation to draw (typically the deployed state).
@@ -638,6 +649,8 @@ def plot_loading_diagram(tessellation, clamped_faces, load_specs, filepath,
         load_specs: list of {face, dof, value} load dicts.
         filepath: output PNG path.
         title: figure title.
+        clamped_dofs: DOF indices the clamp fixes (0=x, 1=y, 2=theta). ``None`` -> all three.
+            Only the translational ones orient the wall.
     """
     clamped = {int(f) for f in (clamped_faces or [])}
     colors = ["#9AA3AB" if i in clamped else "#F7C59F" for i in range(len(tessellation.faces))]
@@ -664,29 +677,33 @@ def plot_loading_diagram(tessellation, clamped_faces, load_specs, filepath,
         for fi in (f if isinstance(f, (list, tuple, np.ndarray)) else [f]):
             specs.append({**s, 'face': int(fi)})
 
-    # Distributed pull (dof 0) — comb of uniform arrows + a tail bracket.
-    pull = [s for s in specs if int(s.get('dof', -1)) == 0 and float(s.get('value', 0.0)) != 0.0]
-    if pull:
-        xa = max(fv(s['face'])[:, 0].max() for s in pull) + 0.03 * span
-        ys = [fv(s['face'])[:, 1].mean() for s in pull]
-        for cy in ys:
-            ax.annotate('', xy=(xa + L, cy), xytext=(xa, cy),
-                        arrowprops=dict(arrowstyle='-|>', color=RED, lw=2.0, mutation_scale=14), zorder=30)
-        ax.plot([xa, xa], [min(ys), max(ys)], color=RED, lw=2.5, zorder=29)
-
-    # Point loads (dof 1) — single bold arrow per loaded tile.
-    for s in specs:
-        if int(s.get('dof', -1)) == 1 and float(s.get('value', 0.0)) != 0.0:
-            p = fv(s['face'])
-            cx = p[:, 0].mean()
-            if float(s['value']) < 0:           # downward
-                y_anchor = p[:, 1].max() + 0.02 * span
-                ax.annotate('', xy=(cx, y_anchor), xytext=(cx, y_anchor + 1.7 * L),
-                            arrowprops=dict(arrowstyle='-|>', color=RED, lw=3.2, mutation_scale=22), zorder=31)
-            else:                               # upward
-                y_anchor = p[:, 1].min() - 0.02 * span
-                ax.annotate('', xy=(cx, y_anchor), xytext=(cx, y_anchor - 1.7 * L),
-                            arrowprops=dict(arrowstyle='-|>', color=RED, lw=3.2, mutation_scale=22), zorder=31)
+    # In-plane loads (dof 0 = x, dof 1 = y) — one bold arrow per loaded tile, drawn OUTSIDE the
+    # tile on the side the force points, tail on the tile edge and head away from it. A tail
+    # bracket joins them when several tiles share the same load (a distributed edge pull).
+    for dof in (0, 1):
+        pulled = [s for s in specs
+                  if int(s.get('dof', -1)) == dof and float(s.get('value', 0.0)) != 0.0]
+        if not pulled:
+            continue
+        sign = 1.0 if float(pulled[0]['value']) > 0 else -1.0
+        # Anchor on the extreme edge of the loaded set along the load axis, on the side it points
+        # to, so the arrows leave the structure instead of crossing it.
+        edges = [fv(s['face'])[:, dof] for s in pulled]
+        a0 = (max(e.max() for e in edges) + 0.02 * span if sign > 0
+              else min(e.min() for e in edges) - 0.02 * span)
+        perp = 1 - dof
+        cs = [fv(s['face'])[:, perp].mean() for s in pulled]
+        for c in cs:
+            tail = (a0, c) if dof == 0 else (c, a0)
+            head = (a0 + sign * 1.7 * L, c) if dof == 0 else (c, a0 + sign * 1.7 * L)
+            ax.annotate('', xy=head, xytext=tail,
+                        arrowprops=dict(arrowstyle='-|>', color=RED, lw=3.2, mutation_scale=22),
+                        zorder=31)
+        if len(cs) > 1:                          # bracket tying a distributed pull together
+            if dof == 0:
+                ax.plot([a0, a0], [min(cs), max(cs)], color=RED, lw=2.5, zorder=29)
+            else:
+                ax.plot([min(cs), max(cs)], [a0, a0], color=RED, lw=2.5, zorder=29)
 
     # Moments (dof 2) — curved arrow at the loaded tile (CCW = +, CW = -).
     for s in specs:
@@ -702,11 +719,38 @@ def plot_loading_diagram(tessellation, clamped_faces, load_specs, filepath,
             ax.annotate('', xy=(xs[-1], ys[-1]), xytext=(xs[-3], ys[-3]),
                         arrowprops=dict(arrowstyle='-|>', color=RED, lw=2.2, mutation_scale=16), zorder=31)
 
-    # Fixed-support wall on the clamped edge.
+    # Fixed-support wall behind the clamped faces. Orientation comes from WHICH translation the
+    # clamp fixes: fixing y is a floor/ceiling, fixing x is a side wall. When it fixes both, the
+    # wall is put on whichever axis the clamped tiles sit furthest out along, since that is the
+    # edge a physical clamp would grip.
     if clamped:
-        wx = min(fv(i)[:, 0].min() for i in clamped)
-        ax.add_patch(Rectangle((wx - 0.06 * span, y0), 0.05 * span, y1 - y0,
-                               facecolor="#6C757D", edgecolor="#6C757D", hatch="////", lw=0, alpha=0.55, zorder=2))
+        cd = [int(d) for d in (clamped_dofs if clamped_dofs is not None else (0, 1, 2))]
+        trans = [d for d in cd if d in (0, 1)]
+        pts = np.concatenate([fv(i) for i in clamped], axis=0)
+        centre_all = np.array([(x0 + x1) / 2.0, (y0 + y1) / 2.0])
+        offset = pts.mean(axis=0) - centre_all           # which way the clamped tiles lie
+        if len(trans) == 1:
+            axis = trans[0]
+        elif trans:
+            axis = int(np.argmax(np.abs(offset / np.maximum([x1 - x0, y1 - y0], 1e-9))))
+        else:
+            axis = None                                   # rotation-only clamp: no wall to draw
+        if axis is not None:
+            side = 1.0 if offset[axis] >= 0 else -1.0     # outward direction along that axis
+            a = pts[:, axis].max() if side > 0 else pts[:, axis].min()
+            perp = 1 - axis
+            lo, hi = pts[:, perp].min(), pts[:, perp].max()
+            pad = 0.04 * span
+            t = 0.05 * span                               # wall thickness
+            base = a + side * 0.01 * span                 # inner face of the wall
+            if axis == 0:                                 # vertical wall (clamp fixes x)
+                xy = (base, lo - pad) if side > 0 else (base - t, lo - pad)
+                w, h = t, (hi - lo) + 2 * pad
+            else:                                         # horizontal wall (clamp fixes y)
+                xy = (lo - pad, base) if side > 0 else (lo - pad, base - t)
+                w, h = (hi - lo) + 2 * pad, t
+            ax.add_patch(Rectangle(xy, w, h, facecolor="#6C757D", edgecolor="#6C757D",
+                                   hatch="////", lw=0, alpha=0.55, zorder=2))
 
     ax.set_xlim(x0 - 0.14 * span, x1 + 0.28 * span)
     ax.set_ylim(y0 - 0.16 * span, y1 + 0.22 * span)

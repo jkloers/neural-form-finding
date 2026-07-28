@@ -275,7 +275,8 @@ def main():
     # One clean loading schematic.
     plot_loading_diagram(s2, config.topology.get('bc_clamped', []), bc_specs,
                          os.path.join(run_dir, "loading_diagram.png"),
-                         title="Prescribed displacement" if disp_specs and not load_specs else "Loading")
+                         title="Prescribed displacement" if disp_specs and not load_specs else "Loading",
+                         clamped_dofs=config.topology.get('clamped_dofs'))
 
     # ── Training-evolution animation. ──
     frames = []

@@ -59,8 +59,8 @@ tessellation:
   # envelope — reachable, which is the whole point. Anchored with its bottom edge ON the deployed
   # bottom edge (y_lo = -0.1377): the clamped tiles cannot leave it, so a target floating above or
   # below would put the clamp permanently outside and make its chamfer error unfixable.
-  target_cx: 1.5442
-  target_cy: 3.2080
+  target_cx: 1.5433
+  target_cy: 3.2086
   target_half_w: 2.5339
   target_half_h: 3.3457
 
@@ -131,20 +131,24 @@ boundary_conditions:
 
 loads:                       # top edge (j = 2) pulled +y — distributed, not a single grip. The
                              # clamp is the opposite (bottom) edge: pull one side against the other.
-  # ★ 60 N/tile SETS THE 45 deg DEPLOYMENT with the calibrated springs — measured theta_mean =
-  # 45.01 deg (per-hinge spread 2.3 deg, i.e. the whole sheet opens together). The bisection in
-  # calibrate_target.py lands on 59.60 N; 60.0 is kept because the 0.7% difference is 0.06 deg.
-  # Angle vs load (untrained, mean relative hinge rotation):
+  # ★ 55.33 N/tile PUTS THE WORST HINGE AT 45 deg. The deployment angle is a CEILING the material
+  # imposes, not a value every hinge must hit, so the load is calibrated on theta_MAX
+  # (`calibrate_target.py --criterion max`, the default). Measured here: max 44.96, mean 44.35,
+  # min 42.67 — spread 2.29 deg, i.e. the whole sheet opens together, so mean and max barely
+  # differ and the criterion is nearly moot. It is NOT moot for a single-tile grip: see
+  # `sheet_4x8ft_rom_1tile.yaml`, where bisecting on the mean demands 172 kN and drives the worst
+  # hinge to 82 deg. (Bisecting on the mean here would give 59.60 N and theta_max 45.6.)
+  # Angle vs load (untrained, MEAN relative hinge rotation):
   #     15 N -> 29.0 deg | 30 -> 37.9 | 60 -> 45.0 | 120 -> 49.0 | 600 -> 52.3 | 6000 -> 53.0
   # It SATURATES at 53.1 deg = 2*psi_y, the kinematic lock of the short axis — not a spring effect,
   # and no load can pass it. The 40-45 deg band is therefore F in [35, 60] N/tile.
-  - {face: 2, dof: 1, value: 60.0}
-  - {face: 5, dof: 1, value: 60.0}
-  - {face: 8, dof: 1, value: 60.0}
+  - {face: 2, dof: 1, value: 55.33}
+  - {face: 5, dof: 1, value: 55.33}
+  - {face: 8, dof: 1, value: 55.33}
 
 target:                      # fallback TargetConfig; run_closed overrides it with the rectangle above
   type: rectangle
-  center: [1.5442, 3.2080]
+  center: [1.5433, 3.2086]
   radius: 3.3457
 
 loss_weights:
