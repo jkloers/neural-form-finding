@@ -116,10 +116,10 @@ def build_deploy_structure(M: int, N: int):
             "les_idx": _les_assembly_indices(T)}
 
 
-def boundary_points_flat(struct, spacing: float = 1.0) -> np.ndarray:
-    """(P, 2) array with boundary-cut positions filled (uniform square), 0 elsewhere."""
+def boundary_points_flat(struct, spacing: float = 1.0, spacing_y: float | None = None) -> np.ndarray:
+    """(P, 2) array with boundary-cut positions filled (uniform grid), 0 elsewhere."""
     T, cols, P = struct["T"], struct["cols"], struct["P"]
-    bpts = build_square_boundary_points(T, spacing=spacing)
+    bpts = build_square_boundary_points(T, spacing=spacing, spacing_y=spacing_y)
     flat = np.zeros((P, 2), dtype=float)
     for (i, j), xy in bpts.items():
         base = 2 * (i * cols + j)
@@ -135,17 +135,21 @@ def boundary_points_flat(struct, spacing: float = 1.0) -> np.ndarray:
 # tessellation is GUARANTEED non-self-intersecting for any r in (0, 1), with no
 # validity loss and full placement freedom along each edge.
 
-def build_boundary_edges(struct, spacing: float = 1.0):
+def build_boundary_edges(struct, spacing: float = 1.0, spacing_y: float | None = None):
     """Group non-corner boundary cuts by edge, in order, for monotonic sliders.
+
+    ``spacing_y`` (default ``spacing``) sets the y pitch independently, so the
+    sliders span the true rectangle edges of an elongated-panel sheet.
 
     Returns a dict with the (P, 2) template (corners filled), a list of edges
     (each with ordered point indices, free axis, and [lo, hi] span), the per-edge
     logit counts, and an all-zeros init that reproduces the uniform grid spacing.
     """
     T, rows, cols = struct["T"], struct["rows"], struct["cols"]
-    template = boundary_points_flat(struct, spacing=spacing)
+    sy = spacing if spacing_y is None else spacing_y
+    template = boundary_points_flat(struct, spacing=spacing, spacing_y=sy)
     x_max = (rows - 1) * spacing      # bottom/top edges span x
-    y_max = (cols - 1) * spacing      # left/right edges span y
+    y_max = (cols - 1) * sy           # left/right edges span y
 
     edges = []
     for j in (0, cols - 1):           # bottom, top — sliders vary in i (x)

@@ -193,7 +193,11 @@ def build_run_cut_geometry(initial_state, cut_coords, struct, config, hinge_mode
     w_lig_mm = float(getattr(hinge_model, 'w_lig_mm', 5.0))
     spacing = float(config.topology.get('spacing', 1.0))
     fillet_ratio = float(getattr(hinge_model, 'fillet_ratio', 0.16) or 0.16)   # may be unset/None
-    length_scale = _PHYS_TILE * w_lig_mm / spacing
+    # Physical scale: an explicit stock size wins (a real sheet is cut to a real width), otherwise
+    # fall back to the w_lig ~ 1/10 tile convention.
+    sheet_w_mm = float(config.topology.get('sheet_width_mm', 0.0) or 0.0)
+    length_scale = (sheet_w_mm / (int(config.topology['M']) * spacing) if sheet_w_mm > 0.0
+                    else _PHYS_TILE * w_lig_mm / spacing)
     w_c = float(w_c_mm) if w_c_mm is not None else _W_C_MM
     T, cols = np.asarray(struct['T']), struct['cols']
     hinge_lookup, w_lig = _per_hinge_lookup(initial_state, hinge_w_lig, w_lig_mm,

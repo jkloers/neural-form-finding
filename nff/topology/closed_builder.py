@@ -83,26 +83,33 @@ def build_topology_matrix(M: int, N: int) -> Int[np.ndarray, "M+1 N+1"]:
 
 def build_square_boundary_points(
         T: Int[np.ndarray, "M N"],
-        spacing: float = 1.0) -> dict:
-    """Place every boundary cut at its grid position, forming a square sheet.
+        spacing: float = 1.0,
+        spacing_y: float | None = None) -> dict:
+    """Place every boundary cut at its grid position, forming a rectangular sheet.
 
     Boundary cuts (``T < 0``) are pinned to these coordinates; interior cuts are
     solved from the LES. Useful as the canonical validation case: a uniform
     square outline.
 
+    A separate ``spacing_y`` gives elongated panels, so a sheet aspect ratio that
+    is not ``M:N`` (e.g. 3x3 panels on a 1:2 sheet) is reachable without adding
+    panels. Any convex outline keeps the Tutte-embedding validity guarantee.
+
     Args:
         T: Topology matrix from ``build_topology_matrix``.
-        spacing: Physical grid spacing.
+        spacing: Grid pitch along x.
+        spacing_y: Grid pitch along y; defaults to ``spacing`` (square panels).
 
     Returns:
         Mapping ``(i, j) -> (2,) float`` for every boundary cut.
     """
+    sy = spacing if spacing_y is None else spacing_y
     M, N = T.shape
     boundary_points = {}
     for i in range(M):
         for j in range(N):
             if T[i, j] < 0:
-                boundary_points[(i, j)] = np.array([i * spacing, j * spacing], dtype=float)
+                boundary_points[(i, j)] = np.array([i * spacing, j * sy], dtype=float)
     return boundary_points
 
 
@@ -367,6 +374,7 @@ def build_closed_tessellation(
         boundary_points: dict | None = None,
         r=0.4,
         spacing: float = 1.0,
+        spacing_y: float | None = None,
         k_stretch: float = 1.0,
         k_shear: float = 1.0,
         k_rot: float = 1.0) -> Tessellation:
@@ -381,7 +389,9 @@ def build_closed_tessellation(
         boundary_points: ``(i, j) -> (2,)`` for boundary cuts. Defaults to a
             uniform square outline at grid positions.
         r: Per-cut aspect ratio, scalar or ``(M+1, N+1)`` array.
-        spacing: Grid spacing for the default square boundary.
+        spacing: Grid pitch along x for the default outline.
+        spacing_y: Grid pitch along y; defaults to ``spacing``. Set it to give the
+            sheet an aspect ratio other than ``M:N`` (elongated panels).
         k_stretch, k_shear, k_rot: Default hinge stiffnesses.
 
     Returns:
@@ -389,7 +399,7 @@ def build_closed_tessellation(
     """
     T = build_topology_matrix(M, N)
     if boundary_points is None:
-        boundary_points = build_square_boundary_points(T, spacing=spacing)
+        boundary_points = build_square_boundary_points(T, spacing=spacing, spacing_y=spacing_y)
 
     cut_vertices = solve_cut_vertices(T, boundary_points, r)
     vertices, faces, corner_pid = _assemble_panels(T, cut_vertices)
