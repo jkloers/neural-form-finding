@@ -82,16 +82,33 @@ def run_rehearsal(parallel, timeout):
 def run_campaign(args):
     const = HingeConstants(fillet_ratio=args.fillet_ratio, n_through=args.n_through,
                            thickness=args.thickness, r_win=args.r_win, material=args.material,
-                           lc_fillet_frac=args.lc_fillet_frac, lc_min_floor=args.lc_min_floor)
-    jobs = sample_jobs(args.n, seed=args.seed, n_steps=args.steps,
-                       theta1_deg=(args.angle, args.angle),
-                       w_lig=(args.w_lig_min, args.w_lig_max),
-                       eta_a=(0.0, args.eta_a_max), eta_s=(-args.eta_s_max, args.eta_s_max),
-                       fillet_ratio=(args.fillet_min, args.fillet_max), spine_frac=args.spine_frac)
-    print(f"Campaign: {args.n} jobs (t={const.thickness}mm, w_lig=[{args.w_lig_min},{args.w_lig_max}]mm, "
-          f"fillet=[{args.fillet_min},{args.fillet_max}], n_through={const.n_through}, to {args.angle:.0f}deg, "
-          f"eta_a<={args.eta_a_max} |eta_s|<={args.eta_s_max}, fracture_margin={args.fracture_margin}) "
-          f"-> {args.out}.npz")
+                           lc_fillet_frac=args.lc_fillet_frac, lc_min_floor=args.lc_min_floor,
+                           el_fields=args.el_fields)
+    if args.path_prior:
+        # aim at the region the deployed sheet actually visits, in PHYSICAL mm -- see nff.rve.path_prior
+        env = measure_envelope(args.path_prior, q=args.envelope_trim)
+        jobs = sample_campaign_jobs(args.n, env, seed=args.seed, n_steps=args.steps,
+                                    w_lig=(args.w_lig_min, args.w_lig_max),
+                                    fillet_ratio=args.fillet_ratio, spine_frac=args.spine_frac,
+                                    inflate_frac=args.inflate_frac, inflate=args.inflate)
+        print(f"Campaign: {args.n} jobs aimed at {env.source} ({env.n_points} measured points)")
+        print(f"  envelope  a [{env.a[0]:+.2f}, {env.a[1]:+.2f}] mm   s [{env.s[0]:+.2f}, "
+              f"{env.s[1]:+.2f}] mm   theta [0, {env.theta_deg[1]:.1f}] deg   "
+              f"alpha [{env.alpha_deg[0]:.0f}, {env.alpha_deg[1]:.0f}] deg")
+        print(f"  {args.spine_frac:.0%} free-DOF spine (theta driven, a & s chosen by the solver) + "
+              f"fan, {args.inflate_frac:.0%} of it over a x{args.inflate:g} envelope")
+    else:
+        jobs = sample_jobs(args.n, seed=args.seed, n_steps=args.steps,
+                           theta1_deg=(args.angle, args.angle),
+                           w_lig=(args.w_lig_min, args.w_lig_max),
+                           eta_a=(0.0, args.eta_a_max), eta_s=(-args.eta_s_max, args.eta_s_max),
+                           fillet_ratio=(args.fillet_min, args.fillet_max),
+                           spine_frac=args.spine_frac)
+        print(f"Campaign: {args.n} jobs on the LEGACY eta box "
+              f"(eta_a<={args.eta_a_max} |eta_s|<={args.eta_s_max}, to {args.angle:.0f}deg)")
+    print(f"  t={const.thickness}mm  w_lig=[{args.w_lig_min},{args.w_lig_max}]mm  "
+          f"r_win={const.r_win}mm  n_through={const.n_through}  material={const.material.name}  "
+          f"eps_f={const.eps_f}  -> {args.out}.npz")
     summary = generate_dataset(jobs, args.out, const, n_parallel=args.parallel,
                                timeout=args.timeout, batch_size=args.batch_size,
                                fracture_margin=args.fracture_margin)
@@ -102,6 +119,8 @@ def run_campaign(args):
     dt = summary["delta_tear"]
     print(f"  Delta_tear    : {'—  (nothing tore)' if dt is None else f'{dt:.3f}'}"
           f"  (n={summary['n_tear_observations']} torn jobs)   <- the calibrated fracture line")
+    print(f"  stopped       : " + "  ".join(f"{k} {v}" for k, v in
+                                             sorted(summary.get("stop_reasons", {}).items())))
     print(f"  wrote {args.out}.npz + {args.out}.json")
 
 
@@ -121,7 +140,18 @@ def main():
     ap.add_argument("--angle", type=float, default=60.0, help="full-deployment rotation [deg]")
     ap.add_argument("--fillet-ratio", dest="fillet_ratio", type=float, default=0.16)
     ap.add_argument("--n-through", dest="n_through", type=int, default=2)
-    ap.add_argument("--material", default="steel", choices=["steel", "pet", "paper"],
+    ap.add_argument("--path-prior", dest="path_prior", default=None,
+                    help="harvest dir to take the sampling ENVELOPE from (physical mm). Without it "
+                         "the legacy eta box is used, which excludes compression entirely.")
+    ap.add_argument("--envelope-trim", dest="envelope_trim", type=float, default=0.5,
+                    help="percent trimmed off each tail of the measured envelope")
+    ap.add_argument("--inflate", type=float, default=1.5,
+                    help="extrapolation margin on the translation axes (theta is capped at 90 deg)")
+    ap.add_argument("--inflate-frac", dest="inflate_frac", type=float, default=0.30,
+                    help="fraction of FAN jobs drawn from the inflated envelope")
+    ap.add_argument("--el-fields", dest="el_fields", default="PEEQ, S",
+                    help="*EL FILE list; the default drops E (parsed but never reaches a column)")
+    ap.add_argument("--material", required=True, choices=["steel", "pet", "paper"],
                     help="RVE material; sets the constitutive cards AND eps_f (the damage "
                          "normaliser and the stop-at-fracture threshold)")
     # geometry + displacement envelope (exposed so a deeper campaign is one command)

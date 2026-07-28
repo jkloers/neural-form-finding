@@ -319,7 +319,12 @@ def _write_deck(path, xyz, conn, arcA, arcB, pivot, mat, states, elastic_only, f
 
 
 def _parse_dat(path):
-    """Per output time: stored energy W and the raw arc-B reactions [(node, fx, fy), ...]."""
+    """Per output time: stored energy W, arc-B reactions, and the rigid-body driver node records.
+
+    ``drive_u`` / ``drive_rf`` hold the two NDRIVE rows (reference node then rotation node) when the
+    arc is driven through a ``*RIGID BODY``. For a job with free DOF those are the only place the
+    SOLVER-CHOSEN (a, s) appear -- the deck imposed nothing there, so the state has to be read back.
+    """
     res = {}
     mode, t = None, None
     for ln in open(path):
@@ -328,6 +333,12 @@ def _parse_dat(path):
         if "forces (fx,fy,fz) for set ARCB and time" in ln:
             t = float(ln.split("time")[1]); mode = "F"
             res.setdefault(t, {})["rf"] = []; continue
+        if "for set NDRIVE and time" in ln:
+            t = float(ln.split("time")[1])
+            mode = "DU" if "displacements" in ln else ("DF" if "forces" in ln else None)
+            if mode:
+                res.setdefault(t, {})["drive_u" if mode == "DU" else "drive_rf"] = []
+            continue
         s = ln.split()
         if mode == "E" and len(s) == 1:
             try:
@@ -337,6 +348,12 @@ def _parse_dat(path):
         elif mode == "F" and len(s) >= 4:
             try:
                 res[t]["rf"].append((int(s[0]), float(s[1]), float(s[2])))
+            except ValueError:
+                mode = None
+        elif mode in ("DU", "DF") and len(s) >= 4:
+            key = "drive_u" if mode == "DU" else "drive_rf"
+            try:
+                res[t][key].append((int(s[0]), float(s[1]), float(s[2]), float(s[3])))
             except ValueError:
                 mode = None
     return res
@@ -497,6 +514,14 @@ def parse_job(meta, stdout=""):
     # correct labelling, since (a, s) no longer track theta.
     u = _states_at_times(meta["states"], times)
     a_imp, s_imp, theta = u[:, 0], u[:, 1], u[:, 2]
+    if meta.get("free_dofs"):
+        # a and/or s were NOT imposed -- read what the solver chose off the reference node, whose
+        # translations are (a, s) because it sits on the pivot. Rows: reference node, rotation node.
+        for i, t in enumerate(times):
+            du = dat[t].get("drive_u") or []
+            if len(du) >= 2:
+                a_imp[i], s_imp[i] = du[0][1], du[0][2]
+                theta[i] = du[1][3]
     theta_deg = np.degrees(theta)
     W = np.array([dat[t].get("W", np.nan) for t in times])
     Fa, Fs, Mt = [], [], []

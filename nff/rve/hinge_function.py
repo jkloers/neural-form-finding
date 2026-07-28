@@ -129,6 +129,10 @@ class DeploymentRay:
     eta_s: float = 0.0                                # shear neck-strain ratio: s1 = eta_s * w_lig
     n_steps: int = 20
     tag: str = ""
+    free_dofs: tuple = ()                             # subset of {"a","s"} left UNPRESCRIBED
+    # ^ with free DOF the arc is driven through a *RIGID BODY reference node on the pivot and the
+    # solver picks the translation that minimises energy at each imposed rotation -- a least-energy
+    # route from the physics, not one inherited from the ROM. eta_a/eta_s are then ignored.
 
     def targets(self, geo: HingeGeometry):
         """(a1, s1, theta1_deg) full-deployment handle motion for this geometry."""
@@ -254,6 +258,7 @@ def solver_kwargs(geo: HingeGeometry, ray: DeploymentRay, const: HingeConstants)
     # Always drive the oracle from an explicit state list, so a DeploymentRay and a replayed
     # DeploymentPath take the SAME code path (the ray's states are the proportional ramp).
     return dict(angle_deg=theta1_deg, n_steps=ray.n_steps, a=a1, s=s1, states=ray.states(geo),
+                free_dofs=tuple(getattr(ray, "free_dofs", ())),
                 n_through=const.n_through, material=const.material,
                 imp_amp=const.imp_amp, min_inc=const.min_inc, stabilize=const.stabilize,
                 arcB_uz_free=const.arcB_uz_free, field_freq=const.field_freq,
