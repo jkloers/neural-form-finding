@@ -14,6 +14,11 @@ data/*
 
 # SOFA / CalculiX simulation + dataset outputs (regenerable, large)
 sofa/output/
+# CalculiX scratch job dirs written next to the diagnostic that spawned them.
+# A single deck is ~3.3 MB of generated mesh; regenerate, never commit.
+ccx_*_job*/
+*.frd
+*.inp
 
 # Claude
 *CLAUDE.md
