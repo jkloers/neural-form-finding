@@ -6,7 +6,7 @@ Strain can come from two sources:
   gauge lengths used here (~103 mm) with soft tape tabs, ~3/4 of the crosshead
   travel is machine + tab + toe, NOT specimen, so the modulus reads ~1 GPa vs the
   true ~3 GPa (protocol §13.5). A ``C_machine`` compliance term partly corrects it.
-* **Video extensometer** (:mod:`video_extensometer`) — true gauge strain, immune to
+* **Video extensometer** (:mod:`ladder`) — true gauge strain, immune to
   machine/tab compliance. This is the trustworthy source for E.
 
 Force-based quantities (yield, draw-plateau, UTS) are computed from force / area and

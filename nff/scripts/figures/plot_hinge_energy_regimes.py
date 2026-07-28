@@ -23,20 +23,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 # ── project charter ───────────────────────────────────────────────────────────────
-ORANGE, TEAL, RED, GREY, INK = "#F58025", "#2A9D8F", "#D62828", "#6C757D", "#1A1A1A"
+from nff.utils.figstyle import ORANGE, TEAL, RED, GREY, INK, apply_charter
 ZONE = {"elastic": "#E7F1ED", "plastic": "#FBEBD3", "fracture": "#F7DEDE"}   # soft tints
 ZONE_LABEL = {"elastic": "Elastic", "plastic": "Plastic", "fracture": "Failure"}
-
-
-def apply_charter():
-    plt.rcParams.update({
-        "axes.spines.top": False, "axes.spines.right": False,
-        "axes.grid": True, "grid.alpha": 0.22, "grid.linewidth": 0.6,
-        "axes.edgecolor": INK, "axes.linewidth": 0.9, "axes.labelcolor": INK,
-        "text.color": INK, "xtick.color": GREY, "ytick.color": GREY,
-        "figure.facecolor": "white", "axes.facecolor": "white",
-        "legend.frameon": True, "legend.framealpha": 0.9, "legend.edgecolor": "#D3D6DB",
-    })   # note: no font-family override -- inherit the project/user default
 
 
 # (key, display transform, x-label, ROM term key, term label, symmetric-about-0?)

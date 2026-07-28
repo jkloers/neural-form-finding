@@ -18,7 +18,7 @@ from nff.rve.materials.pet import PETIsotropic
 
 SIM, REAL, FAIL, INK, MUTE, LIT = "#08519c", "#E8590C", "#D62828", "#212529", "#adb5bd", "#6C757D"
 D = "data/experiments/processed"
-EPS_F0 = PETIsotropic().eps_f0     # k = 0 for PET, so eps_f = eps_f0 whatever the stress state
+EPS_F0 = PETIsotropic().eps_f      # no triaxiality locus for PET, so eps_f is stress-state-independent
 W_LIG = 18.0
 WHITEN_THETA = 20.0                # first visible stress-whitening in the real fold (2026-07-26)
 

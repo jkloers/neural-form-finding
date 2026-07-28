@@ -15,7 +15,7 @@ Usage::
 Notes:
     * Crosshead strain is compliance-corrupted -> reported E is a LOWER BOUND unless
       ``--compliance`` (mm/N, from a known-E reference strip) is supplied, or a video
-      extensometer is used (see video_extensometer + the plan doc).
+      extensometer is used (see nff.calibration.ladder + the plan doc).
     * Area comes from the summary sheet, not the (possibly stale) Bluehill geometry.
 """
 from __future__ import annotations

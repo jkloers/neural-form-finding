@@ -33,13 +33,7 @@ jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 
 # ── Princeton palette (house standard; NO blue, per user pref) ──
-ORANGE = "#F58025"   # paper / cut pattern / r
-INK    = "#1A1A1A"   # cut / edges / text / backward pass
-RED    = "#D62828"   # loads / target / total loss
-GREY   = "#6C757D"   # clamp / secondary
-TEAL   = "#2A9D8F"   # hinges / physical loss
-PURPLE = "#6A4C93"   # boundary sliders s
-GREEN  = "#1F8A4C"   # Princeton green: deployed boundary points / geometric loss
+from nff.utils.figstyle import ORANGE, INK, RED, GREY, TEAL, PURPLE, GREEN, apply_charter
 CREAM  = "#FDF3E7"
 VIVID      = ORANGE      # outer physical cut patterns (a, e)
 LIGHT      = "#FBDDB6"   # inner-panel fill (b, c, d)
@@ -57,15 +51,9 @@ DMG_FILL   = "#F7DAD9"   # light red fill under the damage-loss training curve
 ENERGY_CMAP = LinearSegmentedColormap.from_list("hingeW", [CREAM, "#F9B266", ORANGE, RED, "#7A1010"])
 
 
-def apply_charter():
-    plt.rcParams.update({
-        "figure.facecolor": "white", "axes.facecolor": "white",
-        "axes.edgecolor": INK, "axes.linewidth": 0.8,
-        "xtick.color": GREY, "ytick.color": GREY,
-        "text.color": INK, "axes.labelcolor": INK,
-        "axes.spines.top": False, "axes.spines.right": False,
-        "font.size": 12, "savefig.facecolor": "white",
-    })
+# This plate is a schematic, not a plot: no grid, larger base font, thinner axes.
+_PLATE_RC = {"axes.grid": False, "axes.linewidth": 0.8, "font.size": 12,
+             "savefig.facecolor": "white"}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -735,51 +723,13 @@ def _damage_hinge_png(out="data/outputs/hinge_top_damage.png"):
     return out
 
 
-def _fea_hinge_png(out="data/outputs/hinge_top_fea.png"):
-    """Render a REAL CalculiX hinge RVE from the top (von Mises stored energy/damage). Idempotent."""
-    if os.path.exists(out):
-        return out
-    npz = "data/outputs/hinge_frames_w1p5.npz"
-    if not os.path.exists(npz):
-        return None
-    from nff.scripts.figures.render_hinge_3d import render
-    d = np.load(npz)
-    k = int(np.argmin(np.abs(d['damage'] - 0.6)))               # partially damaged: clear stress
-    render(d['xyz'], d['conn'], d['disp'][k], float(d['w_lig']), float(d['thickness']), 30.0,
-           out, elev=90, azim=-90, vm=d['vm'][k], vmin=0.0,
-           vmax=float(np.percentile(d['vm'][k], 99)), scale=False)
-    return out
-
-
-def detail_hinge_energy(ax, png):
-    """d: a REAL FEA (CalculiX) top view of one hinge RVE -- two faces joined by the ligament,
-    coloured by von Mises stress = where energy is stored and damage accrues."""
-    import matplotlib.image as mpimg
-    ax.axis("off")
-    if png is None or not os.path.exists(png):
-        ax.text(0.5, 0.5, "(FEA render unavailable)", ha="center", va="center", fontsize=8, color=GREY)
-        return
-    img = mpimg.imread(png)
-    a = img[..., 3] if img.shape[-1] == 4 else np.ones(img.shape[:2])
-    ys, xk = np.where(a > 0.02)
-    img = img[ys.min():ys.max() + 1, xk.min():xk.max() + 1]
-    H, W = img.shape[:2]
-    ax.imshow(img, zorder=2)
-    ax.set_xlim(-0.02 * W, 1.24 * W); ax.set_ylim(H * 1.02, -0.10 * H)
-    ax.text(W * 0.18, H * 0.66, "face", ha="center", fontsize=8, color="white", zorder=5)
-    ax.text(W * 0.82, H * 0.66, "face", ha="center", fontsize=8, color="white", zorder=5)
-    ax.annotate("stored energy\n+ damage", xy=(W * 0.50, H * 0.42), xytext=(W * 1.02, H * 0.20),
-                ha="left", va="center", fontsize=7.6, color=RED, zorder=6,
-                arrowprops=dict(arrowstyle="-|>", color=RED, lw=1.1, mutation_scale=8))
-    ax.set_title("hinge — von Mises stress (FEA)", fontsize=8.6, color=GREY, pad=1)
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Compose
 # ══════════════════════════════════════════════════════════════════════════════
 
 def build_figure(S, out_base):
-    apply_charter()
+    apply_charter(**_PLATE_RC)
     fig = plt.figure(figsize=(20, 10.6))
 
     pw = 0.142

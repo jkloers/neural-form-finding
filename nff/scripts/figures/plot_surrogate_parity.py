@@ -30,19 +30,9 @@ from nff.models.hinge_surrogate import (load_hinge_surrogate, apply_hinge_energy
 from nff.scripts.train_hinge_surrogate import load_dataset, split_by_job, check_force_sign
 
 # ── project charter (Princeton palette) ─────────────────────────────────────────
-ORANGE, TEAL, RED, GREY, INK = "#F58025", "#2A9D8F", "#D62828", "#6C757D", "#1A1A1A"
-TRAIN = "#C9CED4"   # faint background cloud
+from nff.utils.figstyle import ORANGE, TEAL, RED, GREY, INK, TRAIN, apply_charter
 
 
-def apply_charter():
-    plt.rcParams.update({
-        "axes.spines.top": False, "axes.spines.right": False,
-        "axes.grid": True, "grid.alpha": 0.22, "grid.linewidth": 0.6,
-        "axes.edgecolor": INK, "axes.linewidth": 0.9, "axes.labelcolor": INK,
-        "text.color": INK, "xtick.color": GREY, "ytick.color": GREY,
-        "figure.facecolor": "white", "axes.facecolor": "white",
-        "legend.frameon": True, "legend.framealpha": 0.9, "legend.edgecolor": "#D3D6DB",
-    })
 
 
 def _r2(true, pred):
