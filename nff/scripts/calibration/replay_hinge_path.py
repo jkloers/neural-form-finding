@@ -30,6 +30,27 @@ from nff.rve.materials import get_material
 REGIME_NAME = {0: "elastic", 1: "plastic", 2: "FAILED"}
 
 
+def resample_polyline(poly: np.ndarray, n: int, w_lig: float) -> np.ndarray:
+    """Re-space a polyline at uniform arc length, preserving its SHAPE exactly.
+
+    The harvest stores one point per ROM load step, and the ROM's first load step already spends
+    57% of the rotation (its k_rot is the buckled secant, so rotation is nearly free to it). Handing
+    those points to CalculiX one-per-*STEP would put more than half the deformation in a single
+    step. Plasticity is rate-independent -- only the ORDER of states matters -- so re-spacing along
+    the path is free of physical consequence and gives the solver an even walk.
+
+    Arc length uses the ligament-tip metric ``sqrt(da^2 + ds^2 + (w_lig*dtheta)^2)``, which puts the
+    rotation on the same footing as the translations instead of comparing mm with radians.
+    """
+    q = np.asarray(poly, float)
+    step = np.diff(q, axis=0) * np.array([1.0, 1.0, w_lig])
+    seg = np.r_[0.0, np.cumsum(np.linalg.norm(step, axis=1))]
+    if seg[-1] <= 0:
+        return q
+    tgt = np.linspace(0.0, seg[-1], n + 1)
+    return np.stack([np.interp(tgt, seg, q[:, j]) for j in range(3)], axis=1)
+
+
 def pick_path(prior_dir: str, seed: int):
     """One random measured polyline -> (a[mm], s[mm], theta[rad]) per point, plus its provenance.
 
@@ -77,6 +98,8 @@ def main() -> None:
     ap.add_argument("--stabilize", type=float, default=None)
     ap.add_argument("--ncpus", type=int, default=1)
     ap.add_argument("--timeout", type=float, default=1800)
+    ap.add_argument("--resample", type=int, default=30,
+                    help="re-space the polyline at uniform arc length into N steps; 0 = verbatim")
     ap.add_argument("--ray", action="store_true",
                     help="drive a straight proportional ray to the SAME endpoint (the A/B control)")
     ap.add_argument("--workdir", default=None)
@@ -85,6 +108,8 @@ def main() -> None:
 
     poly, alpha_deg, prov = pick_path(args.prior, args.seed)
     alpha_deg = args.alpha if args.alpha is not None else alpha_deg
+    if args.resample:
+        poly = resample_polyline(poly, args.resample, args.w_lig)
     states = poly[1:]                                  # the origin is implicit at t = 0
     if args.ray:                                       # same endpoint, straight route
         n = len(states)
@@ -99,7 +124,11 @@ def main() -> None:
 
     a1, s1, th1 = path.targets(geo)
     print(f"path {prov['prior']} example {prov['example']} hinge {prov['hinge']}  "
-          f"({'STRAIGHT RAY' if args.ray else 'measured polyline'}, {len(states)} states)")
+          f"({'STRAIGHT RAY' if args.ray else 'measured polyline'}, {len(states)} states"
+          f"{', arc-length resampled' if args.resample and not args.ray else ''})")
+    dth = np.degrees(np.diff(np.r_[0.0, states[:, 2]]))
+    print(f"  theta per step [deg]: max {dth.max():.2f}  min {dth.min():.2f}  "
+          f"first {dth[0]:.2f} ({100*dth[0]/max(dth.sum(), 1e-9):.0f}% of the total)")
     print(f"  endpoint a={a1:+.3f} mm  s={s1:+.3f} mm  theta={th1:.2f} deg   "
           f"peak theta {path.theta1_deg:.2f} deg")
     print(f"  geometry w_lig={geo.w_lig} mm  alpha={geo.alpha_deg:.1f} deg  t={const.thickness} mm  "

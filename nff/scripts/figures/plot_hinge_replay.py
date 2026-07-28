@@ -17,7 +17,7 @@ import json
 
 import numpy as np
 
-from nff.utils.figstyle import GREY, INK, ORANGE, RED, TEAL, apply_charter, use_agg
+from nff.utils.figstyle import GREY, INK, ORANGE, PURPLE, RED, TEAL, apply_charter, use_agg
 
 use_agg()
 import matplotlib.pyplot as plt                                          # noqa: E402
@@ -115,36 +115,62 @@ def plot_render(d, out_path, zoom=2.2):
 
 
 def plot_curves(d, out_path):
-    apply_charter()
-    th = d["theta_deg"]
-    eps_f = float(d["eps_f"])
-    fig, axes = plt.subplots(2, 3, figsize=(13.2, 6.6))
+    """Everything the campaign records, against DEPLOYMENT PROGRESS.
 
-    panels = [
-        (axes[0, 0], d["W"], "stored + dissipated work  W  [N·mm]", TEAL, None),
-        (axes[0, 1], d["M_theta"], "moment  M$_\\theta$  [N·mm]", ORANGE, None),
-        (axes[0, 2], d["uz_max"], "out-of-plane buckle  u$_z$  [mm]", GREY, None),
-        (axes[1, 0], d["damage"], "damage  $\\Delta$ = ⟨PEEQ⟩$_{lig}$ / $\\epsilon_f$", RED, None),
-        (axes[1, 1], d["peeq_lig"], "peak ligament PEEQ", RED, eps_f),
-        (axes[1, 2], None, "in-plane handle motion  [mm]", None, None),
-    ]
-    for ax, y, label, colour, ref in panels:
-        if y is not None:
-            ax.plot(th, y, color=colour, lw=1.7)
-            ax.scatter(th[-1], y[-1], s=18, color=colour, zorder=5)
-        ax.set_xlabel("rotation  θ  [deg]")
-        ax.set_ylabel(label)
-        if ref is not None:
-            ax.axhline(ref, color=INK, lw=1.0, ls="--", alpha=0.6)
-            ax.text(th.min(), ref, f"  $\\epsilon_f$ = {ref:g}", va="bottom", ha="left",
-                    fontsize=8, color=INK)
-            ax.set_ylim(0, max(ref * 1.08, float(np.nanmax(y)) * 1.15))
+    Not against theta: on a measured path theta is a poor clock -- one of these polylines spends
+    57% of its rotation in the first load step and then translates at almost constant angle -- so a
+    theta axis compresses most of the deployment into a sliver. Arc length along the driven path
+    (ligament-tip metric) advances monotonically by construction.
+    """
+    apply_charter()
+    a, sh, th = d["a"], d["s"], d["theta_deg"]
+    w_lig = float(d["w_lig"])
+    step = np.diff(np.stack([a, sh, np.radians(th) * w_lig], axis=1), axis=0, prepend=0.0)
+    arc = np.cumsum(np.linalg.norm(step, axis=1))
+    x = arc / arc[-1] if arc[-1] > 0 else np.linspace(0, 1, len(a))
+    eps_f = float(d["eps_f"])
+
+    fig, axes = plt.subplots(2, 3, figsize=(13.4, 6.8))
+
+    ax = axes[0, 0]
+    ax.plot(x, d["W"], color=TEAL, lw=1.9)
+    ax.set_ylabel("stored + dissipated work  W  [N·mm]")
+
+    ax = axes[0, 1]
+    ax.plot(x, d["damage"], color=RED, lw=1.9)
+    ax.set_ylabel("damage  $\\Delta$ = ⟨PEEQ⟩ / $\\epsilon_f$")
+
+    ax = axes[0, 2]
+    ax.plot(x, d["uz_max"], color=PURPLE, lw=1.9)
+    ax.axhline(float(d["thickness"]), color=GREY, lw=1.0, ls=":")
+    ax.text(0.02, float(d["thickness"]), " one sheet thickness", va="bottom", ha="left",
+            fontsize=8, color=GREY)
+    ax.set_ylabel("out-of-plane buckle  max |u$_z$|  [mm]")
+
+    ax = axes[1, 0]
+    ax.plot(x, th, color=ORANGE, lw=1.9)
+    ax.set_ylabel("hinge rotation  θ  [deg]")
+
+    ax = axes[1, 1]
+    ax.plot(x, a, color=TEAL, lw=1.7, label="axial  a")
+    ax.plot(x, sh, color=ORANGE, lw=1.7, label="shear  s")
+    ax.axhline(0.0, color=GREY, lw=0.8, alpha=0.6)
+    ax.set_ylabel("in-plane handle motion  [mm]")
+    ax.legend(fontsize=8.5)
 
     ax = axes[1, 2]
-    ax.plot(th, d["a"], color=TEAL, lw=1.7, label="axial  a")
-    ax.plot(th, d["s"], color=ORANGE, lw=1.7, label="shear  s")
-    ax.axhline(0.0, color=GREY, lw=0.8, alpha=0.6)
-    ax.legend(fontsize=8.5)
+    ax.plot(x, d["peeq_lig"], color=RED, lw=1.9)
+    ax.axhline(eps_f, color=INK, lw=1.0, ls="--", alpha=0.7)
+    ax.text(0.02, eps_f, f" $\\epsilon_f$ = {eps_f:g}  (fracture)", va="top", ha="left",
+            fontsize=8, color=INK)
+    ax.set_ylim(0, eps_f * 1.12)
+    ax.set_ylabel("peak ligament PEEQ")
+
+    for ax in axes.ravel():
+        ax.set_xlabel("deployment progress  (arc length along the driven path)")
+        ax.set_xlim(0, 1)
+        ax.scatter([1.0], [ax.lines[0].get_ydata()[-1]], s=20,
+                   color=ax.lines[0].get_color(), zorder=5)
 
     fig.text(0.5, 0.975, "hinge response along the replayed deployment path",
              ha="center", fontsize=11, color=INK)
