@@ -212,7 +212,8 @@ def harvest_paths(config, *, n_examples: int = 64, noise: float = 0.5, seed0: in
                   n_load_steps: Optional[int] = None, config_path: str = "",
                   grips=None, load_range=None, grip_loads=None, verbose: bool = True,
                   progress_every: int = 1, clear_cache_every: int = 20,
-                  max_overlap: float = 5e-4, max_eta: float = 20.0) -> PathDataset:
+                  max_overlap: float = 5e-4, max_eta: float = 20.0,
+                  theta_bounds_deg=(-2.5, 130.0)) -> PathDataset:
     """Deploy ``n_examples`` random tessellations and record every hinge's full path.
 
     Three things vary independently, so the ensemble spans design, drive strength and load path:
@@ -242,6 +243,11 @@ def harvest_paths(config, *, n_examples: int = 64, noise: float = 0.5, seed0: in
             this gate is what actually keeps unphysical sheets out of the dataset.
         max_eta: reject a path whose ``|eta|`` exceeds this. ``isfinite`` alone is not enough -- a
             diverged solve produced eta_a = -1.1e42, which is finite and passed straight through.
+        theta_bounds_deg: admissible relative hinge rotation. The lower bound is the contact
+            barrier's tolerance band (min_angle = -2 deg) plus a little; anything below it escaped
+            the barrier. The upper bound is above the x-axis kinematic lock at 126.9 deg, so real
+            deployment is never clipped -- it only catches spinning tiles (measured: two examples
+            reached -299 and -272 deg, both at trivial 2-7 N loads, i.e. failed solves).
         clear_cache_every: call ``jax.clear_caches()` every k examples (0 = never). REQUIRED for
             long harvests: ``forward_pipeline`` builds a fresh jitted solver closure on every call,
             so JAX caches a new compiled executable each time and never evicts it. Measured
@@ -304,6 +310,8 @@ def harvest_paths(config, *, n_examples: int = 64, noise: float = 0.5, seed0: in
     ds = PathDataset(meta={
         'config_path': config_path,
         'max_overlap': float(max_overlap),
+        'max_eta': float(max_eta),
+        'theta_bounds_deg': [float(theta_bounds_deg[0]), float(theta_bounds_deg[1])],
         'use_contact': bool(getattr(config.physics, 'use_contact', False)),
         'n_requested': int(n_examples),
         'noise': float(noise),
@@ -359,6 +367,11 @@ def harvest_paths(config, *, n_examples: int = 64, noise: float = 0.5, seed0: in
                 raise FloatingPointError(
                     f"path left the physical range (|eta| up to "
                     f"{np.abs(paths.eta[..., :2]).max():.3g} > {max_eta})")
+            th_deg = np.degrees(paths.eta[..., 2])
+            if th_deg.min() < theta_bounds_deg[0] or th_deg.max() > theta_bounds_deg[1]:
+                raise FloatingPointError(
+                    f"hinge rotation out of bounds ({th_deg.min():.1f}..{th_deg.max():.1f} deg, "
+                    f"allowed {theta_bounds_deg[0]}..{theta_bounds_deg[1]})")
             vs = res['valid_state']
             disp = res['solution'].fields[-1]
             ms = res['mapped_state']
@@ -432,6 +445,37 @@ def save_dataset(ds: PathDataset, out_dir: str) -> str:
     return npz
 
 
+def filter_dataset(ds: PathDataset, *, max_eta: float = 20.0,
+                   theta_bounds_deg=(-2.5, 130.0), max_overlap: float = 5e-4) -> PathDataset:
+    """Apply the validity gates to an ALREADY HARVESTED dataset, in place of re-deploying it.
+
+    Every gate is computable from what is stored, so a gate added after the fact does not cost
+    another harvest. Returns a new dataset; the rejected examples are recorded in ``.failures`` so
+    the attrition stays visible rather than silently shrinking the count.
+    """
+    fids = [np.asarray(f, int) for f in ds.meta.get('face_vertex_ids', [])]
+    out = PathDataset(meta=dict(ds.meta))
+    out.failures.extend(ds.failures)
+    for e in ds.examples:
+        th = np.degrees(e.eta[..., 2])
+        why = None
+        if np.abs(e.eta[..., :2]).max() > max_eta:
+            why = f"|eta| {np.abs(e.eta[..., :2]).max():.3g}"
+        elif th.min() < theta_bounds_deg[0] or th.max() > theta_bounds_deg[1]:
+            why = f"theta {th.min():.1f}..{th.max():.1f} deg"
+        elif fids and _overlap_fraction(e.verts, fids) > max_overlap:
+            why = f"overlap {_overlap_fraction(e.verts, fids):.3%}"
+        if why:
+            out.failures.append({'seed': int(e.seed), 'grip': [e.clamped_face, e.loaded_face],
+                                 'force': float(e.load_value), 'error': f"filtered: {why}"})
+        else:
+            out.examples.append(e)
+    out.meta.update({'n_examples': out.n_examples, 'filtered': True,
+                     'max_eta': float(max_eta), 'max_overlap': float(max_overlap),
+                     'theta_bounds_deg': [float(theta_bounds_deg[0]), float(theta_bounds_deg[1])]})
+    return out
+
+
 def merge_datasets(dirs, meta_extra: Optional[dict] = None) -> PathDataset:
     """Concatenate shard directories into one dataset.
 
@@ -458,7 +502,11 @@ def merge_datasets(dirs, meta_extra: Optional[dict] = None) -> PathDataset:
 
 
 def load_dataset(out_dir: str) -> PathDataset:
-    d = np.load(os.path.join(out_dir, "paths.npz"))
+    npz = np.load(os.path.join(out_dir, "paths.npz"))
+    # ⚠ Materialise each array ONCE. Indexing `npz['eta'][i]` inside the loop re-decompresses the
+    # WHOLE array on every access -- for 3019 examples that is 3019 full decompressions of a 27 MB
+    # array, which is how loading a merged dataset kept getting OOM-killed.
+    d = {k: npz[k] for k in npz.files}
     with open(os.path.join(out_dir, "manifest.json")) as f:
         meta = json.load(f)
     ds = PathDataset(meta=meta)
