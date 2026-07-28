@@ -59,8 +59,28 @@ def main():
     p.add_argument("--steps", type=int, default=30,
                    help="load steps = polyline resolution (what the oracle will replay)")
     p.add_argument("--out", default=None)
+    p.add_argument("--angle-max", type=float, default=50.0,
+                   help="each grip's force is calibrated so its WORST hinge reaches this angle; "
+                        "forces are then drawn as a fraction of that ceiling. Slightly above the "
+                        "45 deg working point so the surrogate gets margin past it")
+    p.add_argument("--load-lo", type=float, default=0.02,
+                   help="lowest force as a FRACTION of the grip ceiling (log-uniform)")
+    p.add_argument("--load-hi", type=float, default=3.0,
+                   help="highest force as a fraction of the grip ceiling. >1 deliberately drives "
+                        "PAST the first physical limit so the surrogate sees the over-driven "
+                        "regime the optimizer can wander into, rather than extrapolating blindly")
+    p.add_argument("--absolute-load", action="store_true",
+                   help="treat --load-lo/--load-hi as newtons and skip the per-grip calibration")
+    p.add_argument("--fixed-grip", action="store_true",
+                   help="keep the config's single (clamp, pull) pair instead of varying it")
     p.add_argument("--grid", type=int, default=0,
-                   help="side length of the contact sheet (0 = the largest square that fits)")
+                   help="ALSO write a contact sheet this many cells wide (0 = skip)")
+    p.add_argument("--chunk", type=int, default=180,
+                   help="run the harvest as subprocesses of this many examples each, then merge. "
+                        "forward_pipeline recompiles per call and JAX never evicts, so a single "
+                        "long process leaks to OOM; a process boundary returns the memory. Use a "
+                        "multiple of the grip count so each shard stays balanced. 0 = one process")
+    p.add_argument("--shard", type=int, default=-1, help=argparse.SUPPRESS)   # internal
     args = p.parse_args()
 
     config = load_and_parse_config(args.config)
@@ -68,17 +88,82 @@ def main():
     out_dir = args.out or os.path.join("data", "fea", "path_priors",
                                        f"{name}_n{args.n}_s{args.noise:g}")
 
-    clamped = config.topology.get('bc_clamped', [])
-    loaded = [s['face'] for s in config.topology.get('loads', [])]
-    print(f"\n  {args.n} random tessellations from {args.config}")
-    print(f"  HOLD faces {clamped}  (dofs {config.topology.get('clamped_dofs') or 'all'})   "
-          f"PULL faces {loaded}")
-    print(f"  init_noise={args.noise}  seeds {args.seed}..{args.seed + args.n - 1}  "
-          f"{args.steps} load steps\n")
+    from nff.closed.path_dataset import grip_pairs, calibrate_grip_loads, merge_datasets
+    grips = None if args.fixed_grip else 'all'
+    pairs = grip_pairs(config) if grips == 'all' else [(int(config.topology['bc_clamped'][0]),
+                                                        int(config.topology['loads'][0]['face']))]
+    gl_path = os.path.join(out_dir, "grip_loads.json")
 
-    ds = harvest_paths(config, n_examples=args.n, noise=args.noise, seed0=args.seed,
-                       n_load_steps=args.steps, config_path=args.config,
-                       progress_every=max(1, args.n // 20))
+    def _load_grip_loads():
+        if args.absolute_load or not os.path.exists(gl_path):
+            return None
+        with open(gl_path) as f:
+            return {tuple(int(v) for v in k.split("->")): float(x)
+                    for k, x in json.load(f).items()}
+
+    # ── shard mode: harvest one chunk in this process and exit (see --chunk) ──
+    if args.shard >= 0:
+        n_this = min(args.chunk, args.n - args.shard * args.chunk)
+        ds = harvest_paths(config, n_examples=n_this, noise=args.noise,
+                           seed0=args.seed + args.shard * args.chunk, n_load_steps=args.steps,
+                           config_path=args.config, grips=grips,
+                           load_range=(args.load_lo, args.load_hi),
+                           grip_loads=_load_grip_loads(), progress_every=0, verbose=False)
+        if ds.examples:
+            save_dataset(ds, os.path.join(out_dir, "shards", f"shard_{args.shard:04d}"))
+        print(f"  shard {args.shard:4d}: {ds.n_examples}/{n_this} deployed "
+              f"({len(ds.failures)} failed)", flush=True)
+        return
+
+    print(f"\n  {args.n} random tessellations from {args.config}")
+    print(f"  GRIPS ({len(pairs)}): " + ", ".join(f"{c}->{l}" for c, l in pairs))
+    print(f"    clamped tile always on one side, pulled tile always on the other; "
+          f"dofs {config.topology.get('clamped_dofs') or 'all'}")
+    print(f"  DESIGN init_noise={args.noise}  seeds {args.seed}..{args.seed + args.n - 1}  "
+          f"{args.steps} load steps")
+
+    os.makedirs(out_dir, exist_ok=True)
+    grip_loads = None
+    if not args.absolute_load:
+        # Grips differ ~5x in compliance, so an absolute force means a different deployment depth
+        # for each one. Calibrate each grip's own limit first, then draw a fraction of it. Done
+        # ONCE here and written to disk so the shards read it instead of repeating it.
+        print(f"\n  calibrating each grip (theta_max {args.angle_max:g} deg or eta 1.0, "
+              f"whichever binds) ...")
+        grip_loads = calibrate_grip_loads(config, pairs, angle_max_deg=args.angle_max)
+        with open(gl_path, "w") as f:
+            json.dump({f"{c}->{l}": v for (c, l), v in grip_loads.items()}, f, indent=2)
+        print(f"  FORCE  {args.load_lo:g}..{args.load_hi:g} x each grip's ceiling, log-uniform\n")
+    else:
+        print(f"  FORCE  {args.load_lo:g}..{args.load_hi:g} N absolute, log-uniform\n")
+
+    if args.chunk and args.chunk < args.n:
+        import subprocess
+        import sys
+        n_shards = (args.n + args.chunk - 1) // args.chunk
+        print(f"  running {n_shards} shards of <={args.chunk} in separate processes "
+              f"(JAX leaks ~55 MB/example inside one process)\n")
+        base = [sys.executable, "-u", os.path.abspath(__file__),
+                "--config", args.config, "--n", str(args.n), "--noise", str(args.noise),
+                "--seed", str(args.seed), "--steps", str(args.steps), "--out", out_dir,
+                "--chunk", str(args.chunk), "--load-lo", str(args.load_lo),
+                "--load-hi", str(args.load_hi), "--angle-max", str(args.angle_max)]
+        if args.fixed_grip:
+            base.append("--fixed-grip")
+        if args.absolute_load:
+            base.append("--absolute-load")
+        for k in range(n_shards):
+            r = subprocess.run(base + ["--shard", str(k)], env={**os.environ, "PYTHONUNBUFFERED": "1"})
+            if r.returncode != 0:
+                print(f"  ! shard {k} exited {r.returncode} -- keeping what it wrote and continuing")
+        shard_dirs = sorted(os.path.join(out_dir, "shards", d)
+                            for d in os.listdir(os.path.join(out_dir, "shards")))
+        ds = merge_datasets(shard_dirs)
+    else:
+        ds = harvest_paths(config, n_examples=args.n, noise=args.noise, seed0=args.seed,
+                           n_load_steps=args.steps, config_path=args.config,
+                           grips=grips, load_range=(args.load_lo, args.load_hi),
+                           grip_loads=grip_loads, progress_every=max(1, args.n // 25))
     if not ds.examples:
         raise SystemExit("every design failed to deploy -- nothing to store")
 
@@ -106,11 +191,14 @@ def main():
           f"(0 = one proportional ray is exact)")
 
     from nff.scripts.figures.plot_hinge_path_distribution import build_distribution_figure
-    from nff.scripts.figures.plot_tessellation_grid import build_grid_figure
+    from nff.scripts.figures.plot_hinge_path_projections import build_path_projection_figure
     build_distribution_figure(ens, os.path.join(out_dir, "distribution.png"), label=name)
-    build_grid_figure(ds, os.path.join(out_dir, "grid.png"), side=args.grid or None)
-    print(f"\n  wrote {out_dir}/{{paths.npz, manifest.json, distribution.json, "
-          f"distribution.png, grid.png}}\n")
+    build_path_projection_figure(ds, os.path.join(out_dir, "path_projections.png"),
+                                 max_paths=2500, label=name)
+    if args.grid:
+        from nff.scripts.figures.plot_tessellation_grid import build_grid_figure
+        build_grid_figure(ds, os.path.join(out_dir, "grid.png"), side=args.grid)
+    print(f"\n  wrote {out_dir}\n")
 
 
 if __name__ == "__main__":

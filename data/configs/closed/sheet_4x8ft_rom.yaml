@@ -88,7 +88,28 @@ hinge_model:
   learn_w_lig: true
 
 physics:
-  use_contact: false
+  # ── CONTACT: tiles CANNOT interpenetrate, and nothing else changes (2026-07-27) ───────────────
+  # `void_angles` returns TWO numbers per hinge: void_B is exactly the relative hinge rotation
+  # (0 = closed, > 0 = open, < 0 = one tile rotated INTO the other) and void_A = 180 - void_B.
+  # `contact_energy` is a one-sided ~1/x barrier with an asymptote at `min_angle`, and it is
+  # IDENTICALLY ZERO for any void angle >= `cutoff_angle`. So:
+  #   cutoff_angle: 0.0   -> the barrier vanishes the instant a hinge is open at all, which is why
+  #                          an open deployment is untouched (measured: vertices move 3e-9..5e-8).
+  #   min_angle: -0.0349  -> asymptote 2 deg below closure; a hinge cannot rotate past it.
+  # void_A never contributes: it is >= 0 while open, and once void_B wraps it falls below
+  # min_angle into the "already escaped" branch, which is also zero.
+  # ⚠ WHY THIS MATTERS: with contact off, 71.7% of randomly harvested deployments had at least one
+  # hinge at negative theta, i.e. overlapping tiles (median 0.83%, max 6.1% of face area). EVERY
+  # example with >0.1% overlap had a negative-theta hinge. Those deployments are not physical and
+  # must never reach the surrogate. Measured with this block on: overlap 0.0000%, and the offending
+  # case moves from theta_min = -9.50 deg to +21.94 deg.
+  # Result is insensitive to k_contact over 1e3..1e5 and to min_angle over -0.5..-2 deg -- the
+  # barrier works structurally, not by tuning. k=1e3 is the mildest that works; min=-2 deg keeps
+  # the barrier band wide enough that a load step cannot jump the asymptote in one increment.
+  use_contact: true
+  k_contact: 1000.0
+  min_angle: -0.0349         # rad = -2 deg; asymptote just below the closed state
+  cutoff_angle: 0.0          # barrier is exactly zero for every OPEN hinge
   linearized_strains: true
   incremental: true
   num_load_steps: 6

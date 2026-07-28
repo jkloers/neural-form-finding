@@ -95,18 +95,64 @@ def cfg():
     return load_and_parse_config(CFG)
 
 
-def test_harvest_records_the_single_tile_grip_it_actually_ran(cfg):
-    """The BCs are provenance: a path dataset is only meaningful with the grip that produced it."""
-    ds = harvest_paths(cfg, n_examples=2, noise=0.5, seed0=0, n_load_steps=3, verbose=False)
+def test_harvest_records_the_grip_and_force_of_every_example(cfg):
+    """Provenance: a path is only meaningful together with the grip and force that produced it."""
+    ds = harvest_paths(cfg, n_examples=2, noise=0.5, seed0=0, n_load_steps=12, verbose=False)
     assert ds.n_examples == 2, ds.failures
-    assert ds.meta['clamped_faces'] == [3]
-    assert [l['face'] for l in ds.meta['loads']] == [5]
+    assert ds.meta['grips'] == [[3, 5]]              # the config's own pair when grips is None
     assert ds.meta['clamped_dofs'] == [0, 1, 2]      # a lone clamped tile must fix all three
     assert ds.meta['w_lig_mm'] > 0.0
+    assert ds.grips().tolist() == [[3, 5], [3, 5]]
+    assert np.all(ds.loads() > 0.0)
+
+
+def test_grip_pairs_are_always_on_opposite_sides(cfg):
+    """The clamped tile comes from one edge row and the pulled tile from the opposite one."""
+    from nff.closed.path_dataset import grip_pairs
+    M, N = int(cfg.topology['M']), int(cfg.topology['N'])
+    pairs = grip_pairs(cfg)
+    assert len(pairs) == M * M                       # 3 bottom x 3 top for the standard 3x3
+    bottom = {i * N for i in range(M)}
+    top = {i * N + (N - 1) for i in range(M)}
+    assert bottom.isdisjoint(top)
+    for c, l in pairs:
+        assert c in bottom and l in top
+
+
+def test_harvest_varies_grip_and_force_together(cfg):
+    """The ensemble spans design x force x grip; each axis must actually move."""
+    from nff.closed.path_dataset import grip_pairs
+    pairs = grip_pairs(cfg)
+    ds = harvest_paths(cfg, n_examples=6, noise=0.5, seed0=0, n_load_steps=12,
+                       grips=pairs[:3], load_range=(10.0, 200.0), verbose=False)
+    assert ds.n_examples == 6, ds.failures
+    assert len({tuple(g) for g in ds.grips().tolist()}) == 3      # every grip used
+    assert len(set(np.round(ds.loads(), 6))) > 1                  # forces genuinely differ
+    assert ds.per_path(ds.loads()).shape == (len(ds.endpoints()),)
+
+
+def test_contact_keeps_every_harvested_deployment_free_of_interpenetration(cfg):
+    """The gate that keeps unphysical sheets out of the dataset.
+
+    Before contact was enabled, 71.7% of harvested examples had tiles passing through each other
+    and it showed up as NEGATIVE relative hinge rotation. Both must now be absent -- and the check
+    is on the GEOMETRY, because trusting the sign of theta is what let it through the first time.
+    """
+    from nff.closed.path_dataset import _overlap_fraction
+    ds = harvest_paths(cfg, n_examples=6, noise=0.5, seed0=0, n_load_steps=30,
+                       grips='all', load_range=(20.0, 400.0), verbose=False)
+    # The contract is NOT "nothing is ever rejected" -- contact is a barrier, not a hard
+    # constraint, and a load increment can still jump its asymptote (below min_angle the energy
+    # returns to zero). The contract is that whatever survives into the dataset is physical.
+    assert ds.n_examples > 0, ds.failures
+    fids = [np.asarray(f, int) for f in ds.meta['face_vertex_ids']]
+    for e in ds.examples:
+        assert _overlap_fraction(e.verts, fids) <= ds.meta['max_overlap']
+        assert e.eta[..., 2].min() > -1e-9, "a hinge rotated closed past the contact barrier"
 
 
 def test_harvest_paths_start_at_the_origin_and_differ_between_designs(cfg):
-    ds = harvest_paths(cfg, n_examples=2, noise=0.5, seed0=0, n_load_steps=3, verbose=False)
+    ds = harvest_paths(cfg, n_examples=2, noise=0.5, seed0=0, n_load_steps=12, verbose=False)
     p = ds.polylines()
     assert np.allclose(p[:, 0, :], 0.0, atol=1e-12)          # undeployed sheet is the origin
     assert np.all(np.isfinite(p))
