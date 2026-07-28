@@ -66,6 +66,9 @@ class HingeConstants:
     n_through: int = 2                                # elements through thickness (>=2 for plastic bending)
     lc_fillet_frac: float = 0.4                       # resolve the fillet: lc_min = frac * rho
     lc_min_floor: float = 0.06                        # never mesh finer than this [mm]
+    imp_amp: float = None                             # out-of-plane buckle seed [mm]; None -> 0.3*t
+    min_inc: float = 1e-3                             # min load increment (smaller babies through snaps)
+    stabilize: float = None                          # *STATIC,STABILIZE damping to walk past buckling (uz-only)
 
 
 @dataclass(frozen=True)
@@ -174,6 +177,7 @@ def solver_kwargs(geo: HingeGeometry, ray: DeploymentRay, const: HingeConstants)
     rho = geo.rho(const)
     return dict(angle_deg=theta1_deg, n_steps=ray.n_steps, a=a1, s=s1,
                 n_through=const.n_through, material=const.material,
+                imp_amp=const.imp_amp, min_inc=const.min_inc, stabilize=const.stabilize,
                 lc_min=max(const.lc_fillet_frac * rho, const.lc_min_floor),
                 lc_max=const.r_win / 5.0)
 
@@ -218,7 +222,8 @@ def assemble_response(geo, ray, const, parsed) -> HingeResponse:
 
 def evaluate_hinge(geo: HingeGeometry, ray: DeploymentRay,
                    const: HingeConstants = HingeConstants(),
-                   *, timeout: float = 900, workdir: str = None) -> HingeResponse:
+                   *, timeout: float = 900, workdir: str = None,
+                   ncpus: int = 1) -> HingeResponse:
     """Evaluate the constitutive map along one deployment ray (serial, one hinge).
 
     This IS the hinge-as-a-function: (geometry, ray) -> path of (u, W, dW/du, validity).
@@ -226,6 +231,7 @@ def evaluate_hinge(geo: HingeGeometry, ray: DeploymentRay,
     hinges for speed; it reuses ``solver_kwargs`` and ``assemble_response`` verbatim.
     """
     parsed = deploy(to_rve_params(geo, const), timeout=timeout, eps_f=const.eps_f,
+                    ncpus=ncpus,
                     workdir=workdir or f"/tmp/hinge/{geo.tag}_{ray.tag or 't'}",
                     **solver_kwargs(geo, ray, const))
     return assemble_response(geo, ray, const, parsed)

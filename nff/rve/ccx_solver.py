@@ -182,8 +182,13 @@ def _arc_disp(xyz, arcB, pivot, a, s, theta):
 
 
 def _write_deck(path, xyz, conn, arcA, arcB, pivot, mat, states, elastic_only, field_every,
-                solver=None, hyp=None, min_inc=1e-3):
-    """One *STEP per kinematic state (a,s,theta) -> correct arc path; energy+reaction+fields out."""
+                solver=None, hyp=None, min_inc=1e-3, stabilize=None):
+    """One *STEP per kinematic state (a,s,theta) -> correct arc path; energy+reaction+fields out.
+
+    ``stabilize`` (None = off): add ``*STATIC, STABILIZE=<val>`` automatic viscous damping to walk
+    through buckling snap-through (e.g. the fold past the localization wall). NOTE the viscous
+    reaction contaminates F/M -- use only when the out-of-plane displacement (uz) is the target.
+    """
     hyp = hyp or Hypotheses()
     L = ["*NODE"]
     for i, (x, y, z) in enumerate(xyz, start=1):
@@ -195,7 +200,8 @@ def _write_deck(path, xyz, conn, arcA, arcB, pivot, mat, states, elastic_only, f
     L.append("*NSET, NSET=ARCB\n" + ",\n".join(str(v) for v in arcB))
     L.append(mat.constitutive_cards(hyp, elastic_only=elastic_only))
     L.append(mat.section_cards("EALL", hyp))
-    stat = "*STATIC" + (f", SOLVER={solver}" if solver else "")
+    stat = "*STATIC" + (f", SOLVER={solver}" if solver else "") \
+         + (f", STABILIZE={stabilize:g}" if stabilize else "")
     # min increment (default 1e-3): the solver bails (ends the job) once it needs tiny steps -- for
     # steel that is the deep-plastic grind past rupture (natural stop-at-fracture, no endless
     # cutbacks). Thin elastic sheets (paper) buckle-snap instead and need a smaller floor to walk
@@ -261,7 +267,10 @@ def _parse_frd(path):
     for ln in open(path):
         tag = ln[:3]
         if tag == " -4":
-            field = ln.split()[1]; ncomp = int(ln.split()[2]); data = []
+            parts = ln.split()
+            if len(parts) < 3:                        # truncated header (ccx killed mid-write) -> keep complete frames
+                break
+            field = parts[1]; ncomp = int(parts[2]); data = []
         elif tag == " -5":
             continue
         elif tag == " -1" and field:
@@ -290,7 +299,8 @@ def _principal_strain_max(tostrain):
 
 def prepare_job(p, angle_deg=60.0, n_steps=15, pivot=None, material=STEEL, imp_amp=None,
                 elastic_only=False, n_through=1, lc_min=None, lc_max=None, field_every=1,
-                a=0.0, s=0.0, solver=None, workdir="/tmp/ccx_job", hyp=None, min_inc=1e-3):
+                a=0.0, s=0.0, solver=None, workdir="/tmp/ccx_job", hyp=None, min_inc=1e-3,
+                stabilize=None):
     """Build the mesh + write the deck (the gmsh part — NOT thread-safe, run serially)."""
     mat, hyp = coerce_material(material), hyp or Hypotheses()
     lc_min = lc_min if lc_min is not None else max(p.w_c / 2, p.w_lig / 8)
@@ -304,7 +314,7 @@ def prepare_job(p, angle_deg=60.0, n_steps=15, pivot=None, material=STEEL, imp_a
     dth = np.radians(angle_deg) / n_steps
     states = [(a * (k + 1) / n_steps, s * (k + 1) / n_steps, (k + 1) * dth) for k in range(n_steps)]
     _write_deck(job + ".inp", xyz, conn, arcA, arcB, pivot, mat, states, elastic_only,
-                field_every, solver=solver, hyp=hyp, min_inc=min_inc)
+                field_every, solver=solver, hyp=hyp, min_inc=min_inc, stabilize=stabilize)
     return dict(job=job, workdir=workdir, xyz=xyz, conn=conn, arcA=arcA, arcB=arcB, pivot=pivot,
                 angle_deg=angle_deg, n_steps=n_steps, material=mat, hyp=hyp)
 
