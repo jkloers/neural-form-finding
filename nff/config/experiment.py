@@ -77,7 +77,9 @@ class PhysicsConfig(eqx.Module):
     domain_restriction: float
     use_contact: bool
     k_contact: float
-    min_angle: float   # radians
+    # Radians HERE, but the YAML supplies DEGREES -- `_parse_physics_config` converts. Writing
+    # radians in a config double-converts them (a "-0.0349 # rad" entry ran at -0.035 deg).
+    min_angle: float
     cutoff_angle: float
     linearized_strains: bool
     incremental: bool
@@ -324,8 +326,8 @@ def _parse_mapping_config(mapping_raw: dict) -> MappingConfig:
         params_raw = {k: v for k, v in params_raw.items()
                       if k not in ('use_shirley_chiu', 's_val')}
 
-    # Pour les types GNN, map_params contient la config d'initialisation
-    # (hidden_dim, seed…), pas des poids entraînables. On la garde brute.
+    # For GNN types, map_params holds the initialization config (hidden_dim, seed, ...), not
+    # trainable weights, so it is kept raw.
     if m_type.startswith('gnn_'):
         parsed_params = params_raw if isinstance(params_raw, dict) else {}
     else:

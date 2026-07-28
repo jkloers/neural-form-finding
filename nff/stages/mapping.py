@@ -321,10 +321,9 @@ def apply_gnn_mapping(
         )
         return state._replace(face_centroids=new_centroids)
 
-    # ── Transformation des CNVs (Centroid Node Vectors) ───────────────────────────
-    # Le GNN prédit directement la matrice de transformation 2x2 pour chaque face.
-    # Cette matrice gère la rotation, l'étirement (scale) asymétrique et le cisaillement.
-    # À l'initialisation, cette matrice vaut l'Identité, donc les tuiles ne sont pas déformées.
+    # ── CNV (Centroid Node Vector) transformation ─────────────────────────────────
+    # The GNN directly predicts the 2x2 transformation matrix for each face, covering rotation,
+    # asymmetric scale and shear. At initialization it is the identity, so tiles start undeformed.
     cnvs = state.centroid_node_vectors  # (n_faces, max_nodes, 2)
     new_cnvs = jnp.einsum('fab,fnb->fna', local_transform, cnvs)
 

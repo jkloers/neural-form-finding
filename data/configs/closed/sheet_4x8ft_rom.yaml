@@ -95,7 +95,9 @@ physics:
   # IDENTICALLY ZERO for any void angle >= `cutoff_angle`. So:
   #   cutoff_angle: 0.0   -> the barrier vanishes the instant a hinge is open at all, which is why
   #                          an open deployment is untouched (measured: vertices move 3e-9..5e-8).
-  #   min_angle: -0.0349  -> asymptote 2 deg below closure; a hinge cannot rotate past it.
+  #   min_angle: -2.0     -> asymptote 2 deg below closure; a hinge cannot rotate past it.
+  # ⚠ UNITS: `min_angle` and `cutoff_angle` are DEGREES here. `_parse_physics_config` multiplies
+  # both by pi/180 (nff/config/experiment.py), so writing radians double-converts them.
   # void_A never contributes: it is >= 0 while open, and once void_B wraps it falls below
   # min_angle into the "already escaped" branch, which is also zero.
   # ⚠ WHY THIS MATTERS: with contact off, 71.7% of randomly harvested deployments had at least one
@@ -105,15 +107,17 @@ physics:
   # case moves from theta_min = -9.50 deg to +21.94 deg.
   # k = 1e6, NOT 1e3. On easy cases every k in 1e3..1e9 is identical, but across a random harvest
   # k=1e3 lets hinges slide to theta = -1 deg (0.32% overlap) while k=1e6 pins them at -0.00 deg.
-  # min = -2 deg beats tighter bands: the solve is non-convex and a narrow barrier is jumped
-  # (k=1e6 with min=-0.1 deg gave 3.29% overlap where min=-2 deg gave 0.03%).
+  # ⚠ STALE EVIDENCE: the min_angle sweep recorded here ("-2 deg gave 0.03% vs -0.1 deg 3.29%")
+  # predates the units fix above. The run labelled "-2 deg" was written as -0.0349 and therefore
+  # ran at -0.035 deg, so the comparison is not what it claims. k=1e6 is unaffected and still
+  # holds. Re-run the min_angle sweep before treating any value here as tuned.
   # ⚠ LIMITATION: this barrier acts on BONDED pairs only. Two tiles that are not hinged to each
   # other can still pass through, and the angle model cannot see it. That is the source of the
   # ~0.03% residual overlap seen even when every hinge sits at theta >= 0, and it is why the
   # harvest keeps an independent geometric gate rather than trusting the contact model alone.
   use_contact: true
   k_contact: 1000000.0
-  min_angle: -0.0349         # rad = -2 deg; asymptote just below the closed state
+  min_angle: -2.0            # DEGREES; asymptote just below the closed state
   cutoff_angle: 0.0          # barrier is exactly zero for every OPEN hinge
   linearized_strains: true
   incremental: true

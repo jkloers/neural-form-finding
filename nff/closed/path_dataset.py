@@ -447,7 +447,10 @@ def save_dataset(ds: PathDataset, out_dir: str) -> str:
         load_value=np.array([e.load_value for e in ds.examples]),
     )
     meta = dict(ds.meta)
-    meta.update({'n_examples': ds.n_examples, 'n_failures': len(ds.failures),
+    # Only the first 50 failure records are stored, so `n_failures` must never be recomputed from
+    # the truncated list -- a merged dataset already carries the correct summed count.
+    n_failures = max(len(ds.failures), int(ds.meta.get('n_failures', 0)))
+    meta.update({'n_examples': ds.n_examples, 'n_failures': n_failures,
                  'failures': ds.failures[:50],
                  'n_hinges': int(ds.examples[0].alpha.shape[0]),
                  'n_path_points': int(ds.examples[0].eta.shape[0])})
@@ -525,15 +528,22 @@ def merge_datasets(dirs, meta_extra: Optional[dict] = None) -> PathDataset:
     has the second virtue that a killed run keeps every shard it had already written.
     """
     merged = None
+    n_failures = 0          # summed from each shard's own count, which survives truncation
+    n_requested = 0         # shard 0's value describes ONE shard, not the whole harvest
     for d in dirs:
         ds = load_dataset(d)
         if merged is None:
             merged = PathDataset(meta=dict(ds.meta))
         merged.examples.extend(ds.examples)
         merged.failures.extend(ds.failures)
+        n_failures += int(ds.meta.get('n_failures', len(ds.failures)))
+        n_requested += int(ds.meta.get('n_requested', 0))
     if merged is None:
         raise ValueError("no shards to merge")
     merged.meta['n_examples'] = merged.n_examples
+    merged.meta['n_failures'] = n_failures
+    if n_requested:
+        merged.meta['n_requested'] = n_requested
     merged.meta['n_shards'] = len(list(dirs))
     if meta_extra:
         merged.meta.update(meta_extra)
@@ -549,6 +559,9 @@ def load_dataset(out_dir: str) -> PathDataset:
     with open(os.path.join(out_dir, "manifest.json")) as f:
         meta = json.load(f)
     ds = PathDataset(meta=meta)
+    # Restore the attrition record. `save_dataset` truncates the list to 50 entries but keeps the
+    # true count in `n_failures`, so the count -- not len(failures) -- is what merging must sum.
+    ds.failures.extend(meta.get('failures', []))
     has_grip = 'clamped_face' in d                       # datasets harvested before grip variation
     for i in range(d['eta'].shape[0]):
         ds.examples.append(PathExample(

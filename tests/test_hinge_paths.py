@@ -30,6 +30,10 @@ def surrogate_setup():
     from nff.closed.setup import (build_closed_initial_state, init_closed_les_params,
                                   build_surrogate_energy)
     config = load_and_parse_config(CFG)
+    # The YAML is tracked but the surrogate checkpoint it names is not, so guarding on CFG alone
+    # turns a clean clone into a FileNotFoundError instead of a skip.
+    if not os.path.exists(config.hinge_model.checkpoint):
+        pytest.skip(f"{config.hinge_model.checkpoint} not present (data/ is gitignored)")
     state, _ = build_closed_initial_state(config)
     params, sf = init_closed_les_params(config)
     bond_energy, _, geometry_fn, _, w0 = build_surrogate_energy(config, sf, state, params)

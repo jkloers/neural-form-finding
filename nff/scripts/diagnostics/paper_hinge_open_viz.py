@@ -3,19 +3,25 @@
 surface-uniaxial (old)  ->  surface + triaxiality  ->  membrane + triaxiality (shipped).
 Left: deformed opening coloured by membrane principal strain. Right: the three D(theta) curves.
 """
+import argparse
 import os
 import numpy as np
 import matplotlib.pyplot as plt
 
-os.chdir(os.path.dirname(__file__))
-import sys
-sys.path.insert(0, "/Users/julienkloers/Documents/Code2/princeton/neural-form-finding")
 from nff.rve.damage import max_principal_strain
 # the paper tear criterion lives with the (parked, elastic) paper material -- nff.rve.damage
 # carries only the one plastic-dissipation measure, which is undefined for an elastic material
 from nff.rve.materials.paper import membrane_tear_from_frame
 
-d = np.load("paper_hinge_result60.npz", allow_pickle=True)
+_HERE = os.path.dirname(os.path.abspath(__file__))
+
+_ap = argparse.ArgumentParser(description=__doc__)
+_ap.add_argument("--npz", default=os.path.join(_HERE, "paper_hinge_result60.npz"),
+                 help="solve produced by paper_hinge_open_sim.py")
+_ap.add_argument("--out", default="paper_hinge_60.png")
+_args = _ap.parse_args()
+
+d = np.load(_args.npz, allow_pickle=True)
 xyz = np.asarray(d["xyz"], float)
 disp = [np.asarray(x, float)[:, :3] for x in d["disp"]]
 tostrain = [np.asarray(x, float) for x in d["tostrain"]]
@@ -91,5 +97,5 @@ axs.spines[["top", "right"]].set_visible(False); axs.grid(alpha=0.15)
 axs.legend(frameon=False, fontsize=8.5, loc="upper left")
 axs.set_xlim(0, max(62, theta.max()+2)); axs.set_ylim(0, max(2.5, np.nanmax(D_surf_uni)*1.05))
 fig.tight_layout()
-fig.savefig("paper_hinge_60.png", dpi=150, bbox_inches="tight")
-print("saved paper_hinge_60.png")
+fig.savefig(_args.out, dpi=150, bbox_inches="tight")
+print(f"saved {_args.out}")

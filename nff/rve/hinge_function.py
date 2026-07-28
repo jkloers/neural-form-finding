@@ -63,13 +63,13 @@ class HingeConstants:
     r_win: float = 30.0                               # Saint-Venant window radius [mm]
     fillet_ratio: float = 0.16                        # rho = fillet_ratio * w_lig (set by rehearsal)
     material: object = field(default_factory=lambda: dict(STEEL))   # Material, params dict, or name
-    eps_f: float = None                               # fracture strain; None -> the material's own
+    eps_f: float | None = None                        # fracture strain; None -> the material's own
     n_through: int = 2                                # elements through thickness (>=2 for plastic bending)
     lc_fillet_frac: float = 0.4                       # resolve the fillet: lc_min = frac * rho
     lc_min_floor: float = 0.06                        # never mesh finer than this [mm]
-    imp_amp: float = None                             # out-of-plane buckle seed [mm]; None -> 0.3*t
+    imp_amp: float | None = None                      # out-of-plane buckle seed [mm]; None -> 0.3*t
     min_inc: float = 1e-3                             # min load increment (smaller babies through snaps)
-    stabilize: float = None                          # *STATIC,STABILIZE damping to walk past buckling (uz-only)
+    stabilize: float | None = None                    # *STATIC,STABILIZE damping past buckling (uz-only)
 
     def __post_init__(self):
         # normalise the material once, and take eps_f from it unless explicitly overridden -- so a

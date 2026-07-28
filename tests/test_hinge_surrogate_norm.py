@@ -30,8 +30,10 @@ def test_features_jit_grad_finite_with_degenerate_feature():
 
 def test_load_hinge_surrogate_floors_degenerate_std():
     """No degenerate std survives load -> older/under-exercised checkpoints stay numerically safe."""
-    ck = "data/outputs/hinge_surrogate_v2.pkl"
+    # data/surrogates/, not data/outputs/ -- the checkpoints moved there in 6b30105 and the stale
+    # path made this test skip silently ever since.
+    ck = "data/surrogates/hinge_surrogate_v2.pkl"
     if not os.path.exists(ck):
-        pytest.skip("surrogate checkpoint not present")
+        pytest.skip(f"{ck} not present (data/ is gitignored)")
     _, stats, _ = load_hinge_surrogate(ck)
     assert np.all(np.asarray(stats["feat_std"]) >= 1e-6)
