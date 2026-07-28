@@ -45,7 +45,12 @@ Standalone from the JAX pipeline (numpy; optional opencv + matplotlib).
 | `bluehill_io.py` | Parse the Bluehill results+raw CSV → per-specimen `SpecimenRun` (time, disp, force). |
 | `summary_io.py` | Parse the operator's manual summary sheet → authoritative area / L / direction / speed, matched to curves **by order** of the `included` rows. |
 | `stress_strain.py` | Stress-strain curves; chord E, 0.2%-offset yield, UTS, draw plateau, strain-at-break; compliance correction; engineering→true and the cold-draw `*PLASTIC` anchor (`draw_true_point`). |
-| `video_extensometer.py` | OpenCV two-dot tracker → axial/lateral strain (`track_marks`→`marks_to_strain`), Poisson, and force-sync (`sync_to_force`). |
+| `compliance.py` | Load-train compliance `C` [mm/N] — the crosshead travel that is *not* specimen. ⚠ `C` is **not** a machine constant: the hinge fixture measured 7.77 µm/N, the coupon 4.81. |
+| `ladder.py` | **The shipped video extensometer.** ffmpeg + NCC template tracking of an ink ladder → true gauge strain, plus grip-based video↔Bluehill time sync. No OpenCV. |
+
+> The original OpenCV two-dot tracker (`video_extensometer.py`) was **deleted on 2026-07-28**:
+> it had zero call sites, was superseded by `ladder.py`, and pulled in an undeclared
+> `opencv-python` dependency. `ladder.py` needs `ffmpeg` on `PATH`.
 
 CLI: `nff/scripts/calibration/analyze_run.py`
 
@@ -61,8 +66,11 @@ python -m nff.scripts.calibration.analyze_run \
 ### Strain sources
 - **Crosshead** (default): compliance-corrupted → E is a **lower bound**. `--compliance <C_mm/N>`
   subtracts a machine compliance measured on a known-E reference strip.
-- **Video**: `video_extensometer.track_marks(...)` → `marks_to_strain(...)` → `sync_to_force(...)`,
-  then feed the resulting strain array into `stress_strain.analyze(...)`. This is the trustworthy E.
+- **Video**: `ladder.decode_gray(...)` → `ladder.track_ladder(...)` → `ladder.gauge_strain(...)`,
+  with `ladder.sync_by_grip(...)` for the video↔Bluehill time offset; then feed the resulting
+  strain array into `stress_strain.analyze(...)`. This is the trustworthy E:
+  the ink-ladder read gives **2.0–2.7 GPa, best ~2.3**, against the 3.02 that came from applying the
+  HINGE fixture's compliance to COUPON data.
 
 ---
 
@@ -84,8 +92,8 @@ docs/physical_calibration_video_extensometer_plan.md    this file
 ## Part D — Roadmap
 
 1. **[done]** Bluehill/summary parsing, stress-strain extraction, crosshead analysis CLI.
-2. **[done, needs a real video]** Two-dot tracker (`video_extensometer.py`) — validate on a test clip,
-   tune blob area / polarity / ROI.
+2. **[done]** Video extensometer — shipped as `ladder.py` (ffmpeg + NCC ink-ladder tracking).
+   The earlier OpenCV two-dot tracker was deleted unused on 2026-07-28.
 3. **Compliance calibration** — pull a known-E metal strip, fit `C_machine`; cross-check vs the video E.
 4. **True stress-strain + `*PLASTIC`** — combine video strain + force + measured draw ratio λ
    (`draw_true_point`) → the multi-point true-stress table for the PET material class.
