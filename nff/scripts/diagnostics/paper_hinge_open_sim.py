@@ -35,7 +35,7 @@ W = np.asarray(res["W"], float)
 M = np.asarray(res["M_theta"], float)
 uz = np.asarray(res["uz_max"], float)
 strain = np.asarray(res["strain_max"], float)          # max principal strain (raw max)
-Draw = np.asarray(res["damage_p99"], float)            # = p99(principal strain)/eps_tear for paper
+Draw = np.asarray(res["damage"], float)                # paper: the membrane tear margin (see materials/paper.py)
 
 print(f"ok={res['ok']}  n_frames(dat)={len(theta)}  n_elems={res['n_elems']}  n_nodes={res['n_nodes']}")
 print(f"frames(.frd)={len(res['frames'])}  max theta reached = {theta.max() if len(theta) else 0:.1f} deg")

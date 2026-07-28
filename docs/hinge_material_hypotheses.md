@@ -61,4 +61,7 @@ takes a permanent set without tearing.
 - Self-contact of the faces at large folds.
 - Anisotropy, rolling texture, strain-rate, temperature, heat-affected zones.
 - Fatigue / cyclic deployment (single deployment only).
-- The failure flag (ε > ε_f) is post-hoc, not a damage model.
+- Damage is post-hoc, not a coupled damage model: `Δ = ⟨PEEQ⟩_lig / ε_f` (normalized plastic
+  dissipation, `nff/rve/damage.py`) is read off the solved fields and does not feed back into the
+  constitutive law — no stiffness degradation, no element deletion.
+- Tearing is a calibrated value of Δ (`Δ_tear`, reported per campaign), not a separate criterion.

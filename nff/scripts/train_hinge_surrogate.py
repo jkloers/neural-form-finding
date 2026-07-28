@@ -5,7 +5,7 @@
 
 Pipeline:
   1. Load npz -> u=(a,s,theta), g=(w_lig, alpha[rad]), targets W, F=(F_a,F_s,M_theta),
-     margin=peeq_p99/eps_f.
+     margin=damage (<PEEQ>_lig/eps_f, see nff.rve.damage).
   2. PRE-FLIGHT force-sign check: on pure-rotation (spine) rays, FD dW/dtheta must equal the
      stored M_theta. If the sign is flipped, flip F so F_target = +dW/du (envelope theorem).
   3. Split by JOB (= unseen geometry) -- never by sample; ray samples are correlated.
@@ -29,26 +29,37 @@ from nff.models.hinge_surrogate import (init_hinge_surrogate, compute_norm_stats
 
 
 def load_dataset(path):
-    d = np.load(path + ".npz")
+    with np.load(path + ".npz") as npz:
+        d = {k: np.asarray(npz[k]) for k in npz.files}
     eps_f = json.load(open(path + ".json"))["const"].get("eps_f", 0.25)
-    # Failure-head target: the continuous triaxiality-based damage D when the dataset carries it
-    # (new campaigns), else the legacy tension-only margin peeq_p99/eps_f (older datasets).
-    if "damage_p99" in d.files and np.isfinite(np.asarray(d["damage_p99"], float)).any():
-        target = np.asarray(d["damage_p99"], float)
-    else:
-        target = np.asarray(d["peeq_p99"], float) / eps_f
+    # Damage-head target: THE damage measure, <PEEQ>_lig / eps_f (nff.rve.damage). Pre-2026-07-28
+    # datasets carry a `damage_p99` column instead -- a whole-mesh p99 of a triaxiality-weighted
+    # ratio, a different quantity on a different scale. Reject rather than silently retrain on it.
+    if "damage" not in d:
+        legacy = "`damage_p99`" if "damage_p99" in d else "no damage column"
+        raise KeyError(
+            f"{path}.npz carries {legacy}, not `damage`. The damage definition changed on "
+            "2026-07-28 (whole-mesh p99 of PEEQ/eps_f(eta) -> ligament volume average "
+            "<PEEQ>_lig/eps_f); the two are not interchangeable. Re-run the campaign via "
+            "nff/scripts/generate_hinge_dataset.py.")
+    # A non-finite target NaNs the WHOLE batch loss, which the nan_to_num guard on the gradient then
+    # turns into silently zeroed energy AND force updates -- so drop those rows here instead.
+    finite = np.isfinite(d["damage"])
+    if not finite.all():
+        print(f"damage: dropping {int((~finite).sum())}/{finite.size} non-finite rows")
+        d = {k: v[finite] if v.shape[:1] == finite.shape else v for k, v in d.items()}
     # geometry g = (w_lig, alpha[rad][, fillet_ratio]); include the fillet DOF iff it was SWEPT
-    g_cols = [np.asarray(d["w_lig"], float), np.radians(np.asarray(d["alpha_deg"], float))]
-    if "fillet_ratio" in d.files and float(np.ptp(np.asarray(d["fillet_ratio"], float))) > 1e-6:
-        g_cols.append(np.asarray(d["fillet_ratio"], float))
-        print(f"fillet DOF present + swept -> 3-D geometry input (6 features)")
+    g_cols = [d["w_lig"].astype(float), np.radians(d["alpha_deg"].astype(float))]
+    if "fillet_ratio" in d and float(np.ptp(d["fillet_ratio"].astype(float))) > 1e-6:
+        g_cols.append(d["fillet_ratio"].astype(float))
+        print("fillet DOF present + swept -> 3-D geometry input (6 features)")
     data = dict(
         u=np.stack([d["a"], d["s"], d["theta"]], -1),
         g=np.stack(g_cols, -1),
-        W=np.asarray(d["W"], float),
+        W=d["W"].astype(float),
         F=np.stack([d["F_a"], d["F_s"], d["M_theta"]], -1),
-        margin=target,
-        job_id=np.asarray(d["job_id"]),
+        margin=d["damage"].astype(float),
+        job_id=d["job_id"],
     )
     return data, eps_f
 
@@ -91,7 +102,7 @@ def evaluate(params, batch, stats):
     mp = apply_hinge_failure(params, batch["u"], batch["g"], stats)
     rel = lambda p, t: float(jnp.sqrt(jnp.mean((p - t) ** 2)) / (jnp.sqrt(jnp.mean(t ** 2)) + 1e-12))
     return dict(energy_rel=rel(Wp, batch["W"]), force_rel=rel(Fp, batch["F"]),
-                fail_rmse=float(jnp.sqrt(jnp.mean((mp - batch["margin"]) ** 2))))
+                damage_rmse=float(jnp.sqrt(jnp.mean((mp - batch["margin"]) ** 2))))
 
 
 def main():
@@ -101,6 +112,8 @@ def main():
     ap.add_argument("--epochs", type=int, default=300)
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--lam", type=float, default=0.8, help="energy-vs-force priority (>0.5 = energy)")
+    ap.add_argument("--w-damage", dest="w_damage", type=float, default=0.1,
+                    help="weight on the damage head (variance-normalized, like energy/force)")
     ap.add_argument("--batch", type=int, default=1024)
     ap.add_argument("--val-frac", dest="val_frac", type=float, default=0.15)
     ap.add_argument("--seed", type=int, default=0)
@@ -145,7 +158,8 @@ def main():
     @jax.jit
     def train_step(params, opt_state, batch):
         (loss, aux), grads = jax.value_and_grad(
-            lambda p: sobolev_loss(p, batch, stats, lam=args.lam), has_aux=True)(params)
+            lambda p: sobolev_loss(p, batch, stats, lam=args.lam, w_damage=args.w_damage),
+            has_aux=True)(params)
         grads = jax.tree_util.tree_map(lambda x: jnp.nan_to_num(x), grads)  # NaN-safe
         updates, opt_state = optimizer.update(grads, opt_state, params)
         return optax.apply_updates(params, updates), opt_state, loss
@@ -164,7 +178,7 @@ def main():
             if m["energy_rel"] < best["energy_rel"]:
                 best, best_params, tag = m, jax.tree_util.tree_map(lambda x: x, params), "  <- best"
             print(f"ep {ep:4d}  loss {float(loss):.4g}  val energy_rel {m['energy_rel']:.4f}  "
-                  f"force_rel {m['force_rel']:.4f}  fail_rmse {m['fail_rmse']:.4f}{tag}", flush=True)
+                  f"force_rel {m['force_rel']:.4f}  damage_rmse {m['damage_rmse']:.4f}{tag}", flush=True)
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     with open(args.out + ".pkl", "wb") as f:
@@ -174,7 +188,7 @@ def main():
         json.dump({"val_metrics": best, "n_train": n_tr, "n_val": n_va,
                    "force_sign": sign, "lam": args.lam}, f, indent=2)
     print(f"\nbest val: energy_rel {best['energy_rel']:.4f}  force_rel {best['force_rel']:.4f}  "
-          f"fail_rmse {best['fail_rmse']:.4f}\nsaved -> {args.out}.pkl")
+          f"damage_rmse {best['damage_rmse']:.4f}\nsaved -> {args.out}.pkl")
 
 
 if __name__ == "__main__":

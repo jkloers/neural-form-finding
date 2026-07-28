@@ -62,10 +62,10 @@ def test_paper_tear_failure_uniaxial_no_stress():
     # strain-only frame (no stress) -> locus collapses to eps_tear0; strain 2x eps_tear0 -> D=2
     eps = 2.0 * PAPER_80GSM["eps_tear0"]
     frame = {"TOSTRAIN": np.tile([eps, 0.0, 0.0, 0.0, 0.0, 0.0], (30, 1))}
-    D = PaperOrthotropic().failure(frame, Hypotheses())     # coords=None -> surface, no stress
+    D = PaperOrthotropic().damage(frame, Hypotheses(), xyz=None, conn=None, w_lig=0.0)     # coords=None -> surface, no stress
     assert D == pytest.approx(2.0, rel=1e-6)
     # no strain field -> NaN (never a spurious pass/fail)
-    assert np.isnan(PaperOrthotropic().failure({"STRESS": np.zeros((3, 6))}, Hypotheses()))
+    assert np.isnan(PaperOrthotropic().damage({"STRESS": np.zeros((3, 6))}, Hypotheses(), xyz=None, conn=None, w_lig=0.0))
 
 
 def test_paper_triaxiality_relief_in_shear():
@@ -74,8 +74,8 @@ def test_paper_triaxiality_relief_in_shear():
     E = np.tile([eps, 0.0, 0.0, 0.0, 0.0, 0.0], (20, 1))
     S_uni = np.tile([100.0, 0.0, 0.0, 0.0, 0.0, 0.0], (20, 1))     # uniaxial tension, eta=+1/3
     S_shear = np.tile([0.0, 0.0, 0.0, 80.0, 0.0, 0.0], (20, 1))    # pure shear, eta~0
-    D_uni = PaperOrthotropic().failure({"TOSTRAIN": E, "STRESS": S_uni}, Hypotheses())
-    D_shear = PaperOrthotropic().failure({"TOSTRAIN": E, "STRESS": S_shear}, Hypotheses())
+    D_uni = PaperOrthotropic().damage({"TOSTRAIN": E, "STRESS": S_uni}, Hypotheses(), xyz=None, conn=None, w_lig=0.0)
+    D_shear = PaperOrthotropic().damage({"TOSTRAIN": E, "STRESS": S_shear}, Hypotheses(), xyz=None, conn=None, w_lig=0.0)
     assert D_uni == pytest.approx(eps / PAPER_80GSM["eps_tear0"], rel=1e-6)   # eta=1/3 -> eps_tear0
     assert D_shear < D_uni                                          # shear is more tear-tolerant
 
@@ -88,7 +88,7 @@ def test_paper_membrane_cancels_bending_gradient():
     for _ in range(4):
         strain += [[+0.06, 0, 0, 0, 0, 0], [0.0, 0, 0, 0, 0, 0], [-0.06, 0, 0, 0, 0, 0]]
     frame = {"TOSTRAIN": np.array(strain, float)}
-    D_mem = PaperOrthotropic().failure(frame, Hypotheses(), coords=coords)
-    D_surf = PaperOrthotropic().failure(frame, Hypotheses())        # no coords -> surface
+    D_mem = PaperOrthotropic().damage(frame, Hypotheses(), xyz=coords, conn=None, w_lig=0.0)
+    D_surf = PaperOrthotropic().damage(frame, Hypotheses(), xyz=None, conn=None, w_lig=0.0)        # no coords -> surface
     assert D_mem < 1e-6              # membrane strain averages to ~0 through the thickness
     assert D_surf > 1.0             # the surface sees the full 6% tension

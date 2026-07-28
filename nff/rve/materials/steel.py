@@ -8,7 +8,7 @@ strings out of the deck writer, it does not change the physics.
 
 from __future__ import annotations
 
-from nff.rve.damage import damage_from_frame
+from nff.rve.damage import plastic_damage
 from nff.rve.materials.base import Hypotheses, Material
 
 STEEL = dict(E=210_000.0, nu=0.30, sigma_y=235.0, Et=2100.0)   # MPa; isotropic hardening Et = E/100
@@ -17,15 +17,14 @@ STEEL = dict(E=210_000.0, nu=0.30, sigma_y=235.0, Et=2100.0)   # MPa; isotropic 
 class SteelJ2(Material):
     """Isotropic elastoplastic S235 steel (linear elastic + bilinear J2 hardening).
 
-    Failure is triaxiality-dependent ductile damage ``D = PEEQ / eps_f(eta)`` (H6 = ductile_D).
+    Damage is the shared measure: normalized plastic dissipation ``<PEEQ>_lig / eps_f``.
     """
 
     name = "STEEL"
 
-    def __init__(self, params: dict | None = None, *, eps_f0: float = 0.25, k: float = 1.5):
+    def __init__(self, params: dict | None = None, *, eps_f0: float = 0.25):
         self.params = dict(STEEL if params is None else params)
-        self.eps_f0 = eps_f0                       # fracture strain at uniaxial tension
-        self.k = k                                 # triaxiality sensitivity of the fracture locus
+        self._eps_f = eps_f0                       # ductile fracture strain (uniaxial tension)
 
     @classmethod
     def from_dict(cls, params: dict) -> "SteelJ2":
@@ -46,5 +45,13 @@ class SteelJ2(Material):
     def el_file_fields(self, *, elastic_only: bool = False) -> str:
         return "E, S" if elastic_only else "E, PEEQ, S"
 
-    def failure(self, frame: dict, hyp: Hypotheses, *, coords=None, q: float = 99.0) -> float:
-        return damage_from_frame(frame, eps_f0=self.eps_f0, k=self.k, q=q)
+    @property
+    def eps_f(self) -> float:
+        return self._eps_f
+
+    @property
+    def yield_strain(self) -> float:
+        return self.params["sigma_y"] / self.params["E"]
+
+    def damage(self, frame: dict, hyp: Hypotheses, *, xyz, conn, w_lig: float) -> float:
+        return plastic_damage(frame, xyz, conn, w_lig, self._eps_f)

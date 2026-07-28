@@ -25,9 +25,15 @@ import time
 import numpy as np
 
 from nff.rve.geometry import RVEParams, build_rve_domain, boundary_tag
-from nff.rve.damage import damage_from_frame, max_principal_strain
+from nff.rve.damage import (LIG_CENTER_FRAC, LIG_RADIUS_FRAC, max_principal_strain,
+                            mean_triaxiality, peak_peeq)
 from nff.rve.materials import Hypotheses, coerce_material
 from nff.rve.materials.steel import STEEL   # re-exported for back-compat (callers import from here)
+
+# CalculiX lives in its own conda env here (`/opt/miniconda3/envs/ccx/bin/ccx`, v2.23) and is NOT
+# on the kgnn_mac PATH, so a bare "ccx" resolves only when the caller has arranged it. Override
+# with $CCX_BIN or the ``ccx_bin`` argument.
+CCX_BIN = os.environ.get("CCX_BIN", "ccx")
 
 
 def _build_mesh(p: RVEParams, pivot, imp_amp, n_through, lc_min, lc_max):
@@ -57,10 +63,11 @@ def _build_mesh(p: RVEParams, pivot, imp_amp, n_through, lc_min, lc_max):
         # deforming region. The free main cut below/beside the fillet stays coarse.
         gmsh.model.mesh.field.add("Ball", 1)
         gmsh.model.mesh.field.setNumber(1, "XCenter", 0.0)
-        gmsh.model.mesh.field.setNumber(1, "YCenter", -0.5 * p.w_lig)   # mid-ligament
+        # same disc the damage average uses -- refined region == averaged region, one constant pair
+        gmsh.model.mesh.field.setNumber(1, "YCenter", LIG_CENTER_FRAC * p.w_lig)   # mid-ligament
         gmsh.model.mesh.field.setNumber(1, "ZCenter", 0.5 * p.thickness)
-        gmsh.model.mesh.field.setNumber(1, "Radius", 0.75 * p.w_lig)    # covers fillet + strip + secondary
-        gmsh.model.mesh.field.setNumber(1, "Thickness", 0.75 * p.w_lig)  # transition to coarse
+        gmsh.model.mesh.field.setNumber(1, "Radius", LIG_RADIUS_FRAC * p.w_lig)    # fillet + strip + secondary
+        gmsh.model.mesh.field.setNumber(1, "Thickness", LIG_RADIUS_FRAC * p.w_lig)  # transition to coarse
         gmsh.model.mesh.field.setNumber(1, "VIn", lc_min)
         gmsh.model.mesh.field.setNumber(1, "VOut", lc_max)
         gmsh.model.mesh.field.setAsBackgroundMesh(1)
@@ -163,7 +170,7 @@ def deploy_ccx(p, pivot, angle_deg, material=STEEL, imp_amp=None, elastic_only=F
     xyz, conn, arcA, arcB = _build_mesh(p, pivot, imp_amp, n_through, lc_min, lc_max)
     _write_inp(job + ".inp", xyz, conn, arcA, arcB, pivot, mat,
                np.radians(angle_deg), elastic_only, n_frames, hyp)
-    r = subprocess.run(["ccx", "hinge"], cwd=workdir, capture_output=True, text=True, timeout=600)
+    r = subprocess.run([CCX_BIN, "hinge"], cwd=workdir, capture_output=True, text=True, timeout=600)
     return dict(returncode=r.returncode, stdout=r.stdout[-2000:], n_nodes=len(xyz),
                 n_elems=len(conn), job=job)
 
@@ -316,26 +323,29 @@ def prepare_job(p, angle_deg=60.0, n_steps=15, pivot=None, material=STEEL, imp_a
     _write_deck(job + ".inp", xyz, conn, arcA, arcB, pivot, mat, states, elastic_only,
                 field_every, solver=solver, hyp=hyp, min_inc=min_inc, stabilize=stabilize)
     return dict(job=job, workdir=workdir, xyz=xyz, conn=conn, arcA=arcA, arcB=arcB, pivot=pivot,
-                angle_deg=angle_deg, n_steps=n_steps, material=mat, hyp=hyp)
+                angle_deg=angle_deg, n_steps=n_steps, material=mat, hyp=hyp, w_lig=p.w_lig)
 
 
-def solve_job(meta, ncpus=1, timeout=1800, eps_f=None, fracture_margin=1.1, poll=4.0):
+def solve_job(meta, ncpus=1, timeout=1800, eps_f=None, fracture_margin=1.1, poll=4.0,
+              ccx_bin=CCX_BIN):
     """Run ccx on a prepared job (subprocess — safe to run many concurrently).
 
-    stop-at-fracture: if ``eps_f`` is given, poll the incrementally-written .frd and kill ccx
-    once PEEQ p99 >= fracture_margin*eps_f. This skips the deep-plastic grind PAST ductile
-    failure — the dominant cost, since most hinges tear at small angle then ccx crawls to the
-    cap in tiny increments (that data is also unphysical: CalculiX has no element deletion).
+    stop-at-fracture: if ``eps_f`` is given, poll the incrementally-written .frd and kill ccx once
+    the hottest ligament element passes ``fracture_margin*eps_f``. This skips the deep-plastic
+    grind PAST ductile failure — the dominant cost, since most hinges tear at small angle then ccx
+    crawls to the cap in tiny increments (that data is also unphysical: CalculiX has no element
+    deletion). Pass the MATERIAL's own ``eps_f``, not a campaign constant.
     Returns a CompletedProcess-like object (``.stdout`` = the ccx log).
     """
     env = {**os.environ, "OMP_NUM_THREADS": str(ncpus), "CCX_NPROC_EQUATION_SOLVER": str(ncpus)}
     if eps_f is None:
-        return subprocess.run(["ccx", "hinge"], cwd=meta["workdir"], capture_output=True, text=True,
-                              timeout=timeout, env=env)
+        return subprocess.run([ccx_bin, "hinge"], cwd=meta["workdir"], capture_output=True,
+                              text=True, timeout=timeout, env=env)
 
+    xyz, conn, w_lig = meta["xyz"], meta["conn"], meta["w_lig"]
     frd, logpath = meta["job"] + ".frd", os.path.join(meta["workdir"], "ccx.log")
     with open(logpath, "w") as logf:                             # file, not PIPE: no buffer deadlock
-        proc = subprocess.Popen(["ccx", "hinge"], cwd=meta["workdir"], stdout=logf,
+        proc = subprocess.Popen([ccx_bin, "hinge"], cwd=meta["workdir"], stdout=logf,
                                 stderr=subprocess.STDOUT, text=True, env=env)
         t0 = time.time()
         while True:
@@ -348,7 +358,7 @@ def solve_job(meta, ncpus=1, timeout=1800, eps_f=None, fracture_margin=1.1, poll
                 proc.terminate(); break
             try:                                                 # peek the partial .frd for fracture
                 frames = _parse_frd(frd) if os.path.exists(frd) else []
-                if frames and _peeq_pct(frames[-1], 99.0) >= fracture_margin * eps_f:
+                if frames and peak_peeq(frames[-1], xyz, conn, w_lig) >= fracture_margin * eps_f:
                     proc.terminate(); break                      # stop-at-fracture
             except Exception:
                 pass
@@ -359,7 +369,7 @@ def solve_job(meta, ncpus=1, timeout=1800, eps_f=None, fracture_margin=1.1, poll
                 proc.kill()
     with open(logpath) as f:
         out = f.read()
-    return subprocess.CompletedProcess(["ccx", "hinge"], proc.returncode or 0, out, "")
+    return subprocess.CompletedProcess([ccx_bin, "hinge"], proc.returncode or 0, out, "")
 
 
 def parse_job(meta, stdout=""):
@@ -382,18 +392,21 @@ def parse_job(meta, stdout=""):
     strain_max = np.array([_principal_strain_max(f["TOSTRAIN"]).max()
                            for f in frames if "TOSTRAIN" in f])
     peeq_max = np.array([_peeq_max(f) for f in frames])
-    peeq_p99 = np.array([_peeq_pct(f, 99.0) for f in frames])
-    # failure margin is the material's own criterion (H6): ductile damage for steel,
-    # tensile tearing for paper. Falls back to the steel shim for meta without a material.
-    mat = meta.get("material")
+    # THE damage column: normalized plastic dissipation <PEEQ>_lig / eps_f (nff.rve.damage).
+    # peeq_lig is the hottest ligament element -- it calibrates the tear line (the value of
+    # `damage` where it first reaches eps_f); eta_mean_lig audits the constant-eps_f assumption.
+    conn, w_lig = meta["conn"], meta["w_lig"]
+    mat = coerce_material(meta["material"])
     hyp = meta.get("hyp") or Hypotheses()
-    fail_fn = (lambda f: mat.failure(f, hyp, coords=xyz, q=99.0)) if mat is not None else _damage_pct
-    damage_p99 = np.array([fail_fn(f) for f in frames])
+    damage = np.array([mat.damage(f, hyp, xyz=xyz, conn=conn, w_lig=w_lig) for f in frames])
+    peeq_lig = np.array([peak_peeq(f, xyz, conn, w_lig) for f in frames])
+    eta_mean_lig = np.array([mean_triaxiality(f, xyz, conn, w_lig) for f in frames])
     return dict(ok=ok, stdout=stdout[-1500:], theta_deg=theta_deg, W=W, M_theta=np.array(Mt),
                 F_a=np.array(Fa), F_s=np.array(Fs), uz_max=uz_max, strain_max=strain_max,
-                peeq_max=peeq_max, peeq_p99=peeq_p99, damage_p99=damage_p99, frames=frames, xyz=xyz, conn=meta["conn"],
+                peeq_max=peeq_max, peeq_lig=peeq_lig, damage=damage, eta_mean_lig=eta_mean_lig,
+                eps_f=mat.eps_f, frames=frames, xyz=xyz, conn=conn,
                 arcA=meta["arcA"], arcB=meta["arcB"], pivot=pivot, n_nodes=len(xyz),
-                n_elems=len(meta["conn"]), job=job)
+                n_elems=len(conn), job=job)
 
 
 def deploy(p, ncpus=1, solver=None, timeout=1800, eps_f=None, **kw):
@@ -412,25 +425,13 @@ def deploy(p, ncpus=1, solver=None, timeout=1800, eps_f=None, **kw):
 
 
 def _peeq_max(frame):
-    """Max equivalent plastic strain (PEEQ) over the frame; NaN if absent.
+    """Max equivalent plastic strain (PEEQ) anywhere in the frame; NaN if absent.
 
-    NOTE: the raw max is contaminated by the fillet stress singularity -- use
-    ``_peeq_pct(frame, 99)`` for the ductile-failure flag, not this.
+    Raw nodal max over the WHOLE mesh, so it is contaminated by the fillet stress singularity and
+    by the coarse panels -- diagnostic only. The tear indicator is ``peeq_lig``
+    (:func:`nff.rve.damage.peak_peeq`), which is an element mean inside the ligament.
     """
     for k in ("PE", "PEEQ"):
         if k in frame and frame[k].size:
             return float(np.abs(frame[k]).max())
     return np.nan
-
-
-def _peeq_pct(frame, q=99.0):
-    """Robust (singularity-insensitive) PEEQ percentile for the ductile-failure flag."""
-    for k in ("PE", "PEEQ"):
-        if k in frame and frame[k].size:
-            return float(np.percentile(np.abs(frame[k]), q))
-    return np.nan
-
-
-def _damage_pct(frame, q=99.0, eps_f0=0.25, k=1.5):
-    """Back-compat shim: steel ductile-damage percentile from a frame (see damage.damage_from_frame)."""
-    return damage_from_frame(frame, eps_f0=eps_f0, k=k, q=q)

@@ -7,7 +7,7 @@
 #   * thickness_mm 1.0 -> 1.5  (standard laser-cut gauge; stiffer but higher strain/rotation)
 #   * the OOD DOMAIN is now DATA-DRIVEN: the v2 checkpoint carries its own (wider) trust region in
 #     `stats["domain"]`, so closed_setup auto-widens the barrier -- no manual DOMAIN edit needed.
-# Everything else (edge-pull setup, ridge, learnable w_lig, break-barrier m_safe=1.0) is unchanged.
+# Everything else (edge-pull setup, ridge, learnable w_lig) is unchanged.
 # Tune `loads.value` / `target_half_*` to explore the now-larger feasible deployment range.
 # --------------------------------------------------------------------------------------------
 
@@ -41,9 +41,9 @@ hinge_model:
   w_lig_mm: 5.0            # manufacturing width; surrogate now covers [1,20] so this can be swept
   calibrate: true
   barrier: 0.05
-  w_fail: 1.0
+  # MIGRATED 2026-07-28: break barrier removed; single term w_damage * mean(D^2). Re-tune.
+  w_damage: 1.0
   w_ood: 1.0e-3
-  m_safe: 1.0             # break-onset = physical fracture D>=1 (penalize BREAKING, not folding)
   learn_w_lig: true
 
 physics:

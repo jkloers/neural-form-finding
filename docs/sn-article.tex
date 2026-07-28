@@ -539,18 +539,38 @@ simulation returns the condensed stored energy
 \end{equation}
 where $\psi$ is the strain-energy density, together with its work-conjugate
 generalised forces $\nabla_{\epsh}W=(F_a,F_s,M_\vartheta)$, the peak von~Mises
-stress, the maximum out-of-plane displacement $u_z$, and the 99th percentile of
-the equivalent plastic strain, $\varepsilon_p^{p99}$. Failure is measured by the
-ductile damage ratio
+stress, and the maximum out-of-plane displacement $u_z$. Damage is measured by the
+normalised plastic dissipation in the ligament,
 \begin{equation}
-  D=\frac{\varepsilon_p^{p99}}{\varepsilon_f(T)},
+  \Delta=\frac{\langle\varepsilon_p\rangle_{\Omega_\ell}}{\varepsilon_f},
   \qquad
-  \varepsilon_f(T)=\varepsilon_{f0}\exp\!\bigl[-k\,(T-\tfrac13)\bigr],
+  \langle\varepsilon_p\rangle_{\Omega_\ell}
+    =\frac{1}{|\Omega_\ell|}\int_{\Omega_\ell}\varepsilon_p\,\mathrm{d}V ,
   \label{eq:damage}
 \end{equation}
-with $T=\sigma_m/\sigma_{\mathrm{eq}}$ the stress triaxiality and the locus
-normalised so that $\varepsilon_f=\varepsilon_{f0}$ in uniaxial tension;
-$D\geq1$ marks fracture. % CITE: Johnson-Cook / Rice-Tracey ductile failure locus.
+where $\varepsilon_p$ is the equivalent plastic strain, $\Omega_\ell$ the ligament
+sub-domain (the mesh-refined disc about the cut tip) and $\varepsilon_f$ the measured
+fracture strain. Because the flow stress is nearly constant over the cold-draw
+plateau, $\sigma_y\langle\varepsilon_p\rangle_{\Omega_\ell}|\Omega_\ell|$ is the plastic
+work dissipated in the hinge, so $\Delta$ is that dissipation normalised by the work
+needed to exhaust the material's ductility.
+
+Three properties motivate this choice over a peak statistic. First, $\varepsilon_p$
+is monotone non-decreasing along any deformation path, so $\Delta$ measures accumulated
+irreversibility and never decreases when a reversing path returns to an earlier state --
+the property required of a state function fitted to path data. Second, $\Delta$ is
+\emph{intensive}: the total plastic work in a fold is insensitive to ligament width,
+whereas its volume average grows as the ligament narrows, so $\Delta$ correctly penalises
+narrow hinges folded hard. Third, a volume integral is mesh-convergent and free of the
+rank-order discontinuities of a percentile, which concentrates the design gradient on a
+single element. We deliberately omit a triaxiality-dependent fracture locus: the
+Johnson--Cook construction models void growth in ductile metals, whereas PET fails by
+crazing and fibrillation, and no locus exponent has been measured for it. The mean
+triaxiality over $\Omega_\ell$ is instead recorded per campaign to audit that omission.
+Fracture is not a second measure but a calibrated value $\Delta_{\mathrm{tear}}$, read off
+as the $\Delta$ at which the hottest ligament element first reaches $\varepsilon_f$; it is
+reported alongside each dataset and enters no objective.
+% CITE: Johnson-Cook / Rice-Tracey (the locus we do NOT use); p-norm/KS stress aggregation.
 
 \begin{figure}
     \centering
@@ -654,15 +674,15 @@ Young's modulus        & $E$                          & $3.0\,\mathrm{GPa}$     
 Poisson's ratio        & $\nu$                        & $0.40$                           & literature \\
 Yield stress           & $\sigma_y$                   & $48.8\pm1.6\,\mathrm{MPa}$       & 9 coupons, both directions \\
 Cold-draw anchor       & $(\sigma_{\mathrm{true}},\varepsilon_p)$ & $(109\,\mathrm{MPa},\,1.15)$ & Eq.~\eqref{eq:draw-anchor}, $\Lambda=3.28$ \\
-Fracture strain        & $\varepsilon_{f0}$           & $\geq1.2$                        & lower bound (see text) \\
-Triaxiality exponent   & $k$                          & $1.5$                            & assumed, Eq.~\eqref{eq:damage} \\
+Fracture strain        & $\varepsilon_f$              & $1.784$                          & run-to-break, $\ln(A_0/A_f)$, $n=1$ \\
 Sheet thickness        & $t$                          & $0.50\,\mathrm{mm}$              & micrometer \\
 Density                & $\rho$                       & $1390\,\mathrm{kg\,m^{-3}}$      & mass/area/thickness \\
 \bottomrule
 \end{tabular}
 \caption{Calibrated PET parameters entering the finite-element oracle. The elastic
-constants and the triaxiality exponent are literature or assumed values; the
-hardening table and the fracture strain are measured. The hardening table is
+constants are literature values; the hardening table and the fracture strain are
+measured. $\varepsilon_f$ is the sole constant in the damage measure,
+Eq.~\eqref{eq:damage}. The hardening table is
 $\{(\sigma_y,0),\,(109\,\mathrm{MPa},1.15)\}$ in true stress and true plastic
 strain.}
 \label{tab:pet-params}
@@ -679,17 +699,18 @@ repeating a ligament opening simulation at $E=1.2$ and $3.0\,\mathrm{GPa}$ chang
 the peak force by $2\%$ while the elastic stiffness scales with $E$, which
 confirms that the peak is set by the yield stress, the hardening and the fracture
 strain, and that adopting the compliance-corrupted modulus would merely transfer
-machine compliance into the material law. Second, the specimens were stopped on
-the draw plateau rather than broken, so $\varepsilon_{f0}$ is reported as a lower
-bound; it is to be refined from the ligament tests, where fracture is the quantity
-of interest, and the triaxiality exponent $k$ of \eqref{eq:damage} is likewise
-carried as an assumed value pending the mixed-mode sweep described below. The
-ductile-damage form \eqref{eq:damage} is itself supported by the conjugate
+machine compliance into the material law. Second, $\varepsilon_f$ rests on a single
+run-to-break specimen ($n=1$), measured as $\ln(A_0/A_f)$ from the torn section; it
+carries the spread of one observation and is to be repeated. Because
+$\varepsilon_f$ enters \eqref{eq:damage} as a pure scale factor it cannot reorder two
+designs, so it does not gate the oracle campaign. The plastic-dissipation form
+\eqref{eq:damage} is itself supported by the conjugate
 stress-whitening bands observed at $\pm45^\circ$ to the load axis: shear-driven
 yielding on the planes of maximum shear rather than $90^\circ$ crazing, which
-supports the von~Mises framework and indicates weak pressure sensitivity. Whitening
-onset also provides a visible, photographable proxy for $D$, and thereby an
-experimental anchor for the level of damage that constitutes functional failure.
+supports the von~Mises framework and indicates weak pressure sensitivity --- the
+same weak pressure sensitivity that makes omitting a triaxiality locus defensible.
+Whitening onset also provides a visible, photographable proxy for $\Delta$, and thereby
+an experimental anchor for the level of damage that constitutes functional failure.
 
 \paragraph{Sweeping the deformation space with a uniaxial machine.}
 A uniaxial testing frame cannot directly impose the three measures
@@ -701,8 +722,8 @@ pull direction and the cut, a single tensile pull realises the ray
 \end{equation}
 so that $\chi=0$ is pure shear along the ligament, $\chi=90^\circ$ is pure
 opening, and intermediate angles are mixed states that additionally sample
-different notch triaxialities --- which is precisely what is needed to calibrate
-the pair $(\varepsilon_{f0},k)$ of the failure locus \eqref{eq:damage}. The
+different notch triaxialities --- which is what is needed to test whether a single
+$\varepsilon_f$ suffices across stress states, the assumption \eqref{eq:damage} makes. The
 relative rotation $\vartheta$, the dominant degree of freedom during deployment,
 is not accessible in force control; it is instead validated kinematically, by
 folding a ligament to a prescribed angle and measuring the out-of-plane amplitude
@@ -967,7 +988,7 @@ $W$, $U$, $\Pi$                       & hinge energy, total energy, potential   
 $\lambda$, $\bm f$, $\mathcal{C}$     & load factor, generalised forces, admissible set & Eq.~\eqref{eq:equilibrium} \\
 $H$, $\mu$                            & equilibrium Hessian, Tikhonov parameter   & Eq.~\eqref{eq:ift} \\
 $\bm{\eta}$, $W_s$, $\gamma$          & surrogate network, energy scale, Sobolev weight & Eqs.~\eqref{eq:surrogate}--\eqref{eq:sobolev} \\
-$D$, $\varepsilon_{f0}$, $k$, $T$     & damage, fracture strain, exponent, triaxiality & Eq.~\eqref{eq:damage} \\
+$\Delta$, $\varepsilon_f$, $\Omega_\ell$  & damage, fracture strain, ligament sub-domain & Eq.~\eqref{eq:damage} \\
 $r_{\mathrm{win}}$                    & finite-element truncation radius          & Sec.~\ref{sec:rve} \\
 $\Lambda$, $\sigma_y$                 & natural draw ratio, yield stress          & Eq.~\eqref{eq:draw-anchor} \\
 $\chi$, $\hat{\bm n}$                 & grip angle, in-plane loading direction    & Sec.~\ref{sec:calibration} \\

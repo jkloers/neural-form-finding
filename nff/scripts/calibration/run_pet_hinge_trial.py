@@ -24,7 +24,8 @@ def main() -> None:
     ap.add_argument("--alpha", type=float, default=90.0)
     ap.add_argument("--fillet", type=float, default=0.16)
     ap.add_argument("--kerf", type=float, default=0.2)
-    ap.add_argument("--eps-f", type=float, default=1.5, help="ductile fracture strain (floor; run-to-break to pin)")
+    ap.add_argument("--eps-f", type=float, default=None,
+                    help="fracture strain override; default = the material's own (PET: 1.784, measured)")
     ap.add_argument("--r-win", type=float, default=None,
                     help="Saint-Venant window radius [mm]; default = max(12, 2.4*w_lig)")
     ap.add_argument("--theta", type=float, default=90.0, help="rotation ramp [deg] (keep small for a shear/axial trial)")
@@ -51,22 +52,24 @@ def main() -> None:
 
     mode = "shear" if args.eta_s else ("axial" if args.eta_a else "rotation")
     print(f"PET hinge {mode}: w_lig={args.w_lig}mm t={args.thickness}mm alpha={args.alpha} "
-          f"-> theta={args.theta}deg eta_s={args.eta_s} eta_a={args.eta_a} ({args.steps} steps), eps_f={args.eps_f}")
+          f"-> theta={args.theta}deg eta_s={args.eta_s} eta_a={args.eta_a} ({args.steps} steps), eps_f={const.eps_f}")
     res = evaluate_hinge(geo, ray, const, ncpus=args.ncpus, workdir=args.workdir)
 
     np.savez(
         args.out,
         theta_deg=res.theta_deg, a=res.a, s=res.s,
         M_theta=res.M_theta, F_a=res.F_a, F_s=res.F_s, W=res.W,
-        peeq_p99=res.peeq_p99, damage_p99=res.damage_p99, uz_max=res.uz_max,
+        damage=res.damage, peeq_lig=res.peeq_lig, eta_mean_lig=res.eta_mean_lig, uz_max=res.uz_max,
+        damage_at_tear=res.damage_at_tear,
         regime=res.regime, failure_theta_deg=res.failure_theta_deg,
-        w_lig=args.w_lig, thickness=args.thickness, alpha=args.alpha, eps_f=args.eps_f,
+        w_lig=args.w_lig, thickness=args.thickness, alpha=args.alpha, eps_f=const.eps_f,
         eta_s=args.eta_s, eta_a=args.eta_a, mode=mode, n_elems=res.n_elems,
     )
     ft = res.failure_theta_deg
     print(f"ok={res.ok}  n_elems={res.n_elems}  n_samples={res.n_samples}")
     print(f"peak M_theta = {np.nanmax(res.M_theta):.1f} N.mm at theta={res.theta_deg[int(np.nanargmax(res.M_theta))]:.1f} deg")
-    print(f"max PEEQ = {np.nanmax(res.peeq_p99):.3f}  max uz = {np.nanmax(res.uz_max):.3f} mm")
+    print(f"max damage = {np.nanmax(res.damage):.4f}  peak ligament PEEQ = {np.nanmax(res.peeq_lig):.3f}"
+          f"  <eta> = {np.nanmean(res.eta_mean_lig):.3f}  max uz = {np.nanmax(res.uz_max):.3f} mm")
     print(f"failure angle = {'—' if np.isnan(ft) else f'{ft:.1f} deg'}  (survives fold)" if np.isnan(ft)
           else f"failure angle = {ft:.1f} deg")
     print(f"saved -> {args.out}")

@@ -3,7 +3,7 @@
 Calibrated to the Series-1 / kirigami tensile campaign on a real ~0.5 mm PET sheet
 (``docs/physical_calibration_series1_tensile_protocol.md`` §13; batch
 ``data/experiments/raw/kirigami_20260723``). Structurally a :class:`SteelJ2` (isotropic
-``*ELASTIC`` + ``*PLASTIC`` + ductile-damage failure, H6=ductile_D), but with:
+``*ELASTIC`` + ``*PLASTIC``, sharing the one plastic-dissipation damage measure), but with:
 
 * a **multi-point** ``*PLASTIC`` table (steel is bilinear) anchored on the measured yield
   and the **cold-draw** point (true stress = lambda * plateau, true strain = ln lambda);
@@ -31,7 +31,7 @@ Calibration provenance (9 drawn specimens, MD+CD, 1 mm/min):
 """
 from __future__ import annotations
 
-from nff.rve.damage import damage_from_frame
+from nff.rve.damage import plastic_damage
 from nff.rve.materials.base import Hypotheses, Material
 
 # true stress [MPa], true plastic strain -- multi-point cold-draw flow curve rebuilt from the 9 raw
@@ -63,32 +63,32 @@ PET = dict(E=3000.0, nu=0.40, plastic=PET_PLASTIC)   # MPa; E is a literature pl
 class PETIsotropic(Material):
     """Isotropic elastoplastic PET (linear elastic + multi-point J2 cold-draw hardening).
 
-    Failure is ``D = PEEQ / eps_f(eta)`` (H6 = ductile_D) with ``eps_f0`` measured on our own
-    coupon. **The triaxiality term is switched off for PET: k = 0, so eps_f = eps_f0 everywhere.**
+    Damage is the shared measure ``Delta = <PEEQ>_lig / eps_f`` (:mod:`nff.rve.damage`) with
+    ``eps_f`` measured on our own coupon. For PET's flat cold-draw plateau that average IS the
+    normalized plastic dissipation in the ligament -- the irreversibility the design loss exists to
+    push down.
 
-    The locus ``eps_f0 * exp(-k (eta - 1/3))`` is a metals construction. It models void growth
-    under hydrostatic tension, and its ``k = 1.5`` came from mild steel -- neither transfers to a
-    cold-drawing thermoplastic, whose failure is crazing and fibrillation. Nothing in the
-    literature offers a PET value: polymer fracture loci are calibrated per material from notched
-    specimen sets, and are often not even monotonic in eta (Lode angle matters too).
+    **No triaxiality locus.** The Johnson-Cook form ``eps_f0 * exp(-k (eta - 1/3))`` is a metals
+    construction: it models void nucleation and growth under hydrostatic tension, and its
+    ``k = 1.5`` came from mild steel. Neither transfers to a cold-drawing thermoplastic, which
+    fails by crazing and fibrillation. Nothing in the literature offers a PET value -- polymer
+    fracture loci are calibrated per material from notched specimen sets, and are often not even
+    monotonic in eta (the Lode angle matters too). Rather than ship an assumed steel constant, the
+    campaign RECORDS ``<eta>`` (``nff.rve.damage.mean_triaxiality``) so the constant-``eps_f``
+    choice stays audited: measured triaxiality in the fold/shear RVE runs is eta ~ 0.33-0.41, both
+    essentially uniaxial tension, because the critical fibre of a fold is the outer surface in
+    bending rather than shear.
 
-    Switching it off costs nothing here. Measured triaxiality in the RVE runs is eta ~ 0.33 (fold)
-    to 0.41 (shear) -- both essentially uniaxial tension, because the critical fibre of a fold is
-    the outer surface in bending, not shear. Across that band the exponential moves under 10%,
-    less than the uncertainty on ``eps_f0`` itself (n = 1). The term was introduced for steel to
-    stop a constant eps_f = 0.25 condemning shear-dominated folds; our folds are not shear
-    dominated, so it never does the job it was added for.
-
-    To turn it back on, measure it: one double-edge-notched coupon (eta ~ 0.5-0.6) run on the same
-    protocol gives a second point on the locus and hence ``k``.
+    If PET ever needs pressure sensitivity, the honest place for it is a pressure-modified yield
+    surface in the constitutive law (polymers do yield ~10-20% differently in tension and
+    compression), not a fracture locus bolted onto post-processing.
     """
 
     name = "PET"
 
-    def __init__(self, params: dict | None = None, *, eps_f0: float = 1.784, k: float = 0.0):
+    def __init__(self, params: dict | None = None, *, eps_f0: float = 1.784):
         self.params = dict(PET if params is None else params)
-        self.eps_f0 = eps_f0                       # fracture strain at uniaxial tension (measured, n=1)
-        self.k = k                                 # triaxiality sensitivity -- OFF for PET, see class docstring
+        self._eps_f = eps_f0                       # fracture strain, MEASURED (2026-07-27, n=1)
 
     @classmethod
     def from_dict(cls, params: dict) -> "PETIsotropic":
@@ -108,5 +108,13 @@ class PETIsotropic(Material):
     def el_file_fields(self, *, elastic_only: bool = False) -> str:
         return "E, S" if elastic_only else "E, PEEQ, S"
 
-    def failure(self, frame: dict, hyp: Hypotheses, *, coords=None, q: float = 99.0) -> float:
-        return damage_from_frame(frame, eps_f0=self.eps_f0, k=self.k, q=q)
+    @property
+    def eps_f(self) -> float:
+        return self._eps_f
+
+    @property
+    def yield_strain(self) -> float:
+        return self.params["plastic"][0][0] / self.params["E"]     # upper-yield peak / E
+
+    def damage(self, frame: dict, hyp: Hypotheses, *, xyz, conn, w_lig: float) -> float:
+        return plastic_damage(frame, xyz, conn, w_lig, self._eps_f)

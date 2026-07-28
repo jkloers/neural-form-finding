@@ -10,7 +10,10 @@ import matplotlib.pyplot as plt
 os.chdir(os.path.dirname(__file__))
 import sys
 sys.path.insert(0, "/Users/julienkloers/Documents/Code2/princeton/neural-form-finding")
-from nff.rve.damage import (max_principal_strain, tear_from_frame, membrane_tear_from_frame)
+from nff.rve.damage import max_principal_strain
+# the paper tear criterion lives with the (parked, elastic) paper material -- nff.rve.damage
+# carries only the one plastic-dissipation measure, which is undefined for an elastic material
+from nff.rve.materials.paper import membrane_tear_from_frame
 
 d = np.load("paper_hinge_result60.npz", allow_pickle=True)
 xyz = np.asarray(d["xyz"], float)
@@ -34,7 +37,7 @@ for u, E, S in zip(disp, tostrain, stress):
     fr = {"TOSTRAIN": E, "STRESS": S if len(S) == len(E) else None}
     theta.append(fold_angle(u))
     D_surf_uni.append(np.percentile(max_principal_strain(E), 99) / EPS0)
-    D_surf_tri.append(tear_from_frame(fr, eps_tear0=EPS0, k=K))
+    D_surf_tri.append(membrane_tear_from_frame(fr, None, eps_tear0=EPS0, k=K))  # coords=None -> surface
     D_mem.append(membrane_tear_from_frame(fr, xyz, eps_tear0=EPS0, k=K))
     memstrain.append(None)  # placeholder; nodal membrane strain drawn below per picked frame
 theta = np.array(theta)

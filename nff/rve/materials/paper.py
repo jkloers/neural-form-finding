@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from nff.rve.damage import membrane_tear_from_frame
+from nff.rve.damage import max_principal_strain, stress_triaxiality
 from nff.rve.materials.base import Hypotheses, Material
 
 # Standard 80 gsm A1 copy/printer paper. Values are mid-range handbook figures for uncoated
@@ -58,8 +58,83 @@ PAPER_80GSM = dict(
 )
 
 
+def fracture_locus(eta: np.ndarray, eps_f0: float, k: float,
+                   eta_floor: float = -1.0 / 3.0, eps_f_cap: float = 3.0) -> np.ndarray:
+    """Triaxiality-dependent tear strain, normalised so ``eps_f(1/3) = eps_f0`` (uniaxial tension).
+
+    Johnson-Cook-like. ``k`` sets how fast the tolerable strain falls with tension / rises with
+    shear-compression; ``eta_floor`` is the compression cutoff and ``eps_f_cap`` bounds the rise.
+    Paper-only: the elasto-plastic materials use the constant-``eps_f`` plastic-dissipation measure
+    in :mod:`nff.rve.damage` instead.
+    """
+    eta_c = np.maximum(np.asarray(eta, float), eta_floor)
+    return np.minimum(eps_f0 * np.exp(-k * (eta_c - 1.0 / 3.0)), eps_f_cap)
+
+
+def _column_average(coords: np.ndarray, arrays, tol: float = 0.05):
+    """Average per-node ``arrays`` over through-thickness columns (nodes sharing an in-plane x,y).
+
+    Groups nodes by their reference in-plane position (rounded to ``tol`` mm) -- one group per
+    extruded column -- and returns each array averaged within its column, one row per column. This
+    removes the bending strain gradient (tension outer / compression inner), leaving the membrane
+    (mid-surface) response.
+    """
+    key = np.round(coords[:, :2] / tol).astype(np.int64)
+    _, inv = np.unique(key, axis=0, return_inverse=True)
+    n = int(inv.max()) + 1
+    cnt = np.bincount(inv, minlength=n)
+    out = []
+    for A in arrays:
+        A = np.asarray(A, float)
+        acc = np.stack([np.bincount(inv, weights=A[:, c], minlength=n) for c in range(A.shape[1])],
+                       axis=1)
+        out.append(acc / cnt[:, None])
+    return out
+
+
+def _tear_margin(principal: np.ndarray, S, eps_tear0: float, k: float, q: float) -> float:
+    """Robust percentile of the triaxiality-aware tear damage ``D = principal / eps_f(eta)``."""
+    if S is not None and np.size(S):
+        S = np.asarray(S, float)
+        if S.ndim == 2 and S.shape[1] >= 6 and S.shape[0] == principal.shape[0]:
+            eps_f = fracture_locus(stress_triaxiality(S[:, :6]), eps_tear0, k)
+            return float(np.percentile(principal / eps_f, q))
+    return float(np.percentile(principal, q)) / eps_tear0
+
+
+def membrane_tear_from_frame(frame: dict, coords, *, eps_tear0: float = 0.03, k: float = 1.5,
+                             q: float = 99.0) -> float:
+    """Bending- and triaxiality-aware tear margin ``D`` (>=1 => tear).
+
+    Averages strain and stress through the thickness (per in-plane column) so the bending gradient
+    cancels and the membrane (mid-surface) state remains, then applies the tear locus. A pure fold
+    (no membrane stretch) accumulates little membrane strain and does not tear regardless of fold
+    angle -- matching that paper creases to 180 deg without tearing. With ``coords=None`` this
+    degrades to the raw surface criterion.
+    """
+    E = frame.get("TOSTRAIN")
+    if E is None or not np.size(E):
+        return float("nan")
+    E = np.asarray(E, float)
+    S = frame.get("STRESS")
+    if coords is None:
+        return _tear_margin(max_principal_strain(E), S, eps_tear0, k, q)
+    coords = np.asarray(coords, float)
+    if S is not None and np.size(S) and np.asarray(S).shape == E.shape:
+        E_col, S_col = _column_average(coords, [E, np.asarray(S, float)])
+    else:
+        (E_col,) = _column_average(coords, [E]); S_col = None
+    return _tear_margin(max_principal_strain(E_col), S_col, eps_tear0, k, q)
+
+
 class PaperOrthotropic(Material):
-    """Orthotropic-elastic 80 gsm copy paper with a tensile-tear failure criterion (H6)."""
+    """Orthotropic-elastic 80 gsm copy paper with a tensile-tear criterion.
+
+    PARKED, and the one material that does NOT use the shared plastic-dissipation damage: paper is
+    modelled as elastic-until-tear, so it emits no PEEQ at all and ``<PEEQ>_lig`` is undefined for
+    it. Its membrane tear margin lives here rather than in :mod:`nff.rve.damage` so that the shared
+    module carries exactly one damage definition.
+    """
 
     name = "PAPER"
     _orient = "ORIENT_MD"     # *ORIENTATION name binding MD to the local material x-axis
@@ -103,5 +178,15 @@ class PaperOrthotropic(Material):
         # tensile-tear needs total strain (E); stress (S) kept for diagnostics/triaxiality
         return "E, S"
 
-    def failure(self, frame: dict, hyp: Hypotheses, *, coords=None, q: float = 99.0) -> float:
-        return membrane_tear_from_frame(frame, coords, eps_tear0=self.eps_tear0, k=self.k, q=q)
+    @property
+    def eps_f(self) -> float:
+        return self.eps_tear0
+
+    @property
+    def yield_strain(self) -> float:
+        return self.params["sigma_y"] / self.params["E_MD"]
+
+    def damage(self, frame: dict, hyp: Hypotheses, *, xyz, conn, w_lig: float) -> float:
+        """Membrane tear margin (``>=1`` => tear). ``conn``/``w_lig`` are unused: the column
+        average already restricts to the deforming ligament by construction."""
+        return membrane_tear_from_frame(frame, xyz, eps_tear0=self.eps_tear0, k=self.k, q=99.0)

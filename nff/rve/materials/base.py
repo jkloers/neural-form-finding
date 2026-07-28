@@ -16,7 +16,8 @@ hypotheses H1-H7:
     H3  (always on)                 bending-dominated fold, NLGEOM, seeded imperfection
     H4  tc_asymmetry               tension/compression asymmetry across the fold
     H5  crease_softening           irreversible localized crease (stiffness loss)
-    H6  failure_mode               "ductile_D" (metal) | "tensile_tear" (paper)
+    H6  (fixed by the material)     damage = normalized plastic dissipation (see nff.rve.damage);
+                                     the elastic paper material carries its own tear criterion
     H7  (always on)                quasi-static, fixed environment
 
     element_family                 "solid" (C3D15 prisms, current) | "shell" (thin-sheet)
@@ -32,9 +33,8 @@ from dataclasses import dataclass
 class Hypotheses:
     """The explicit modeling assumptions a hinge RVE is evaluated under.
 
-    Defaults reproduce the legacy steel campaign (isotropic solid, no asymmetry,
-    ductile-damage failure). A material implementation reads only the toggles it
-    honours and ignores the rest.
+    Defaults reproduce the legacy steel campaign (isotropic solid, no asymmetry).
+    A material implementation reads only the toggles it honours and ignores the rest.
     """
 
     buckling_localized_at_hinge: bool = True   # H1: rigid panels, seed+refine only at ligament
@@ -42,7 +42,6 @@ class Hypotheses:
     orientation_deg: float = 0.0               # H2: material MD direction rel. to secondary cut (+x)
     tc_asymmetry: bool = False                 # H4: tension/compression asymmetry
     crease_softening: bool = False             # H5: irreversible crease (stiffness loss)
-    failure_mode: str = "ductile_D"            # H6: "ductile_D" | "tensile_tear"
 
 
 class Material(ABC):
@@ -71,13 +70,26 @@ class Material(ABC):
     def el_file_fields(self, *, elastic_only: bool = False) -> str:
         """The ``*EL FILE`` field list (e.g. ``"E, PEEQ, S"``) written per output frame."""
 
+    @property
     @abstractmethod
-    def failure(self, frame: dict, hyp: Hypotheses, *, coords=None, q: float = 99.0) -> float:
-        """Scalar failure margin ``D`` for a parsed output frame (``D >= 1`` => fracture).
+    def eps_f(self) -> float:
+        """The material's fracture strain -- the single constant normalising :meth:`damage`."""
 
-        The physical criterion is material-specific (H6): ductile plastic-strain damage for a
-        metal, bending/triaxiality-aware tearing for paper. ``frame`` is a parsed ``.frd`` frame
-        (fields per the material's :meth:`el_file_fields`); ``coords`` are the reference node
-        positions, supplied when the criterion needs through-thickness (membrane) averaging.
-        Returns NaN when the required fields are absent.
+    @property
+    @abstractmethod
+    def yield_strain(self) -> float:
+        """``sigma_y / E`` -- the dimensionless yield strain carried as a surrogate input feature."""
+
+    @abstractmethod
+    def damage(self, frame: dict, hyp: Hypotheses, *, xyz, conn, w_lig: float) -> float:
+        """Scalar damage ``Delta`` for a parsed output frame.
+
+        For every elasto-plastic material this is the one definition in :mod:`nff.rve.damage`:
+        normalized plastic dissipation ``<PEEQ>_lig / eps_f``, volume-averaged over the ligament.
+        ``frame`` is a parsed ``.frd`` frame (fields per :meth:`el_file_fields`); ``xyz``/``conn``
+        are the reference mesh, needed for the volume weights and the ligament mask; ``w_lig``
+        sets the averaging disc. Returns NaN when the required fields are absent.
+
+        Fracture is not a separate measure -- it is a calibrated VALUE of ``Delta``; see
+        :func:`nff.rve.damage.peak_peeq`.
         """

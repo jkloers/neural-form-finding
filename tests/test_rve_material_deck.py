@@ -62,16 +62,20 @@ def test_steel_is_a_material():
     assert isinstance(SteelJ2(), Material)
 
 
-def test_steel_failure_matches_legacy_damage():
-    """The material failure hook must reproduce the legacy ductile-damage numbers exactly."""
-    from nff.rve.damage import damage_from_frame
+def test_steel_damage_is_the_shared_plastic_dissipation():
+    """The material damage hook must be exactly the shared <PEEQ>_lig/eps_f measure."""
+    from nff.rve.damage import plastic_damage
+    from tests.test_rve_damage import unit_wedge_mesh
 
+    xyz, conn = unit_wedge_mesh(w_lig=4.0)
     rng = np.random.default_rng(0)
-    frame = {"PEEQ": np.abs(rng.normal(0.1, 0.05, size=40)),
-             "STRESS": rng.normal(0.0, 120.0, size=(40, 6))}
-    legacy = damage_from_frame(frame, eps_f0=0.25, k=1.5, q=99.0)
-    assert SteelJ2().failure(frame, Hypotheses()) == legacy
-    assert np.isnan(SteelJ2().failure({"PEEQ": np.zeros(3)}, Hypotheses()))   # no STRESS -> NaN
+    frame = {"PEEQ": np.abs(rng.normal(0.1, 0.05, size=len(xyz)))}
+    expected = plastic_damage(frame, xyz, conn, 4.0, SteelJ2().eps_f)
+    got = SteelJ2().damage(frame, Hypotheses(), xyz=xyz, conn=conn, w_lig=4.0)
+    assert got == expected
+    # no plastic field at all -> NaN, never a spurious 0
+    assert np.isnan(SteelJ2().damage({"STRESS": np.zeros((len(xyz), 6))}, Hypotheses(),
+                                     xyz=xyz, conn=conn, w_lig=4.0))
 
 
 def test_full_generated_deck_contains_legacy_steel_block():
