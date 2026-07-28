@@ -65,6 +65,14 @@ class PathExample:
     clamped_face: int = -1
     loaded_face: int = -1
     load_value: float = 0.0
+    # (n_hinges,) bool -- False marks a hinge whose path was discarded (see filter_dataset).
+    # A mask rather than deletion so every example keeps the same shape and the stacked arrays
+    # stay rectangular; the accessors below apply it.
+    hinge_mask: Optional[np.ndarray] = None
+
+    def mask(self) -> np.ndarray:
+        return (np.ones(len(self.alpha), bool) if self.hinge_mask is None
+                else np.asarray(self.hinge_mask, bool))
 
 
 @dataclass
@@ -79,17 +87,18 @@ class PathDataset:
 
     def polylines(self) -> np.ndarray:
         """(n_examples * n_hinges, n_steps+1, 3) -- every path, as a path."""
-        return np.concatenate([np.transpose(e.eta, (1, 0, 2)) for e in self.examples], axis=0)
+        return np.concatenate([np.transpose(e.eta[:, e.mask()], (1, 0, 2))
+                               for e in self.examples], axis=0)
 
     def endpoints(self) -> np.ndarray:
         """(n_examples * n_hinges, 3) -- where each path ended."""
-        return np.concatenate([e.eta[-1] for e in self.examples], axis=0)
+        return np.concatenate([e.eta[-1][e.mask()] for e in self.examples], axis=0)
 
     def alphas(self) -> np.ndarray:
-        return np.concatenate([e.alpha for e in self.examples], axis=0)
+        return np.concatenate([e.alpha[e.mask()] for e in self.examples], axis=0)
 
     def w_ligs(self) -> np.ndarray:
-        return np.concatenate([e.w_lig for e in self.examples], axis=0)
+        return np.concatenate([e.w_lig[e.mask()] for e in self.examples], axis=0)
 
     def grips(self) -> np.ndarray:
         """(n_examples, 2) the (clamped, loaded) tile pair of each example."""
@@ -101,7 +110,7 @@ class PathDataset:
 
     def per_path(self, values: np.ndarray) -> np.ndarray:
         """Broadcast one value per EXAMPLE out to one value per PATH."""
-        return np.repeat(np.asarray(values), [len(e.alpha) for e in self.examples])
+        return np.repeat(np.asarray(values), [int(e.mask().sum()) for e in self.examples])
 
     def design_index(self) -> np.ndarray:
         """(n_paths,) which example each path came from -- so held-out splits are BY DESIGN.
@@ -109,7 +118,8 @@ class PathDataset:
         Splitting by sample would leak: the 12 hinges of one sheet are far from independent, and a
         surrogate that memorised one of them would score well on its siblings.
         """
-        return np.concatenate([np.full(len(e.alpha), i) for i, e in enumerate(self.examples)])
+        return np.concatenate([np.full(int(e.mask().sum()), i)
+                               for i, e in enumerate(self.examples)])
 
 
 def _overlap_fraction(verts: np.ndarray, face_ids) -> float:
@@ -431,6 +441,7 @@ def save_dataset(ds: PathDataset, out_dir: str) -> str:
         z=np.stack([e.z for e in ds.examples]),
         bnd=np.stack([e.bnd for e in ds.examples]),
         seed=np.array([e.seed for e in ds.examples]),
+        hinge_mask=np.stack([e.mask() for e in ds.examples]),
         clamped_face=np.array([e.clamped_face for e in ds.examples]),
         loaded_face=np.array([e.loaded_face for e in ds.examples]),
         load_value=np.array([e.load_value for e in ds.examples]),
@@ -446,15 +457,24 @@ def save_dataset(ds: PathDataset, out_dir: str) -> str:
 
 
 def filter_dataset(ds: PathDataset, *, max_eta: float = 20.0,
-                   theta_bounds_deg=(-2.5, 130.0), max_overlap: float = 5e-4) -> PathDataset:
+                   theta_bounds_deg=(-2.5, 130.0), max_overlap: float = 5e-4,
+                   theta_noise_deg: float = 0.01) -> PathDataset:
     """Apply the validity gates to an ALREADY HARVESTED dataset, in place of re-deploying it.
 
     Every gate is computable from what is stored, so a gate added after the fact does not cost
     another harvest. Returns a new dataset; the rejected examples are recorded in ``.failures`` so
     the attrition stays visible rather than silently shrinking the count.
     """
+    # NEGATIVE THETA comes in two flavours and they must be handled differently. Measured over
+    # 36228 paths: 4.62% dip below zero, but the MEDIAN negative value is -0.000 deg and p1 is
+    # -0.014 -- almost all of it is floating-point noise sitting on zero, not an excursion. Only
+    # 0.25% of paths go below -0.01 deg. So: clamp the noise to exactly zero, and DISCARD the
+    # genuine outliers (a hinge that really rotated closed is unphysical and must not be replayed
+    # into the oracle). Discarding every path that is negative by any amount would throw away 1674
+    # perfectly good paths to remove ~92 bad ones.
     fids = [np.asarray(f, int) for f in ds.meta.get('face_vertex_ids', [])]
     out = PathDataset(meta=dict(ds.meta))
+    n_dropped_paths = 0
     out.failures.extend(ds.failures)
     for e in ds.examples:
         th = np.degrees(e.eta[..., 2])
@@ -469,8 +489,21 @@ def filter_dataset(ds: PathDataset, *, max_eta: float = 20.0,
             out.failures.append({'seed': int(e.seed), 'grip': [e.clamped_face, e.loaded_face],
                                  'force': float(e.load_value), 'error': f"filtered: {why}"})
         else:
+            th_deg = np.degrees(e.eta[..., 2])                      # (T+1, H)
+            keep = th_deg.min(axis=0) >= -abs(theta_noise_deg)      # per hinge
+            n_dropped_paths += int((~keep).sum())
+            if not keep.any():
+                out.failures.append({'seed': int(e.seed),
+                                     'grip': [e.clamped_face, e.loaded_face],
+                                     'force': float(e.load_value),
+                                     'error': "filtered: every hinge went negative"})
+                continue
+            e.eta[..., 2] = np.maximum(e.eta[..., 2], 0.0)          # clamp the noise to exact zero
+            e.hinge_mask = keep
             out.examples.append(e)
     out.meta.update({'n_examples': out.n_examples, 'filtered': True,
+                     'n_dropped_paths': n_dropped_paths,
+                     'theta_noise_deg': float(theta_noise_deg),
                      'max_eta': float(max_eta), 'max_overlap': float(max_overlap),
                      'theta_bounds_deg': [float(theta_bounds_deg[0]), float(theta_bounds_deg[1])]})
     return out
@@ -516,6 +549,7 @@ def load_dataset(out_dir: str) -> PathDataset:
             seed=int(d['seed'][i]), eta=d['eta'][i], alpha=d['alpha'][i], w_lig=d['w_lig'][i],
             load_frac=d['load_frac'][i], verts=d['verts'][i], flat=d['flat'][i],
             z=d['z'][i], bnd=d['bnd'][i],
+            hinge_mask=(d['hinge_mask'][i] if 'hinge_mask' in d else None),
             clamped_face=int(d['clamped_face'][i]) if has_grip else -1,
             loaded_face=int(d['loaded_face'][i]) if has_grip else -1,
             load_value=float(d['load_value'][i]) if has_grip else 0.0))
