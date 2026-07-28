@@ -188,6 +188,21 @@ def _arc_disp(xyz, arcB, pivot, a, s, theta):
     return ux, uy
 
 
+def _states_at_times(states, times):
+    """Imposed (a, s, theta) at each CalculiX total time -> (n_times, 3).
+
+    One ``*STEP`` per state, so state ``k`` is reached at total time ``k+1`` and CalculiX ramps the
+    prescribed boundary values linearly from the previous converged state across the step. Reading
+    the label back is therefore a linear interpolation of the state list on the integer time grid,
+    with the undeformed origin at t = 0 -- which is what makes an arbitrary polyline replayable:
+    the increment labels follow the states actually imposed instead of assuming a straight ramp.
+    """
+    S = np.vstack([np.zeros(3), np.asarray(states, float)])      # row i is the state at time i
+    grid = np.arange(len(S), dtype=float)
+    t = np.clip(np.asarray(times, float), 0.0, grid[-1])
+    return np.stack([np.interp(t, grid, S[:, j]) for j in range(3)], axis=1)
+
+
 def _write_deck(path, xyz, conn, arcA, arcB, pivot, mat, states, elastic_only, field_every,
                 solver=None, hyp=None, min_inc=1e-3, stabilize=None):
     """One *STEP per kinematic state (a,s,theta) -> correct arc path; energy+reaction+fields out.
@@ -307,8 +322,14 @@ def _principal_strain_max(tostrain):
 def prepare_job(p, angle_deg=60.0, n_steps=15, pivot=None, material=STEEL, imp_amp=None,
                 elastic_only=False, n_through=1, lc_min=None, lc_max=None, field_every=1,
                 a=0.0, s=0.0, solver=None, workdir="/tmp/ccx_job", hyp=None, min_inc=1e-3,
-                stabilize=None):
-    """Build the mesh + write the deck (the gmsh part — NOT thread-safe, run serially)."""
+                stabilize=None, states=None):
+    """Build the mesh + write the deck (the gmsh part — NOT thread-safe, run serially).
+
+    ``states``: an explicit list of ``(a, s, theta_rad)`` kinematic states to drive through, one
+    ``*STEP`` each. Given, it REPLACES the proportional ramp synthesised from ``(a, s, angle_deg)``
+    — this is how a measured hinge polyline is replayed verbatim. The oracle is elastoplastic, so
+    ``W`` is path-dependent and the route matters, not only the destination.
+    """
     mat, hyp = coerce_material(material), hyp or Hypotheses()
     lc_min = lc_min if lc_min is not None else max(p.w_c / 2, p.w_lig / 8)
     lc_max = lc_max if lc_max is not None else p.r_win / 4
@@ -318,12 +339,16 @@ def prepare_job(p, angle_deg=60.0, n_steps=15, pivot=None, material=STEEL, imp_a
     os.makedirs(workdir, exist_ok=True)
     job = os.path.join(workdir, "hinge")
     xyz, conn, arcA, arcB = _build_mesh(p, pivot, imp_amp, n_through, lc_min, lc_max)
-    dth = np.radians(angle_deg) / n_steps
-    states = [(a * (k + 1) / n_steps, s * (k + 1) / n_steps, (k + 1) * dth) for k in range(n_steps)]
+    if states is None:
+        dth = np.radians(angle_deg) / n_steps
+        states = [(a * (k + 1) / n_steps, s * (k + 1) / n_steps, (k + 1) * dth)
+                  for k in range(n_steps)]
+    states = np.asarray(states, float).reshape(-1, 3)
     _write_deck(job + ".inp", xyz, conn, arcA, arcB, pivot, mat, states, elastic_only,
                 field_every, solver=solver, hyp=hyp, min_inc=min_inc, stabilize=stabilize)
     return dict(job=job, workdir=workdir, xyz=xyz, conn=conn, arcA=arcA, arcB=arcB, pivot=pivot,
-                angle_deg=angle_deg, n_steps=n_steps, material=mat, hyp=hyp, w_lig=p.w_lig)
+                angle_deg=angle_deg, n_steps=len(states), states=states,
+                material=mat, hyp=hyp, w_lig=p.w_lig)
 
 
 def solve_job(meta, ncpus=1, timeout=1800, eps_f=None, fracture_margin=1.1, poll=4.0,
@@ -375,16 +400,20 @@ def solve_job(meta, ncpus=1, timeout=1800, eps_f=None, fracture_margin=1.1, poll
 def parse_job(meta, stdout=""):
     """Read energy / forces / fields from a solved job."""
     job, xyz, pivot = meta["job"], meta["xyz"], meta["pivot"]
-    angle_deg, n_steps = meta["angle_deg"], meta["n_steps"]
     ok = "Job finished" in stdout
     dat = _parse_dat(job + ".dat")
     times = sorted(dat)
-    theta_deg = np.array([t * angle_deg / n_steps for t in times])
+    # Label each increment from the states actually imposed. For a proportional ray this is
+    # algebraically identical to the old t*angle/n_steps; for a replayed polyline it is the only
+    # correct labelling, since (a, s) no longer track theta.
+    u = _states_at_times(meta["states"], times)
+    a_imp, s_imp, theta = u[:, 0], u[:, 1], u[:, 2]
+    theta_deg = np.degrees(theta)
     W = np.array([dat[t].get("W", np.nan) for t in times])
     Fa, Fs, Mt = [], [], []
-    for t in times:
+    for i, t in enumerate(times):
         rf = dat[t].get("rf", [])
-        fa, fs, m = _generalized_forces(rf, xyz, pivot, np.radians(t * angle_deg / n_steps)) \
+        fa, fs, m = _generalized_forces(rf, xyz, pivot, theta[i]) \
             if rf else (np.nan, np.nan, np.nan)
         Fa.append(fa); Fs.append(fs); Mt.append(m)
     frames = _parse_frd(job + ".frd") if os.path.exists(job + ".frd") else []
@@ -401,7 +430,8 @@ def parse_job(meta, stdout=""):
     damage = np.array([mat.damage(f, hyp, xyz=xyz, conn=conn, w_lig=w_lig) for f in frames])
     peeq_lig = np.array([peak_peeq(f, xyz, conn, w_lig) for f in frames])
     eta_mean_lig = np.array([mean_triaxiality(f, xyz, conn, w_lig) for f in frames])
-    return dict(ok=ok, stdout=stdout[-1500:], theta_deg=theta_deg, W=W, M_theta=np.array(Mt),
+    return dict(ok=ok, stdout=stdout[-1500:], theta_deg=theta_deg, a=a_imp, s=s_imp,
+                W=W, M_theta=np.array(Mt),
                 F_a=np.array(Fa), F_s=np.array(Fs), uz_max=uz_max, strain_max=strain_max,
                 peeq_max=peeq_max, peeq_lig=peeq_lig, damage=damage, eta_mean_lig=eta_mean_lig,
                 eps_f=mat.eps_f, frames=frames, xyz=xyz, conn=conn,
