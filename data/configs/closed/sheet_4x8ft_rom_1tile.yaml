@@ -50,19 +50,23 @@ optimization_weights:
   validity_method: none
 
 hinge_model:
+  # ⚠ Under `type: rom`, build_surrogate_energy returns (None,)*5 before reading any of
+  # `checkpoint` / `material` / `thickness_mm`, so those three are INERT here and describe the
+  # checkpoint, not this run. `w_lig_mm` and `length_scale` ARE live: w_lig_mm drives the physical
+  # cut geometry and the DXF export (nff/closed/cut_export.py), so it must match the width the
+  # springs below were condensed at.
   type: rom
   checkpoint: data/surrogates/hinge_surrogate_v2.pkl   # merged campaign (S235, D-label)
-  material: S235
-  thickness_mm: 1.5          # 16-gauge sheet, a real 4x8 stock thickness
-  w_lig_mm: 5.0              # ligament width [mm]; learnable per hinge over the trained [1, 10]
+  material: S235             # the CHECKPOINT's training material, not this sheet's
+  thickness_mm: 0.5          # PET stock, the standard sheet gauge
+  w_lig_mm: 18.0             # width the ROM springs were condensed at.
+                             # Design range 5-50 mm; surrogate valid on [1, 20] only.
   calibrate: false
   length_scale: 406.4        # mm per pipeline unit = the real panel pitch
   energy_scale: 2.4606e-3    # 1 / length_scale -> load values are newtons
   barrier: 0.05
-  w_damage: 10.0             # PRIMARY: continuous mean(D^2) over all hinges, threshold-free
-  w_fail: 0.0
+  w_damage: 10.0             # THE damage term: continuous mean(D^2) over all hinges
   w_ood: 1.0e-3
-  m_safe: 1.0
   fail_line: 1.0             # reporting overlay only (count of hinges past fracture initiation)
   learn_w_lig: true
 

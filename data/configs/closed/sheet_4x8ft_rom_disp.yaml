@@ -52,8 +52,8 @@
 # ⚠ If you want the free deployment rather than a flat top edge, prescribe the three tiles
 # individually — that is the round trip, and it returns exactly 55.33 N at each tile.
 #
-# ⚠ NO DAMAGE, as in the ROM twin: the ROM branch returns `(None,)*5`, so `w_damage`, `w_fail`,
-# `w_ood`, `m_safe`, `fail_line` and `learn_w_lig` are all inert and w_lig stays uniform at 5.0 mm.
+# ⚠ NO DAMAGE, as in the ROM twin: the ROM branch returns `(None,)*5`, so `w_damage`, `w_ood`,
+# `fail_line` and `learn_w_lig` are all inert and w_lig stays uniform at 18.0 mm.
 #
 # ── MEASURED, 200 epochs (2026-07-27) ────────────────────────────────────────────────────────────
 #   chamfer 3.5e-3 -> 9.92e-4 (converged by epoch ~60)   boundary 9.94 mm mean / 25.75 mm max
@@ -93,23 +93,31 @@ optimization_weights:
   validity_method: none
 
 hinge_model:
+  # ⚠ Under `type: rom`, build_surrogate_energy returns (None,)*5 before reading any of
+  # `checkpoint` / `material` / `thickness_mm`, so those three are INERT here and describe the
+  # checkpoint, not this run. `w_lig_mm` and `length_scale` ARE live: w_lig_mm drives the physical
+  # cut geometry and the DXF export (nff/closed/cut_export.py), so it must match the width the
+  # springs below were condensed at.
   type: rom
   checkpoint: data/surrogates/hinge_surrogate_v2.pkl   # merged campaign (S235, D-label)
-  material: S235
-  thickness_mm: 1.5          # 16-gauge sheet, a real 4x8 stock thickness
-  w_lig_mm: 5.0              # ligament width [mm]; learnable per hinge over the trained [1, 10]
+  material: S235             # the CHECKPOINT's training material, not this sheet's
+  thickness_mm: 0.5          # PET stock, the standard sheet gauge
+  w_lig_mm: 18.0             # width the ROM springs were condensed at.
+                             # Design range 5-50 mm; surrogate valid on [1, 20] only.
   calibrate: false
   length_scale: 406.4        # mm per pipeline unit = the real panel pitch
   energy_scale: 2.4606e-3    # 1 / length_scale -> reaction values come out in newtons
   barrier: 0.05
   w_damage: 10.0
-  w_fail: 0.0
   w_ood: 1.0e-3
-  m_safe: 1.0
   fail_line: 1.0
   learn_w_lig: true
 
 physics:
+  # ⚠ CONTACT IS OFF HERE, deliberately, unlike the force-controlled twin. The barrier has only
+  # been characterised under force control; combining it with prescribed motion (where the imposed
+  # DOFs join the Dirichlet set) is untested, and a barrier fighting an imposed displacement is a
+  # different numerical problem. Enable it only alongside a re-run of the overlap measurement.
   use_contact: false
   linearized_strains: true
   incremental: true
@@ -147,7 +155,7 @@ displacement_control:
 
 target:                      # fallback TargetConfig; run_closed overrides it with the rectangle above
   type: rectangle
-  center: [1.5442, 3.2080]
+  center: [1.5433, 3.2086]
   radius: 3.3457
 
 loss_weights:

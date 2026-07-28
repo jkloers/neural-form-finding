@@ -48,24 +48,35 @@ optimization_weights:
   validity_method: none
 
 hinge_model:
+  # ⚠ THIS CONFIG DOES NOT RUN THE PET STANDARD. The project standard is PET, t = 0.5 mm, but
+  # `hinge_surrogate_v2.pkl` was condensed from S235 STEEL -- the checkpoint reports eps_f = 0.25
+  # (steel's fracture strain), not PET's 1.784. Under `type: surrogate` these values are LIVE and
+  # must keep describing the checkpoint, otherwise the energies are meaningless. Retargeting to PET
+  # needs a new CalculiX campaign, not a config edit. Until then use `sheet_4x8ft_rom.yaml`, whose
+  # springs ARE the PET-calibrated ones.
   type: surrogate
   checkpoint: data/surrogates/hinge_surrogate_v2.pkl   # merged campaign (S235, D-label)
-  material: S235
-  thickness_mm: 1.5          # 16-gauge sheet, a real 4x8 stock thickness
-  w_lig_mm: 5.0              # ligament width [mm]; learnable per hinge over the trained [1, 10]
+  material: S235             # what the net was trained on -- do not edit without retraining
+  thickness_mm: 1.5          # ditto; documentation only (no thickness feature in the net)
+  w_lig_mm: 18.0             # the physical standard; inside the net's trained [1, 20] window
   calibrate: false
   length_scale: 406.4        # mm per pipeline unit = the real panel pitch
   energy_scale: 2.4606e-3    # 1 / length_scale -> load values are newtons
   barrier: 0.05
-  w_damage: 10.0             # PRIMARY: continuous mean(D^2) over all hinges, threshold-free
-  w_fail: 0.0
+  w_damage: 10.0             # THE damage term: continuous mean(D^2) over all hinges
   w_ood: 1.0e-3
-  m_safe: 1.0
   fail_line: 1.0             # reporting overlay only (count of hinges past fracture initiation)
   learn_w_lig: true
 
 physics:
-  use_contact: false
+  # ── CONTACT: tiles cannot interpenetrate. Same block as sheet_4x8ft_rom.yaml, which carries the
+  # full derivation. It matters MOST here: the 71.7%-of-harvested-deployments-overlap measurement
+  # is an argument about what may reach the SURROGATE, and this is the surrogate config.
+  # ⚠ min_angle/cutoff_angle are DEGREES (the parser converts); see experiment.py.
+  use_contact: true
+  k_contact: 1000000.0
+  min_angle: -2.0            # DEGREES; asymptote just below the closed state
+  cutoff_angle: 0.0          # barrier is exactly zero for every OPEN hinge
   linearized_strains: true
   incremental: true
   num_load_steps: 6
@@ -97,7 +108,11 @@ target:
 
 loss_weights:
   chamfer: 50.0
-  coverage: 1.0
+  # coverage = 0, same as the ROM twin. With only 12 boundary vertices against a 23.5-unit
+  # perimeter the coverage term has a ~0.32 floor no design can beat, and it actively fights
+  # precision. The measured sweep and the full argument are in sheet_4x8ft_rom.yaml; it is a
+  # property of this 3x3 tessellation, so it applies here identically.
+  coverage: 0.0
   stretching: 0.0
   shearing: 0.0
   bending: 0.0

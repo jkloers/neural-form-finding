@@ -1,6 +1,8 @@
 # Closed-state RDPQK — 4 ft x 8 ft sheet (1219.2 x 2438.4 mm), 9 panels, 12 hinges.
-# ROM VARIANT of sheet_4x8ft.yaml — identical in every respect EXCEPT `hinge_model.type: rom`,
-# so the two runs isolate the hinge model and nothing else (same target, same loads, same BCs).
+# ROM VARIANT of sheet_4x8ft.yaml. ⚠ NOT a controlled A/B: this file was recalibrated after
+# sheet_4x8ft.yaml and they now differ in target (1.5433/3.2086 vs 1.502/2.947), load
+# (55.33 vs 60.0 N) and loss_weights.coverage. Re-derive both with
+# `diagnostics/calibrate_target.py --angle 45` before comparing the two hinge models.
 #
 # HINGE MODEL. `rom` = the linear-spring ligament (`ligament_energy_linearized`), driven by the
 # `material:` k_stretch / k_shear / k_rot below. Those constants are INERT in the surrogate run and
@@ -19,9 +21,9 @@
 # which spreads auxetically (+23% lateral at 60 N) and saturates by 160 N. Those numbers are NOT
 # comparable to the calibrated run below: k_stretch is now ~97x stiffer in pipeline units.
 #
-# ⚠ NO DAMAGE. The ROM branch returns `(None,)*5`, so there is no damage_fn: `w_damage`, `w_fail`,
-# `w_ood`, `m_safe`, `fail_line` and `learn_w_lig` are all inert, the maxD/meanD/over columns vanish
-# from the log, and w_lig stays uniform at 5.0 mm (so the cut export has identical hinges).
+# ⚠ NO DAMAGE. The ROM branch returns `(None,)*5`, so there is no damage_fn: `w_damage`, `w_ood`,
+# `fail_line` and `learn_w_lig` are all inert, the maxD/meanD/over columns vanish
+# from the log, and w_lig stays uniform at 18.0 mm (so the cut export has identical hinges).
 # `physics.backward_reg` is harmless but unnecessary — linear springs give a positive-definite
 # Hessian, whereas it is load-bearing under the surrogate's plastic softening.
 
@@ -71,19 +73,23 @@ optimization_weights:
   validity_method: none
 
 hinge_model:
+  # ⚠ Under `type: rom`, build_surrogate_energy returns (None,)*5 before reading any of
+  # `checkpoint` / `material` / `thickness_mm`, so those three are INERT here and describe the
+  # checkpoint, not this run. `w_lig_mm` and `length_scale` ARE live: w_lig_mm drives the physical
+  # cut geometry and the DXF export (nff/closed/cut_export.py), so it must match the width the
+  # springs below were condensed at.
   type: rom
   checkpoint: data/surrogates/hinge_surrogate_v2.pkl   # merged campaign (S235, D-label)
-  material: S235
-  thickness_mm: 1.5          # 16-gauge sheet, a real 4x8 stock thickness
-  w_lig_mm: 5.0              # ligament width [mm]; learnable per hinge over the trained [1, 10]
+  material: S235             # the CHECKPOINT's training material, not this sheet's -- see banner
+  thickness_mm: 0.5          # PET stock, the standard sheet gauge
+  w_lig_mm: 18.0             # ligament width [mm]; the width the ROM springs were condensed at.
+                             # Design range 5-50 mm; the surrogate is only valid on [1, 20].
   calibrate: false
   length_scale: 406.4        # mm per pipeline unit = the real panel pitch
   energy_scale: 2.4606e-3    # 1 / length_scale -> load values are newtons
   barrier: 0.05
-  w_damage: 10.0             # PRIMARY: continuous mean(D^2) over all hinges, threshold-free
-  w_fail: 0.0
+  w_damage: 10.0             # THE damage term: continuous mean(D^2) over all hinges
   w_ood: 1.0e-3
-  m_safe: 1.0
   fail_line: 1.0             # reporting overlay only (count of hinges past fracture initiation)
   learn_w_lig: true
 
