@@ -138,9 +138,8 @@ def _element_mean(nodal: np.ndarray, conn) -> np.ndarray:
     return np.asarray(nodal, float)[np.asarray(conn, int) - 1].mean(axis=1)
 
 
-def _ligament_average(nodal: np.ndarray, xyz: np.ndarray, conn, w_lig: float) -> float:
-    """Volume-weighted mean of a per-node field over the ligament elements."""
-    mask = ligament_elements(xyz, conn, w_lig)
+def _region_average(nodal: np.ndarray, xyz: np.ndarray, conn, mask) -> float:
+    """Volume-weighted mean of a per-node field over the masked elements."""
     if not mask.any():
         return float("nan")
     vol = element_volumes(xyz, conn)[mask]
@@ -150,18 +149,30 @@ def _ligament_average(nodal: np.ndarray, xyz: np.ndarray, conn, w_lig: float) ->
     return float(np.dot(vol, _element_mean(nodal, conn)[mask]) / total)
 
 
-def plastic_damage(frame: dict, xyz: np.ndarray, conn, w_lig: float, eps_f: float) -> float:
-    """Normalized plastic dissipation ``Delta = <PEEQ>_lig / eps_f`` for one parsed frame.
+def plastic_damage(frame: dict, xyz: np.ndarray, conn, w_lig: float, eps_f: float,
+                   region: str = "whole") -> float:
+    """Normalized plastic dissipation ``Delta = <PEEQ> / eps_f`` for one parsed frame.
 
     The single damage measure for an elasto-plastic hinge material. Returns NaN when the frame
     carries no plastic-strain field (an elastic-only solve, or a material that never yields).
+
+    ``region`` selects what is averaged over. **"whole" (the default) is the RVE window**: the
+    window IS the hinge at the local scale -- it is small compared with the panels it joins -- so
+    every stress raised inside it belongs to the hinge model (user-directed 2026-07-28). "ligament"
+    restricts to the refinement disc instead.
+
+    ⚠ Under "whole" the denominator is the window volume, which scales as ``r_win**2``. That is
+    consistent within a campaign, where ``r_win`` is a fixed constant (and the mesh volume varies
+    <1% with ``w_lig``), but two campaigns at different ``r_win`` do NOT share a damage scale.
+    ``r_win`` is recorded in every campaign's ``const`` block so the normalisation is recoverable.
 
     Args:
         frame: parsed ``.frd`` frame; needs ``PEEQ`` (or ``PE``).
         xyz:   (n_nodes, 3) reference node coordinates.
         conn:  (n_elems, 15) 1-based C3D15 connectivity.
-        w_lig: ligament width [mm], setting the averaging disc.
+        w_lig: ligament width [mm], setting the ligament disc when ``region="ligament"``.
         eps_f: the material's fracture strain -- the only damage constant.
+        region: "whole" | "ligament".
 
     Returns:
         ``Delta >= 0``; 0 = fully elastic. See the module docstring for why 1 is not the tear line.
@@ -169,7 +180,9 @@ def plastic_damage(frame: dict, xyz: np.ndarray, conn, w_lig: float, eps_f: floa
     peeq = _nodal_peeq(frame)
     if peeq is None or len(peeq) != len(xyz):
         return float("nan")
-    return _ligament_average(peeq, xyz, conn, w_lig) / eps_f
+    mask = (np.ones(len(np.asarray(conn, int)), bool) if region == "whole"
+            else ligament_elements(xyz, conn, w_lig))
+    return _region_average(peeq, xyz, conn, mask) / eps_f
 
 
 def peak_peeq(frame: dict, xyz: np.ndarray, conn, w_lig: float) -> float:
@@ -186,7 +199,8 @@ def peak_peeq(frame: dict, xyz: np.ndarray, conn, w_lig: float) -> float:
     return float(_element_mean(peeq, conn)[mask].max()) if mask.any() else float("nan")
 
 
-def mean_triaxiality(frame: dict, xyz: np.ndarray, conn, w_lig: float) -> float:
+def mean_triaxiality(frame: dict, xyz: np.ndarray, conn, w_lig: float,
+                     region: str = "whole") -> float:
     """Plastic-work-weighted mean stress triaxiality over the ligament -- diagnostic only.
 
     Recorded so that dropping the triaxiality-dependent fracture locus stays an AUDITED choice: if a
@@ -206,16 +220,17 @@ def mean_triaxiality(frame: dict, xyz: np.ndarray, conn, w_lig: float) -> float:
     if S.ndim != 2 or S.shape[1] < 6 or S.shape[0] != len(xyz):
         return float("nan")
     eta = stress_triaxiality(S[:, :6])
+    mask = (np.ones(len(np.asarray(conn, int)), bool) if region == "whole"
+            else ligament_elements(xyz, conn, w_lig))
+    if not mask.any():
+        return float("nan")
 
     peeq = _nodal_peeq(frame)
     if peeq is None or len(peeq) != len(xyz):
-        return _ligament_average(eta, xyz, conn, w_lig)
+        return _region_average(eta, xyz, conn, mask)
 
-    mask = ligament_elements(xyz, conn, w_lig)
-    if not mask.any():
-        return float("nan")
     w = element_volumes(xyz, conn)[mask] * _element_mean(peeq, conn)[mask]
     total = w.sum()
     if not total > 0:                                   # nothing has yielded yet
-        return _ligament_average(eta, xyz, conn, w_lig)
+        return _region_average(eta, xyz, conn, mask)
     return float(np.dot(w, _element_mean(eta, conn)[mask]) / total)

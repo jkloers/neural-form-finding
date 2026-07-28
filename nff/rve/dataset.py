@@ -15,6 +15,7 @@ Speed: gmsh is not thread-safe, so we phase the batch -- build all decks SERIALL
 
 import json
 import os
+import shutil
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 
@@ -81,7 +82,7 @@ def sample_jobs(n, seed=0, *, w_lig=(1.0, 10.0), alpha_deg=(30.0, 150.0),
 # ── parallel evaluation ───────────────────────────────────────────────────────────
 
 def run_jobs(jobs, const=HingeConstants(), *, n_parallel=6, timeout=900,
-             root="/tmp/hinge_campaign", fracture_margin=1.1):
+             root="/tmp/hinge_campaign", fracture_margin=1.1, keep_scratch=False):
     """Evaluate many (geometry, ray) jobs -> list[HingeResponse | None].
 
     Phased: prepare (serial, gmsh) -> solve (parallel, ccx subprocess) -> parse (serial).
@@ -101,7 +102,8 @@ def run_jobs(jobs, const=HingeConstants(), *, n_parallel=6, timeout=900,
         if "error" in m:
             return ""
         try:
-            return solve_job(m, ncpus=1, timeout=timeout, eps_f=const.eps_f,
+            return solve_job(m, ncpus=1, timeout=timeout,
+                             eps_f=const.eps_f if const.stop_at_fracture else None,
                              fracture_margin=fracture_margin).stdout
         except Exception:
             return ""                                             # parse whatever completed
@@ -116,6 +118,13 @@ def run_jobs(jobs, const=HingeConstants(), *, n_parallel=6, timeout=900,
             out.append(assemble_response(geo, ray, const, parse_job(m, so)))
         except Exception:
             out.append(None)
+        finally:
+            # Drop the CalculiX scratch as soon as it has been reduced to columns. Nothing
+            # downstream reads it, and an overnight campaign left to accumulate .frd files fills
+            # the disk long before it finishes -- which surfaces as a wave of unexplained job
+            # failures late in the run, not as an obvious out-of-space error.
+            if keep_scratch is False:
+                shutil.rmtree(m.get("workdir", ""), ignore_errors=True)
     return out
 
 

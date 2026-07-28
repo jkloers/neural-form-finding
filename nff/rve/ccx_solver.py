@@ -188,6 +188,18 @@ def _arc_disp(xyz, arcB, pivot, a, s, theta):
     return ux, uy
 
 
+def _step_end_times(times):
+    """The last converged time within each *STEP -- the times the field frames correspond to.
+
+    Step k spans total time (k, k+1], so the step index is ceil(t)-1 and, with ``times`` ascending,
+    the last entry recorded for a step is its end.
+    """
+    end = {}
+    for t in times:
+        end[max(0, int(np.ceil(t - 1e-9)) - 1)] = t
+    return [end[k] for k in sorted(end)]
+
+
 def _states_at_times(states, times):
     """Imposed (a, s, theta) at each CalculiX total time -> (n_times, 3).
 
@@ -204,12 +216,29 @@ def _states_at_times(states, times):
 
 
 def _write_deck(path, xyz, conn, arcA, arcB, pivot, mat, states, elastic_only, field_every,
-                solver=None, hyp=None, min_inc=1e-3, stabilize=None):
+                solver=None, hyp=None, min_inc=1e-3, stabilize=None, arcB_uz_free=False,
+                field_freq=1000, el_fields=None):
     """One *STEP per kinematic state (a,s,theta) -> correct arc path; energy+reaction+fields out.
 
     ``stabilize`` (None = off): add ``*STATIC, STABILIZE=<val>`` automatic viscous damping to walk
     through buckling snap-through (e.g. the fold past the localization wall). NOTE the viscous
     reaction contaminates F/M -- use only when the out-of-plane displacement (uz) is the target.
+
+    ``arcB_uz_free``: leave the driven arc free out of plane, prescribing only the in-plane (a, s,
+    theta) it exists to impose. Pinning uz = 0 on BOTH arcs while the ligament bows out of plane
+    forces the sheet through a plastic kink at the truncation radius -- dissipation that belongs to
+    the window, not to the hinge. arcA stays fully clamped, so no rigid-body mode is released.
+
+    ``field_freq``: ``FREQUENCY`` on the field cards. CalculiX always writes the LAST increment of
+    a step, so a large value (the default) yields exactly ONE frame per imposed state instead of
+    one per solver increment -- measured 12.4x smaller (164 -> 13 MB on a 5-step probe) at identical
+    wall time. That matters because a full campaign job otherwise writes a 1.2 GB .frd whose entire
+    content we reduce to four scalars per frame, and the pure-Python parse of it is the throughput
+    ceiling. It also puts every dataset row exactly ON a vertex of the driven polyline rather than
+    at a solver-chosen interpolated state. Set 1 to recover per-increment fields.
+
+    ``el_fields``: override the material's ``*EL FILE`` list. The campaign drops ``E`` (TOSTRAIN):
+    it is written and parsed but never reaches a dataset column, and it is 6 of the 16 components.
     """
     hyp = hyp or Hypotheses()
     L = ["*NODE"]
@@ -234,11 +263,15 @@ def _write_deck(path, xyz, conn, arcA, arcB, pivot, mat, states, elastic_only, f
             L.append("ARCA, 1, 3, 0.0")
         ux, uy = _arc_disp(xyz, arcB, pivot, a, s, th)
         for j, nid in enumerate(arcB):
-            L.append(f"{nid}, 1, 1, {ux[j]:.6e}\n{nid}, 2, 2, {uy[j]:.6e}\n{nid}, 3, 3, 0.0")
+            L.append(f"{nid}, 1, 1, {ux[j]:.6e}\n{nid}, 2, 2, {uy[j]:.6e}")
+            if not arcB_uz_free:
+                L.append(f"{nid}, 3, 3, 0.0")
         L.append("*EL PRINT, ELSET=EALL, TOTALS=ONLY\nELSE")
         L.append("*NODE PRINT, NSET=ARCB\nRF")
         if (k % field_every == 0) or (k == len(states) - 1):
-            L.append("*NODE FILE\nU\n*EL FILE\n" + mat.el_file_fields(elastic_only=elastic_only))
+            freq = f", FREQUENCY={int(field_freq)}" if field_freq and field_freq != 1 else ""
+            fields = el_fields or mat.el_file_fields(elastic_only=elastic_only)
+            L.append(f"*NODE FILE{freq}\nU\n*EL FILE{freq}\n" + fields)
         L.append("*END STEP")
     open(path, "w").write("\n".join(L) + "\n")
 
@@ -322,7 +355,8 @@ def _principal_strain_max(tostrain):
 def prepare_job(p, angle_deg=60.0, n_steps=15, pivot=None, material=STEEL, imp_amp=None,
                 elastic_only=False, n_through=1, lc_min=None, lc_max=None, field_every=1,
                 a=0.0, s=0.0, solver=None, workdir="/tmp/ccx_job", hyp=None, min_inc=1e-3,
-                stabilize=None, states=None):
+                stabilize=None, states=None, arcB_uz_free=False,
+                field_freq=1000, el_fields=None):
     """Build the mesh + write the deck (the gmsh part — NOT thread-safe, run serially).
 
     ``states``: an explicit list of ``(a, s, theta_rad)`` kinematic states to drive through, one
@@ -345,7 +379,8 @@ def prepare_job(p, angle_deg=60.0, n_steps=15, pivot=None, material=STEEL, imp_a
                   for k in range(n_steps)]
     states = np.asarray(states, float).reshape(-1, 3)
     _write_deck(job + ".inp", xyz, conn, arcA, arcB, pivot, mat, states, elastic_only,
-                field_every, solver=solver, hyp=hyp, min_inc=min_inc, stabilize=stabilize)
+                field_every, solver=solver, hyp=hyp, min_inc=min_inc, stabilize=stabilize,
+                arcB_uz_free=arcB_uz_free, field_freq=field_freq, el_fields=el_fields)
     return dict(job=job, workdir=workdir, xyz=xyz, conn=conn, arcA=arcA, arcB=arcB, pivot=pivot,
                 angle_deg=angle_deg, n_steps=len(states), states=states,
                 material=mat, hyp=hyp, w_lig=p.w_lig)
@@ -402,7 +437,11 @@ def parse_job(meta, stdout=""):
     job, xyz, pivot = meta["job"], meta["xyz"], meta["pivot"]
     ok = "Job finished" in stdout
     dat = _parse_dat(job + ".dat")
-    times = sorted(dat)
+    frames = _parse_frd(job + ".frd") if os.path.exists(job + ".frd") else []
+    # .dat carries EVERY increment; .frd carries one frame per step under the default field
+    # FREQUENCY. Align them by TIME rather than by position -- a positional zip would pair the
+    # first few increments with the step-end fields and silently mislabel every damage reading.
+    times = _step_end_times(sorted(dat)) if 0 < len(frames) < len(dat) else sorted(dat)
     # Label each increment from the states actually imposed. For a proportional ray this is
     # algebraically identical to the old t*angle/n_steps; for a replayed polyline it is the only
     # correct labelling, since (a, s) no longer track theta.
@@ -416,7 +455,6 @@ def parse_job(meta, stdout=""):
         fa, fs, m = _generalized_forces(rf, xyz, pivot, theta[i]) \
             if rf else (np.nan, np.nan, np.nan)
         Fa.append(fa); Fs.append(fs); Mt.append(m)
-    frames = _parse_frd(job + ".frd") if os.path.exists(job + ".frd") else []
     uz_max = np.array([np.abs(f["DISP"][:, 2]).max() for f in frames])
     strain_max = np.array([_principal_strain_max(f["TOSTRAIN"]).max()
                            for f in frames if "TOSTRAIN" in f])

@@ -70,6 +70,9 @@ class HingeConstants:
     imp_amp: float | None = None                      # out-of-plane buckle seed [mm]; None -> 0.3*t
     min_inc: float = 1e-3                             # min load increment (smaller babies through snaps)
     stabilize: float | None = None                    # *STATIC,STABILIZE damping past buckling (uz-only)
+    arcB_uz_free: bool = False                        # leave the driven arc free out of plane
+    field_freq: int = 1000                            # *NODE/EL FILE FREQUENCY -> 1 frame per state
+    el_fields: str | None = None                      # *EL FILE list; None -> the material's own
     stop_at_fracture: bool = True                     # poll the .frd and kill ccx past eps_f
     # ^ worth it for a brittle material, where it skips the deep-plastic grind past rupture. For a
     # ductile one it is pure cost: PET folds peak near PEEQ 0.4 against eps_f 1.784, so the poll can
@@ -250,6 +253,8 @@ def solver_kwargs(geo: HingeGeometry, ray: DeploymentRay, const: HingeConstants)
     return dict(angle_deg=theta1_deg, n_steps=ray.n_steps, a=a1, s=s1, states=ray.states(geo),
                 n_through=const.n_through, material=const.material,
                 imp_amp=const.imp_amp, min_inc=const.min_inc, stabilize=const.stabilize,
+                arcB_uz_free=const.arcB_uz_free, field_freq=const.field_freq,
+                el_fields=const.el_fields,
                 lc_min=max(const.lc_fillet_frac * rho, const.lc_min_floor),
                 lc_max=const.r_win / 5.0)
 
