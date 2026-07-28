@@ -458,7 +458,7 @@ def save_dataset(ds: PathDataset, out_dir: str) -> str:
 
 def filter_dataset(ds: PathDataset, *, max_eta: float = 20.0,
                    theta_bounds_deg=(-2.5, 130.0), max_overlap: float = 5e-4,
-                   theta_noise_deg: float = 0.01) -> PathDataset:
+                   theta_noise_deg: float = 0.01, theta_keep_max_deg: float = 90.0) -> PathDataset:
     """Apply the validity gates to an ALREADY HARVESTED dataset, in place of re-deploying it.
 
     Every gate is computable from what is stored, so a gate added after the fact does not cost
@@ -490,7 +490,12 @@ def filter_dataset(ds: PathDataset, *, max_eta: float = 20.0,
                                  'force': float(e.load_value), 'error': f"filtered: {why}"})
         else:
             th_deg = np.degrees(e.eta[..., 2])                      # (T+1, H)
-            keep = th_deg.min(axis=0) >= -abs(theta_noise_deg)      # per hinge
+            # INTERSECT with any existing mask -- filters must compose. Re-running this on an
+            # already-filtered dataset must not resurrect what a previous pass dropped, and it
+            # would: the theta clamp below rewrites eta for every hinge, masked-out ones included,
+            # so a fresh criterion computed from the clamped data would let them all back in.
+            keep = e.mask() & (th_deg.min(axis=0) >= -abs(theta_noise_deg))
+            keep &= th_deg.max(axis=0) <= theta_keep_max_deg        # per hinge
             n_dropped_paths += int((~keep).sum())
             if not keep.any():
                 out.failures.append({'seed': int(e.seed),
@@ -504,6 +509,7 @@ def filter_dataset(ds: PathDataset, *, max_eta: float = 20.0,
     out.meta.update({'n_examples': out.n_examples, 'filtered': True,
                      'n_dropped_paths': n_dropped_paths,
                      'theta_noise_deg': float(theta_noise_deg),
+                     'theta_keep_max_deg': float(theta_keep_max_deg),
                      'max_eta': float(max_eta), 'max_overlap': float(max_overlap),
                      'theta_bounds_deg': [float(theta_bounds_deg[0]), float(theta_bounds_deg[1])]})
     return out
