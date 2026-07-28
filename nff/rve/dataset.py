@@ -21,6 +21,7 @@ from dataclasses import asdict
 import numpy as np
 
 from nff.rve.ccx_solver import prepare_job, solve_job, parse_job
+from nff.rve.materials import coerce_material
 from nff.rve.hinge_function import (HingeConstants, HingeGeometry, DeploymentRay, REGIME_NAME,
                                     to_rve_params, descriptor, solver_kwargs, assemble_response)
 
@@ -123,7 +124,7 @@ def run_jobs(jobs, const=HingeConstants(), *, n_parallel=6, timeout=900,
 # every column is one flat array with one entry per solved increment (sample)
 _KIN = ["a", "s", "theta"]                                       # the hinge function's input u
 _RESP = ["W", "F_a", "F_s", "M_theta"]                           # W and its gradient dW/du
-_AUX = ["peeq_p99", "damage_p99", "uz_max", "theta_deg", "regime"]
+_AUX = ["damage", "peeq_lig", "eta_mean_lig", "uz_max", "theta_deg", "regime"]
 
 
 def responses_to_columns(responses, const, job_id_offset=0):
@@ -143,6 +144,7 @@ def responses_to_columns(responses, const, job_id_offset=0):
             cols.setdefault(k, []).append(np.asarray(row[k]))
         meta.append(dict(job_id=job_id, ok=r.ok, tag=r.geo.tag, n_samples=n,
                          failure_theta_deg=r.failure_theta_deg,
+                         damage_at_tear=r.damage_at_tear,
                          w_lig=r.geo.w_lig, alpha_deg=r.geo.alpha_deg,
                          eta_a=r.ray.eta_a, eta_s=r.ray.eta_s, theta1_deg=r.ray.theta1_deg))
     cols = {k: np.concatenate(v) for k, v in cols.items()}
@@ -155,12 +157,20 @@ def _write_checkpoint(out_path, acc, meta, const):
     np.savez_compressed(out_path + ".npz", **cols)
     regime = cols.get("regime", np.array([]))
     n_usable = sum("n_samples" in m for m in meta)                # produced data (the success metric)
+    # Delta_tear: the campaign's calibrated fracture line -- the damage reading at which the
+    # hottest ligament element first reaches eps_f, pooled over every job that actually tore.
+    tears = np.array([m["damage_at_tear"] for m in meta if np.isfinite(m.get("damage_at_tear", np.nan))])
+    const_json = {**asdict(const), "material": coerce_material(const.material).name}
     summary = dict(n_jobs=len(meta), n_usable=n_usable, n_errored=len(meta) - n_usable,
                    n_finished_to_cap=sum(m.get("ok", False) for m in meta),  # survived without fracture
                    n_samples=int(len(regime)),
                    n_elastic=int((regime == 0).sum()), n_plastic=int((regime == 1).sum()),
                    n_failed=int((regime == 2).sum()),
-                   columns=list(cols), regime_names=REGIME_NAME, const=asdict(const), jobs=meta)
+                   delta_tear=float(np.median(tears)) if len(tears) else None,
+                   delta_tear_iqr=[float(np.percentile(tears, 25)), float(np.percentile(tears, 75))]
+                                  if len(tears) else None,
+                   n_tear_observations=int(len(tears)),
+                   columns=list(cols), regime_names=REGIME_NAME, const=const_json, jobs=meta)
     with open(out_path + ".json", "w") as f:
         json.dump(summary, f, indent=2, default=float)
     return summary

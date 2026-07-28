@@ -42,6 +42,7 @@ import numpy as np
 
 from nff.rve.geometry import RVEParams
 from nff.rve.ccx_solver import STEEL, deploy
+from nff.rve.materials import coerce_material
 
 
 # ── validity regimes ────────────────────────────────────────────────────────────
@@ -61,11 +62,22 @@ class HingeConstants:
     w_c: float = 0.2                                  # cut kerf [mm]
     r_win: float = 30.0                               # Saint-Venant window radius [mm]
     fillet_ratio: float = 0.16                        # rho = fillet_ratio * w_lig (set by rehearsal)
-    material: dict = field(default_factory=lambda: dict(STEEL))
-    eps_f: float = 0.25                               # ductile fracture plastic strain
+    material: object = field(default_factory=lambda: dict(STEEL))   # Material, params dict, or name
+    eps_f: float = None                               # fracture strain; None -> the material's own
     n_through: int = 2                                # elements through thickness (>=2 for plastic bending)
     lc_fillet_frac: float = 0.4                       # resolve the fillet: lc_min = frac * rho
     lc_min_floor: float = 0.06                        # never mesh finer than this [mm]
+    imp_amp: float = None                             # out-of-plane buckle seed [mm]; None -> 0.3*t
+    min_inc: float = 1e-3                             # min load increment (smaller babies through snaps)
+    stabilize: float = None                          # *STATIC,STABILIZE damping to walk past buckling (uz-only)
+
+    def __post_init__(self):
+        # normalise the material once, and take eps_f from it unless explicitly overridden -- so a
+        # PET campaign cannot silently early-stop on steel's 0.25.
+        mat = coerce_material(self.material)
+        object.__setattr__(self, "material", mat)
+        if self.eps_f is None:
+            object.__setattr__(self, "eps_f", mat.eps_f)
 
 
 @dataclass(frozen=True)
@@ -135,8 +147,9 @@ class HingeResponse:
     F_a: np.ndarray
     F_s: np.ndarray
     M_theta: np.ndarray                               # dW/du by the envelope theorem
-    peeq_p99: np.ndarray                              # robust PEEQ statistic (legacy failure flag)
-    damage_p99: np.ndarray                            # continuous ductile damage D (0 intact, 1 break)
+    damage: np.ndarray                                # Delta = <PEEQ>_lig / eps_f (nff.rve.damage)
+    peeq_lig: np.ndarray                              # hottest ligament element -- the tear indicator
+    eta_mean_lig: np.ndarray                          # <eta> over the ligament (diagnostic)
     uz_max: np.ndarray                                # out-of-plane amplitude [mm]
     regime: np.ndarray                                # ELASTIC / PLASTIC / FAILED per sample
     # provenance / summary
@@ -147,6 +160,16 @@ class HingeResponse:
     @property
     def n_samples(self) -> int:
         return len(self.theta_deg)
+
+    @property
+    def damage_at_tear(self) -> float:
+        """``Delta_tear``: the damage reading at the first torn frame; NaN if the hinge survives.
+
+        The campaign's calibrated fracture line -- a reported number and a line on plots, not a
+        second damage measure and not a term in any loss.
+        """
+        failed = self.regime == FAILED
+        return float(self.damage[np.argmax(failed)]) if failed.any() else float("nan")
 
 
 def to_rve_params(geo: HingeGeometry, const: HingeConstants) -> RVEParams:
@@ -161,7 +184,7 @@ def descriptor(geo: HingeGeometry, const: HingeConstants) -> dict:
                 t_over_wlig=const.thickness / geo.w_lig,
                 wc_over_wlig=const.w_c / geo.w_lig,
                 rho_over_wlig=geo.fillet_ratio,
-                sigy_over_E=const.material["sigma_y"] / const.material["E"])
+                sigy_over_E=coerce_material(const.material).yield_strain)
 
 
 def solver_kwargs(geo: HingeGeometry, ray: DeploymentRay, const: HingeConstants) -> dict:
@@ -174,13 +197,18 @@ def solver_kwargs(geo: HingeGeometry, ray: DeploymentRay, const: HingeConstants)
     rho = geo.rho(const)
     return dict(angle_deg=theta1_deg, n_steps=ray.n_steps, a=a1, s=s1,
                 n_through=const.n_through, material=const.material,
+                imp_amp=const.imp_amp, min_inc=const.min_inc, stabilize=const.stabilize,
                 lc_min=max(const.lc_fillet_frac * rho, const.lc_min_floor),
                 lc_max=const.r_win / 5.0)
 
 
-def classify_regime(peeq_p99: np.ndarray, eps_f: float) -> np.ndarray:
-    """elastic (no plasticity) / plastic (yielded, intact) / failed (ductile fracture)."""
-    p = np.asarray(peeq_p99, float)
+def classify_regime(peeq_lig: np.ndarray, eps_f: float) -> np.ndarray:
+    """elastic (no plasticity) / plastic (yielded, intact) / failed (torn).
+
+    Keyed on the SAME ligament peak that stops the solve, so the dataset's ``FAILED`` label and
+    the solver's stop-at-fracture agree by construction -- there is no second failure criterion.
+    """
+    p = np.asarray(peeq_lig, float)
     return np.where(p >= eps_f, FAILED, np.where(p > _PLASTIC_TOL, PLASTIC, ELASTIC))
 
 
@@ -193,32 +221,33 @@ def assemble_response(geo, ray, const, parsed) -> HingeResponse:
     """
     theta_deg = np.asarray(parsed["theta_deg"], float)
     # align every field to the common number of solved increments (guards ragged parses)
-    if "damage_p99" not in parsed:                    # backward-compat with pre-damage parses
-        parsed = {**parsed, "damage_p99": np.full(len(parsed["peeq_p99"]), np.nan)}
-    fields = ["W", "F_a", "F_s", "M_theta", "peeq_p99", "damage_p99", "uz_max"]
+    fields = ["W", "F_a", "F_s", "M_theta", "damage", "peeq_lig", "eta_mean_lig", "uz_max"]
     n = min([len(theta_deg)] + [len(np.asarray(parsed[k])) for k in fields])
     theta_deg = theta_deg[:n]
-    W, F_a, F_s, M_theta, peeq_p99, damage_p99, uz_max = (np.asarray(parsed[k], float)[:n] for k in fields)
+    W, F_a, F_s, M_theta, damage, peeq_lig, eta_mean_lig, uz_max = (
+        np.asarray(parsed[k], float)[:n] for k in fields)
 
     a1, s1, theta1_deg = ray.targets(geo)
     frac = theta_deg / theta1_deg if theta1_deg else np.zeros(n)
     a, s = a1 * frac, s1 * frac
     theta = np.radians(theta_deg)
 
-    regime = classify_regime(peeq_p99, const.eps_f)
+    regime = classify_regime(peeq_lig, const.eps_f)
     failed = regime == FAILED
     failure_theta = float(theta_deg[np.argmax(failed)]) if failed.any() else float("nan")
 
     return HingeResponse(geo=geo, ray=ray, const=const, a=a, s=s, theta=theta,
                          theta_deg=theta_deg, W=W, F_a=F_a, F_s=F_s, M_theta=M_theta,
-                         peeq_p99=peeq_p99, damage_p99=damage_p99, uz_max=uz_max, regime=regime,
+                         damage=damage, peeq_lig=peeq_lig, eta_mean_lig=eta_mean_lig,
+                         uz_max=uz_max, regime=regime,
                          n_elems=int(parsed.get("n_elems", 0)), ok=bool(parsed.get("ok", False)),
                          failure_theta_deg=failure_theta)
 
 
 def evaluate_hinge(geo: HingeGeometry, ray: DeploymentRay,
                    const: HingeConstants = HingeConstants(),
-                   *, timeout: float = 900, workdir: str = None) -> HingeResponse:
+                   *, timeout: float = 900, workdir: str = None,
+                   ncpus: int = 1) -> HingeResponse:
     """Evaluate the constitutive map along one deployment ray (serial, one hinge).
 
     This IS the hinge-as-a-function: (geometry, ray) -> path of (u, W, dW/du, validity).
@@ -226,6 +255,7 @@ def evaluate_hinge(geo: HingeGeometry, ray: DeploymentRay,
     hinges for speed; it reuses ``solver_kwargs`` and ``assemble_response`` verbatim.
     """
     parsed = deploy(to_rve_params(geo, const), timeout=timeout, eps_f=const.eps_f,
+                    ncpus=ncpus,
                     workdir=workdir or f"/tmp/hinge/{geo.tag}_{ray.tag or 't'}",
                     **solver_kwargs(geo, ray, const))
     return assemble_response(geo, ray, const, parsed)

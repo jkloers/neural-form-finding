@@ -187,10 +187,6 @@ def create_train_step(
 
         return new_state, loss_val, aux
 
-    # GNN types désactivent JIT par défaut : le backend XLA/Metal sur Mac
-    # crashe lors de la compilation de programmes impliquant scatter-add
-    # + LBFGS imbriqués. Le code est correctement différentiable (validé
-    # par test_gnn_nojit.py) — JIT sera réactivé quand le bug Metal sera corrigé.
     train_step_fn = jax.jit(_step_body) if use_jit else _step_body
 
     return optimizer, train_step_fn

@@ -42,9 +42,11 @@ hinge_model:
   w_lig_mm: 5.0
   calibrate: true
   barrier: 0.05            # weak: let a small force give a partial (in-domain) deployment
-  w_fail: 1.0            # x154 raw -> ~8 (vs ~35 chamfer)
+  # MIGRATED 2026-07-28: the w_fail/m_safe break barrier is gone (it was a second damage
+  # criterion). The single term is w_damage * mean(D^2), D = <PEEQ>_lig/eps_f. The scales are
+  # NOT equivalent -- the old barrier only bit above D=1, this bites everywhere. Re-tune.
+  w_damage: 1.0
   w_ood: 1.0e-3           # real OOD design penalty (was 1e-5, negligible)
-  m_safe: 1.0             # break-onset = physical fracture D>=1 (no conservative margin)
   learn_w_lig: true       # per-hinge ligament width as a learnable DOF (thicken failing hinges)
 
 physics:

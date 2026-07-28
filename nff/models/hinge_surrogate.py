@@ -24,8 +24,8 @@ by ~0.6 deg). The unavoidable quadratic flattening at the origin -- intrinsic to
 with a zero there -- only weakens identification of that (negligible) origin curvature, so we
 accept it and keep the simplest robust form.
 
-A separate small head predicts the ductile-failure margin ``peeq_p99 / eps_f`` (the validity
-barrier), kept distinct so the hard failure boundary does not distort the smooth W.
+A separate small head predicts the hinge DAMAGE ``D = <PEEQ>_lig / eps_f`` (normalized plastic
+dissipation, :mod:`nff.rve.damage`), kept distinct so it does not distort the smooth W.
 
 Follows the repo ``init_*`` / ``apply_*`` raw-JAX convention (no flax), float64.
 """
@@ -195,17 +195,15 @@ def apply_hinge_force(params, u, g, stats):
 
 
 def apply_hinge_failure(params, u, g, stats):
-    """Continuous ductile DAMAGE ``D`` (>=0 via softplus). 0 = intact, >=1 = fractured.
+    """The hinge DAMAGE ``D`` (>=0 via softplus): normalized plastic dissipation in the ligament.
 
-    Trained on the triaxiality-based damage label (``nff.rve.damage.ductile_damage``); the old
-    ``peeq_p99 / eps_f`` margin is the tension-only special case of it.
+    Trained on ``nff.rve.damage.plastic_damage`` -- the volume-averaged ``<PEEQ>_lig / eps_f``.
+    ``D`` measures accumulated irreversibility, so 0 is a pristine hinge and larger is more
+    permanent set. It is NOT a fracture fraction: the tear line is the campaign-calibrated
+    ``Delta_tear``, reported alongside the dataset, not the value 1.
     """
     m = _mlp(_features(u, g, stats), params["fail"])[..., 0]
     return jax.nn.softplus(m)
-
-
-# sharpness of the break barrier: softplus(_BREAK_SHARP*(D-1)) ~ 0 below fracture, linear above
-_BREAK_SHARP = 8.0
 
 
 def load_hinge_surrogate(path: str):
@@ -337,22 +335,23 @@ def build_hinge_bond_energy_fn(net_params, stats, *, length_scale: float = 1.0,
 
 def build_hinge_stability_fn(net_params, stats, *, bond_pairs,
                              length_scale: float = 1.0, domain: dict = DOMAIN,
-                             w_damage: float = 0.0, w_fail: float = 0.0, w_ood: float = 0.0,
-                             m_safe: float = 1.0, fail_line: float = 1.0, fillet_ratio=None):
+                             w_damage: float = 0.0, w_ood: float = 0.0,
+                             fail_line: float = 1.0, fillet_ratio=None):
     """Damage / stability penalty at the DEPLOYED state, for the design loss:
 
-        w_damage * mean(D^2)                          (reduce ductile damage on EVERY hinge)
-      + w_fail   * sum softplus(K*(D - m_safe))/K     (legacy one-sided break barrier; 0 = off)
-      + w_ood    * sum domain_barrier(u)              (hinges leaving the trustworthy training box)
+        w_damage * mean(D^2)             (reduce accumulated irreversibility on EVERY hinge)
+      + w_ood    * sum domain_barrier(u) (hinges leaving the trustworthy training box)
 
-    ``D`` is the surrogate's continuous ductile-damage prediction. The CalculiX ductile-damage law it
-    was trained on calls ``D=1`` fracture-INITIATION, but that is a modeling choice with real calibration
-    slack -- a thin plastic-hinge ligament can micro-crack and still fold -- so the PRIMARY term
-    ``w_damage * mean(D^2)`` bakes NO failure threshold into the gradient: it just pushes every hinge's
-    damage down, weighting the worst hinges (grip concentration) hardest, decoupled from where physical
-    failure actually is. ``fail_line`` is a REPORTING overlay ONLY (the count of hinges above it) --
-    calibrate it against the real printed experiment; it never enters the loss. The legacy ``w_fail``
-    softplus barrier (onset ``m_safe``) is kept for older configs.
+    ``D`` is the surrogate's damage prediction: normalized plastic dissipation ``<PEEQ>_lig/eps_f``.
+    There is ONE damage term and NO failure threshold in the gradient -- it simply pushes every
+    hinge's permanent set down, weighting the worst hinges (grip concentration) hardest. That suits
+    a kirigami, where hinges are MEANT to fold and to carry more plastic set than a normal structure
+    would tolerate, and where a tear in a single deployment is rare.
+
+    ``fail_line`` is a REPORTING overlay only (the count of hinges above it): set it to the
+    campaign's calibrated ``Delta_tear``. It never enters the loss. The old ``w_fail``/``m_safe``
+    softplus break barrier is gone -- it was a second damage criterion, and it was already 0 in
+    every live config.
 
     ``u = (a, s, theta)`` is the SAME corotated projection the bond energy uses (``hinge_kinematics``).
     The per-hinge ``HingeGeometry`` is passed PER CALL (same design-tracked value as the bond energy).
@@ -362,7 +361,7 @@ def build_hinge_stability_fn(net_params, stats, *, bond_pairs,
     Returns ``fn(node_displacements, hinge_geometry, reference_vectors) -> (penalty, aux)``, or ``None``
     if all weights are 0.
     """
-    if w_damage == 0.0 and w_fail == 0.0 and w_ood == 0.0:
+    if w_damage == 0.0 and w_ood == 0.0:
         return None
     fi = jnp.asarray(np.asarray(bond_pairs)[:, 0])
     fj = jnp.asarray(np.asarray(bond_pairs)[:, 1])
@@ -376,15 +375,14 @@ def build_hinge_stability_fn(net_params, stats, *, bond_pairs,
                                        _unit(geo.sec_dir), length_scale, reference_vector=reference_vectors)
         u = jnp.stack([a, sh, dRot], axis=-1)
         gg = _geom_vector(geo.w_lig, geo.alpha, fr, stats)
-        D = apply_hinge_failure(net_params, u, gg, stats)     # continuous ductile damage (>=0)
-        damage_pen = w_damage * jnp.mean(D ** 2)              # reduce damage on ALL hinges, threshold-free
-        break_pen = w_fail * jnp.sum(jax.nn.softplus(_BREAK_SHARP * (D - m_safe)) / _BREAK_SHARP)
+        D = apply_hinge_failure(net_params, u, gg, stats)     # damage = <PEEQ>_lig/eps_f  (>=0)
+        damage_pen = w_damage * jnp.mean(D ** 2)              # the ONE damage term, threshold-free
         ood_pen = w_ood * jnp.sum(_domain_barrier(a, sh, dRot, geo.w_lig, domain))
-        aux = {"stab_damage": damage_pen, "stab_fail": break_pen, "stab_ood": ood_pen,
+        aux = {"stab_damage": damage_pen, "stab_ood": ood_pen,
                "hinge_max_D": jnp.max(D), "hinge_mean_D": jnp.mean(D),
                "hinge_p90_D": jnp.percentile(D, 90.0),
                "hinge_n_over": jnp.sum((D >= fail_line).astype(jnp.float64))}  # display line only
-        return damage_pen + break_pen + ood_pen, aux
+        return damage_pen + ood_pen, aux
 
     return stability
 
@@ -413,15 +411,16 @@ def build_hinge_damage_fn(net_params, stats, *, bond_pairs, length_scale: float 
 
 # ── training loss ─────────────────────────────────────────────────────────────────
 
-def sobolev_loss(params, batch, stats, lam: float = 0.8, w_fail: float = 0.1):
-    """lambda-weighted Sobolev loss (energy-priority) + failure-margin term.
+def sobolev_loss(params, batch, stats, lam: float = 0.8, w_damage: float = 0.1):
+    """lambda-weighted Sobolev loss (energy-priority) + damage term.
 
     L = lam * ||W - W*||^2 / sigma_W^2  +  (1 - lam) * ||dW/du - F*||^2 / sigma_F^2
-        + w_fail * ||margin - margin*||^2
+        + w_damage * ||D - D*||^2 / sigma_D^2
 
-    Both Sobolev terms are variance-normalized so ``lam`` is a clean priority knob (energy
-    matters for the loss regularizers; force sets where the solver's equilibrium lands, so it
-    is kept, not dropped). ``batch`` holds u, g, W, F=(F_a,F_s,M_theta), and margin=peeq_p99/eps_f.
+    All THREE terms are variance-normalized, so ``lam`` and ``w_damage`` are clean priority knobs
+    on comparable scales. (The damage term used to be raw MSE on an unnormalized target whose max
+    ran to ~60, letting a handful of rows dominate that head.) ``batch`` holds u, g, W,
+    F=(F_a,F_s,M_theta), and margin = the damage measure ``<PEEQ>_lig/eps_f``.
     """
     u, g = batch["u"], batch["g"]
     W_pred = apply_hinge_energy(params, u, g, stats)
@@ -429,7 +428,8 @@ def sobolev_loss(params, batch, stats, lam: float = 0.8, w_fail: float = 0.1):
 
     e_W = jnp.mean((W_pred - batch["W"]) ** 2) / (jnp.var(batch["W"]) + 1e-12)
     e_F = jnp.mean((F_pred - batch["F"]) ** 2) / (jnp.var(batch["F"]) + 1e-12)
-    e_fail = jnp.mean((apply_hinge_failure(params, u, g, stats) - batch["margin"]) ** 2)
+    e_D = (jnp.mean((apply_hinge_failure(params, u, g, stats) - batch["margin"]) ** 2)
+           / (jnp.var(batch["margin"]) + 1e-12))
 
-    loss = lam * e_W + (1.0 - lam) * e_F + w_fail * e_fail
-    return loss, dict(energy=e_W, force=e_F, failure=e_fail)
+    loss = lam * e_W + (1.0 - lam) * e_F + w_damage * e_D
+    return loss, dict(energy=e_W, force=e_F, damage=e_D)

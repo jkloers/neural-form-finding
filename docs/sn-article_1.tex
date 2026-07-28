@@ -1,0 +1,590 @@
+%Version 3.1 December 2024
+% See section 11 of the User Manual for version history
+%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%                                                                 %%
+%% Please do not use \input{...} to include other tex files.       %%
+%% Submit your LaTeX manuscript as one .tex document.              %%
+%%                                                                 %%
+%% All additional figures and files should be attached             %%
+%% separately and not embedded in the \TeX\ document itself.       %%
+%%                                                                 %%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%\documentclass[referee,sn-basic]{sn-jnl}% referee option is meant for double line spacing
+
+%%=======================================================%%
+%% to print line numbers in the margin use lineno option %%
+%%=======================================================%%
+
+%%\documentclass[lineno,pdflatex,sn-basic]{sn-jnl}% Basic Springer Nature Reference Style/Chemistry Reference Style
+
+%%=========================================================================================%%
+%% the documentclass is set to pdflatex as default. You can delete it if not appropriate.  %%
+%%=========================================================================================%%
+
+%%\documentclass[sn-basic]{sn-jnl}% Basic Springer Nature Reference Style/Chemistry Reference Style
+
+%%Note: the following reference styles support Namedate and Numbered referencing. By default the style follows the most common style. To switch between the options you can add or remove Numbered in the optional parenthesis. 
+%%The option is available for: sn-basic.bst, sn-chicago.bst%  
+ 
+%%\documentclass[pdflatex,sn-nature]{sn-jnl}% Style for submissions to Nature Portfolio journals
+%%\documentclass[pdflatex,sn-basic]{sn-jnl}% Basic Springer Nature Reference Style/Chemistry Reference Style
+\documentclass[pdflatex,sn-mathphys-num]{sn-jnl}% Math and Physical Sciences Numbered Reference Style
+%%\documentclass[pdflatex,sn-mathphys-ay]{sn-jnl}% Math and Physical Sciences Author Year Reference Style
+%%\documentclass[pdflatex,sn-aps]{sn-jnl}% American Physical Society (APS) Reference Style
+%%\documentclass[pdflatex,sn-vancouver-num]{sn-jnl}% Vancouver Numbered Reference Style
+%%\documentclass[pdflatex,sn-vancouver-ay]{sn-jnl}% Vancouver Author Year Reference Style
+%%\documentclass[pdflatex,sn-apa]{sn-jnl}% APA Reference Style
+%%\documentclass[pdflatex,sn-chicago]{sn-jnl}% Chicago-based Humanities Reference Style
+
+%%%% Standard Packages
+%%<additional latex packages if required can be included here>
+
+\usepackage{graphicx}%
+\usepackage{multirow}%
+\usepackage{amsmath,amssymb,amsfonts}%
+\usepackage{amsthm}%
+\usepackage{mathrsfs}%
+\usepackage[title]{appendix}%
+\usepackage{xcolor}%
+\usepackage{textcomp}%
+\usepackage{manyfoot}%
+\usepackage{booktabs}%
+\usepackage{algorithm}%
+\usepackage{algorithmicx}%
+\usepackage{algpseudocode}%
+\usepackage{listings}%
+\usepackage{bm}%
+%%%%
+
+%%%%%=============================================================================%%%%
+%%%%  Remarks: This template is provided to aid authors with the preparation
+%%%%  of original research articles intended for submission to journals published 
+%%%%  by Springer Nature. The guidance has been prepared in partnership with 
+%%%%  production teams to conform to Springer Nature technical requirements. 
+%%%%  Editorial and presentation requirements differ among journal portfolios and 
+%%%%  research disciplines. You may find sections in this template are irrelevant 
+%%%%  to your work and are empowered to omit any such section if allowed by the 
+%%%%  journal you intend to submit to. The submission guidelines and policies 
+%%%%  of the journal take precedence. A detailed User Manual is available in the 
+%%%%  template package for technical guidance.
+%%%%%=============================================================================%%%%
+
+%% as per the requirement new theorem styles can be included as shown below
+\theoremstyle{thmstyleone}%
+\newtheorem{theorem}{Theorem}%  meant for continuous numbers
+%%\newtheorem{theorem}{Theorem}[section]% meant for sectionwise numbers
+%% optional argument [theorem] produces theorem numbering sequence instead of independent numbers for Proposition
+\newtheorem{proposition}[theorem]{Proposition}% 
+%%\newtheorem{proposition}{Proposition}% to get separate numbers for theorem and proposition etc.
+
+\theoremstyle{thmstyletwo}%
+\newtheorem{example}{Example}%
+\newtheorem{remark}{Remark}%
+
+\theoremstyle{thmstylethree}%
+\newtheorem{definition}{Definition}%
+
+\raggedbottom
+%%\unnumbered% uncomment this for unnumbered level heads
+
+\begin{document}
+
+\title[Article Title]{Differentiable Physics for Physics-Informed Kirigami Inverse Form Finding}
+
+%%=============================================================%%
+%% GivenName	-> \fnm{Joergen W.}
+%% Particle	-> \spfx{van der} -> surname prefix
+%% FamilyName	-> \sur{Ploeg}
+%% Suffix	-> \sfx{IV}
+%% \author*[1,2]{\fnm{Joergen W.} \spfx{van der} \sur{Ploeg} 
+%%  \sfx{IV}}\email{iauthor@gmail.com}
+%%=============================================================%%
+
+\author[1,2]{\fnm{Julien} \sur{Kloers}}\email{jk3804@princeton.edu}
+
+\author[2]{\fnm{Sigrid} \sur{Adriaenssens}}
+
+\author[3]{\fnm{Rafael} \sur{Pastrana}}
+
+\affil[1]{\orgname{École des Ponts}, \orgaddress{\street{8 av. Blaise Pascal}, \city{Champs-sur-Marne}, \postcode{77420}, \country{France}}}
+
+\affil[2]{\orgdiv{Form-Finding Lab}, \orgname{Princeton University}, \orgaddress{\street{59 Olden Street}, \city{Princeton}, \postcode{08544}, \state{NJ}, \country{USA}}}
+
+\affil[3]{\orgdiv{Princeton AI2 Lab}, \orgname{Princeton University}, \orgaddress{\street{41 William Street}, \city{Princeton}, \postcode{08540}, \state{NJ}, \country{USA}}}
+
+%%==================================%%
+%% Sample for unstructured abstract %%
+%%==================================%%
+
+\abstract{The abstract serves both as a general introduction to the topic and as a brief, non-technical summary of the main results and their implications. Authors are advised to check the author instructions for the journal they are submitting to for word limits and if structural elements like subheadings, citations, or equations are permitted.}
+
+%%================================%%
+%% Sample for structured abstract %%
+%%================================%%
+
+% \abstract{\textbf{Purpose:} The abstract serves both as a general introduction to the topic and as a brief, non-technical summary of the main results and their implications. The abstract must not include subheadings (unless expressly permitted in the journal's Instructions to Authors), equations or citations. As a guide the abstract should not exceed 200 words. Most journals do not set a hard limit however authors are advised to check the author instructions for the journal they are submitting to.
+% 
+% \textbf{Methods:} The abstract serves both as a general introduction to the topic and as a brief, non-technical summary of the main results and their implications. The abstract must not include subheadings (unless expressly permitted in the journal's Instructions to Authors), equations or citations. As a guide the abstract should not exceed 200 words. Most journals do not set a hard limit however authors are advised to check the author instructions for the journal they are submitting to.
+% 
+% \textbf{Results:} The abstract serves both as a general introduction to the topic and as a brief, non-technical summary of the main results and their implications. The abstract must not include subheadings (unless expressly permitted in the journal's Instructions to Authors), equations or citations. As a guide the abstract should not exceed 200 words. Most journals do not set a hard limit however authors are advised to check the author instructions for the journal they are submitting to.
+% 
+% \textbf{Conclusion:} The abstract serves both as a general introduction to the topic and as a brief, non-technical summary of the main results and their implications. The abstract must not include subheadings (unless expressly permitted in the journal's Instructions to Authors), equations or citations. As a guide the abstract should not exceed 200 words. Most journals do not set a hard limit however authors are advised to check the author instructions for the journal they are submitting to.}
+
+\keywords{keyword1, Keyword2, Keyword3, Keyword4}
+
+%%\pacs[JEL Classification]{D8, H51}
+
+%%\pacs[MSC Classification]{35A01, 65L10, 65L12, 65L20, 65L70}
+
+\maketitle
+
+\section{Introduction}\label{sec1}
+
+Kirigami
+
+Physique différentiable, JAX
+
+Hypotheses : 
+Rigid planar quadrangular deployable kirigami. 
+Les faces sont rigides et coplanaiaires pendant tout le développement. 
+On étudie en particulier le 
+
+
+Plan de l'article
+
+\section{Methods}\label{secM}
+
+\subsection{The kirigami tessellation}
+
+We model a planar kirigami metamaterial as an assembly of $n$ rigid polygonal tiles cut from a flat sheet and connected to one another, at their corners, by slender elastic hinges. Deformation is assumed to localise entirely in the ligaments: the panels themselves are treated as rigid. This
+reduction is appropriate in the regime where the panels are much stiffer than the thin connecting ligaments, and it collapses a high-dimensional continuum problem onto at most $3n$ degrees of freedom. A tessellation is called deployable, if it has exactly one degree of freedom. 
+
+\paragraph{Topology.}
+The connectivity is fixed by the cut pattern and does not change during deformation. A cut pattern is the arrangement of slits that decomposes a continuous sheet into rigid panels joined by intact ligaments, thereby fixing both the connectivity and the flat reference geometry of the kirigami. We generate it from the closed-state RDPQK construction of Dang~\emph{et al.}, laid out on an $M \times N$ grid of unit cells. From this pattern, we derive once and for all the purely combinatorial data of the assembly: the set of faces
+$\{P_\alpha\}_{\alpha=1}^{n}$, the corner (node) incidences of each face, and the set of \emph{hinges} $\mathcal{H}$, where each hinge $h=(i,k)\in\mathcal{H}$
+identifies a pair of face corners that an uncut strip of material connects. 
+
+\paragraph{Geometry and design parameters.}
+Each rigid face $P_\alpha$ is described in a centroidal representation by its
+centroid $\bm{c}_\alpha \in \mathbb{R}^2$ together with a set of
+centroid-to-corner vectors $\{\bm{d}_{\alpha j}\}_j$; the corner positions in the
+reference (flat, undeployed) configuration are
+$\bm{x}_{\alpha j}^{0} = \bm{c}_\alpha + \bm{d}_{\alpha j}$. This reference state is
+produced from the trainable design parameters
+\begin{equation}
+  \bm{\theta} = \bigl(\, \bm{z},\ \bm{\ell},\ \bm{w}_{\mathrm{lig}}\,\bigr),
+  \qquad
+  \bm{r} = \sigma(\bm{z}) \in (0,1)^{\lvert\mathrm{cuts}\rvert},
+  \label{eq:design-params}
+\end{equation}
+where the per-cut logits $\bm{z}$ map through the sigmoid $\sigma$ to \emph{aspect
+ratios} $\bm{r}$, each $r$ fixing the relative placement of a cut's two endpoints;
+the ordered logits $\bm{\ell}$ map through a cumulative-softmax to the tangential
+positions $\bm{s}$ of the boundary cuts (\emph{boundary sliders}); and
+$\bm{w}_{\mathrm{lig}}$ collects the per-hinge ligament widths. Given the induced
+$(\bm{r},\bm{s})$, the interior cut vertices are obtained as the solution of a
+linear collinearity system
+\begin{equation}
+  A(\bm{r})\,\bm{v} = \bm{b}(\bm{s}),
+\end{equation}
+which places every interior vertex on the line through its neighbours with the
+prescribed aspect ratio, while boundary vertices are pinned to the slider
+positions. The map $\bm{\theta} \mapsto \{\bm{c}_\alpha, \bm{d}_{\alpha j}\}$ is
+smooth and the resulting flat tessellation is guaranteed to be
+non-self-intersecting: the cut aspect ratios yield parallelogram voids, and the
+boundary sliders are kept strictly ordered (the cumulative-softmax
+parameterisation) so that the outline stays convex, satisfying the hypotheses of
+Tutte's embedding theorem for any admissible $\bm{\theta}$. Validity of the flat
+state is therefore \emph{built in}, not enforced a posteriori.
+
+Alongside the shape parameters, each hinge $h$ carries two geometric attributes
+that are constants of the design and enter the mechanics as material descriptors:
+its rest orientation, summarised by a cut angle $\beta_h$ (a function of the
+neighbouring $\bm{r}$), and its ligament width $w_{\mathrm{lig},h}$, which sets the
+local compliance. These are fixed by the flat construction and do not evolve during
+deployment.
+
+\subsection{Kinematics}
+
+Because the panels are rigid, the configuration of the whole structure is
+specified by three degrees of freedom per face,
+\begin{equation}
+  \bm{q}_\alpha = (\bm{u}_\alpha,\ \phi_\alpha) \in \mathbb{R}^2 \times \mathbb{S}^1,
+  \qquad
+  \bm{q} = (\bm{q}_1,\dots,\bm{q}_{n}) \in \mathbb{R}^{3n},
+\end{equation}
+a rigid-body translation $\bm{u}_\alpha$ and rotation $\phi_\alpha$ of face
+$P_\alpha$ about its centroid. The displacement of corner $j$ of face $\alpha$
+follows exactly from the rigid-body map,
+\begin{equation}
+  \Delta\bm{x}_{\alpha j}(\bm{q}_\alpha)
+    = \bm{u}_\alpha + \bigl(R(\phi_\alpha) - I\bigr)\,\bm{d}_{\alpha j},
+\end{equation}
+where $R(\phi)$ is the planar rotation matrix; the rotation is kept fully
+nonlinear (no small-angle linearisation of the panel motion), so that the model
+remains valid through the large panel rotations that characterise deployment.
+
+\subsection{Hinge deformation measures}
+
+The mechanical state of a hinge is captured by the relative motion of the two
+faces it connects, expressed in a frame that is invariant to rigid-body motion of
+the assembly. For hinge $h=(i,k)$ --- joining faces $i$ and $k$ --- with reference
+bond vector $\bm{b}_h^{0} = \bm{x}_k^{0} - \bm{x}_i^{0}$, we remove the mean
+rotation of the two adjacent faces (a corotational, total-Lagrangian frame) and
+read off three scalar deformation measures,
+\begin{equation}
+  \bm{\varepsilon}_h(\bm{q}) = \bigl(a_h,\ s_h,\ \vartheta_h\bigr),
+  \label{eq:hinge-strain}
+\end{equation}
+namely an axial (stretch) measure $a_h$, a shear measure $s_h$, and the relative
+rotation $\vartheta_h = \phi_k - \phi_i$. By construction $\bm{\varepsilon}_h$
+vanishes under any rigid-body motion of the structure, including arbitrarily large
+global rotations, and depends only on the \emph{current} configuration relative to
+the reference geometry --- the ligament is treated as memoryless. 
+
+\begin{figure}
+    \centering
+    \includegraphics[width=1\linewidth]{Images/pipeline_overview.png}
+    \caption{Enter Caption}
+    \label{fig:placeholder}
+\end{figure}
+
+\subsection{Energy functional}
+
+We equip each hinge with a stored-energy function $W$ of its own deformation
+measures and design attributes,
+\begin{equation}
+  W_h = W\!\bigl(\bm{\varepsilon}_h;\ \bm{g}_h\bigr),
+  \qquad
+  \bm{g}_h = \bigl(w_{\mathrm{lig},h},\ \beta_h\bigr),
+  \label{eq:hinge-energy}
+\end{equation}
+where $\bm{g}_h$ collects the per-hinge design attributes (ligament width and cut
+angle), and take the total elastic energy of the assembly to be the sum of
+independent hinge contributions,
+\begin{equation}
+  U(\bm{q};\,\bm{\theta}) = \sum_{h\in\mathcal{H}}
+    W\!\bigl(\bm{\varepsilon}_h(\bm{q});\ \bm{g}_h\bigr).
+  \label{eq:total-energy}
+\end{equation}
+We deliberately leave the constitutive form of $W$ abstract: any objective,
+frame-invariant function of $\bm{\varepsilon}=(a,s,\vartheta)$, parameterised by
+the hinge descriptors $\bm{g}_h$, is admissible, and different choices --- from a
+simple quadratic spring to a data-driven surrogate calibrated against
+high-fidelity simulation --- can be substituted without altering the surrounding
+kinematics or topology. The only requirements are that $W$ be non-negative,
+minimised at the undeformed state, and differentiable in both its kinematic
+arguments and its design attributes.
+
+\subsection{Equilibrium}
+
+Deployment and loading are imposed through boundary conditions on the face
+degrees of freedom: a subset of face DOFs is prescribed (Dirichlet, the clamped
+panels) and generalised forces $\bm{f}$ are applied to others (Neumann). The
+mechanical state at load factor $\lambda\in[0,1]$ is the minimiser of the total
+potential energy over the free degrees of freedom,
+\begin{equation}
+  \bm{q}^\star(\lambda;\,\bm{\theta})
+    = \arg\min_{\bm{q}\,\in\,\mathcal{C}}
+      \ \Pi(\bm{q};\,\bm{\theta},\lambda),
+  \qquad
+  \Pi = U(\bm{q};\,\bm{\theta}) - \lambda\,\bm{f}^\top \bm{q},
+  \label{eq:equilibrium}
+\end{equation}
+where $\mathcal{C}$ is the affine space of configurations satisfying the
+prescribed DOFs. The load is applied incrementally in $\lambda$, each increment
+warm-started from the previous equilibrium, so that the model traces a
+quasi-static deformation path from the flat closed sheet to its deployed
+configuration. Everything downstream of \eqref{eq:equilibrium} --- the equilibrium
+map $\bm{\theta} \mapsto \bm{q}^\star$ --- is differentiable with respect to the
+design parameters $\bm{\theta}$, which is what makes the object amenable to
+inverse design.
+
+
+\subsection{Differentiable physics pipeline}
+
+In the closed inverse-design setting the trainable parameters are those of
+\eqref{eq:design-params}, $\bm{\theta}=(\bm{z},\bm{\ell},\bm{w}_{\mathrm{lig}})$:
+per-cut logits $\bm{z}$ mapped to Tutte aspect ratios
+$\bm{r}=\sigma(\bm{z})\in(0,1)$, ordered boundary-slider logits $\bm{\ell}$, and
+per-hinge ligament widths $\bm{w}_{\mathrm{lig}}$. A differentiable forward map
+$\mathcal{G}_{\bm{\theta}}$ (the flat RDPQK closed-sheet builder) assembles
+$\bm{r}$ and the boundary sliders into a sparse collinearity linear system whose
+solution gives the flat panel vertices; non-self-intersection holds by
+construction. Deployment is the static solve
+\begin{equation}
+  \bm{q}^\star(\bm{\theta})
+    = \arg\min_{\bm{q}\,\in\,\mathcal{C}}\,\Pi(\bm{q};\,\bm{\theta},\lambda),
+  \qquad
+  \Pi = \sum_{h\in\mathcal{H}} W\!\bigl(\bm{\varepsilon}_h(\bm{q});\,\bm{g}_h\bigr)
+        - W_{\mathrm{ext}},
+  \label{eq:pipeline-solve}
+\end{equation}
+with external work $W_{\mathrm{ext}}=\lambda\,\bm{f}^\top\bm{q}$ and the condensed
+hinge energy $W$ the learned (frozen) $\tanh$-MLP surrogate of
+\eqref{eq:surrogate} below; its automatic-differentiation gradient
+$\nabla_{\bm{\varepsilon}} W=(F_a,F_s,M_\vartheta)$ supplies the internal
+generalised forces and $\nabla^2_{\bm{\varepsilon}} W$ the tangent stiffness.
+
+The minimisation uses jaxopt L-BFGS under incremental load stepping (in $\lambda$)
+unrolled with \texttt{jax.lax.scan}. Gradients propagate through the argmin by the
+implicit function theorem rather than through the solver iterates,
+\begin{equation}
+  \frac{\partial \bm{q}^\star}{\partial \bm{\theta}}
+    = -\,H^{-1}\,\frac{\partial^2 \Pi}{\partial \bm{q}\,\partial \bm{\theta}},
+  \qquad
+  H = \nabla^2_{\bm{q}}\,\Pi,
+\end{equation}
+exposed as a \texttt{custom\_vjp}. Since plastic softening in the surrogate can
+render $H$ indefinite (a vanishing design gradient), the backward solve is
+Tikhonov-regularised, $H\!\leftarrow\!H+\tau I$
+(\texttt{physics.backward\_reg}), restoring a descent direction. Finally the
+end-to-end objective --- a Chamfer distance between the deployed centroids
+$\{\bm{c}_\alpha(\bm{q}^\star)\}$ and the target shape $\mathcal{T}$, plus a
+physical-stability penalty --- is minimised with Adam through a single
+\texttt{jax.value\_and\_grad}, so gradients flow
+$\mathcal{L}\!\to\!\bm{q}^\star\!\to\!\Pi\!\to\!\bm{\theta}$ back to the cut
+aspect ratios, boundary sliders, and ligament widths jointly.
+
+\subsection{Condensed hinge-energy surrogate}
+
+% Buckling ?
+
+Each kirigami hinge (a thin ligament joining two rigid tiles) is replaced by a
+single learned \emph{stored-energy function} $W(\bm{\varepsilon};\bm{g})$
+[N$\cdot$mm]. It condenses a full 3D elasto-plastic simulation into a scalar that
+the deployment solver can minimise, and whose gradient is the internal generalised
+force the solver balances. The relative motion of the two connected faces is the
+minimal rigid-body-invariant coordinate $\bm{\varepsilon}=(a,\,s,\,\vartheta)$ of
+\eqref{eq:hinge-strain}: the corotated axial, shear, and relative-rotation of the
+inter-tile bond. The design fixes the per-hinge attributes
+$\bm{g}=(w_{\mathrm{lig}},\,\beta\,[,\rho_f])$ --- ligament width, cut angle, and
+the cut-tip fillet ratio --- with both $\beta$ and the bond direction
+$\hat{\bm{e}}_\parallel$ deterministic functions of the void aspect ratios
+$\bm{r}$ and boundary sliders. The geometry $\bm{g}(\bm{\theta})$ is differentiable
+and threaded as an \emph{explicit} solver input, so the shape loss $\mathcal{L}$
+(target Chamfer $+$ stability penalty on $D$) is minimised through the physics,
+including the design's effect on $\beta(\bm{\theta})$. With
+$\eta:\mathbb{R}^{6}\!\to\mathbb{R}^m$ a $\tanh$ MLP acting on the standardised
+features
+$\bm{\xi}(\bm{\varepsilon},\bm{g})=[a,s,\vartheta,\log w_{\mathrm{lig}},\beta,\rho_f]$,
+\begin{equation}
+  \boxed{\,W(\bm{\varepsilon};\bm{g})
+    = W_{s}\,\bigl\|\,\eta\bigl(\bm{\xi}(\bm{\varepsilon},\bm{g})\bigr)
+      -\eta\bigl(\bm{\xi}(\bm{0},\bm{g})\bigr)\,\bigr\|_2^2\,}.
+  \label{eq:surrogate}
+\end{equation}
+The squared form gives, \emph{by construction} and with no penalty terms, no
+spurious negative-energy state, free rigid-body motion, and a smooth tangent
+stiffness for the implicit solve. The internal generalised force is the gradient
+\begin{equation}
+  \nabla_{\bm{\varepsilon}}W=(F_a,\,F_s,\,M_\vartheta),
+\end{equation}
+and a separate head predicts a continuous ductile-damage margin
+$D(\bm{\varepsilon};\bm{g})=\mathrm{softplus}(\cdot)\ge 0$ ($D\!\ge\!1$ =
+fracture), kept distinct so the hard failure boundary does not distort the smooth
+$W$.
+
+The scale $W_{s}$ and the maps $\eta,\,D$ are fit on a CalculiX RVE dataset by a
+variance-normalised Sobolev loss (energy priority via the weight $\gamma$),
+\begin{equation}
+  \mathcal{L}_{\mathrm{data}}
+  =\gamma\,\frac{\|W-W^\ast\|^2}{\sigma_W^2}
+  +(1-\gamma)\,\frac{\|\nabla_{\bm{\varepsilon}}W-\bm{F}^\ast\|^2}{\sigma_F^2}
+  +w_f\,\|D-D^\ast\|^2,
+\end{equation}
+so both the energy landscape and the equilibrium-setting forces are matched, split
+by geometry to test extrapolation to unseen hinges.
+
+\subsubsection{Finite element modeling of the hinges}
+
+Each ligament hinge is characterized by a three-dimensional finite-element model of a Saint--Venant representative volume element built around the cut, solved with CalculiX. The domain is discretized with quadratic 15-node pentahedral elements (C3D15) and the S235 structural steel is described by a
+finite-strain $J_2$ (von~Mises) elastoplastic law with isotropic hardening ($E=210\,\mathrm{GPa}$, $\sigma_y\!\approx\!235\,\mathrm{MPa}$, tangent modulus
+$E_t\!\approx\!2.1\,\mathrm{GPa}$), so that yielding, mild hardening, and the
+geometrically nonlinear out-of-plane buckling of the ligament are all captured.
+The RVE is loaded in a co-rotational frame by the three relative face-to-face
+deformation measures $\bm{\varepsilon}=(a,s,\vartheta)$ (axial and shear openings
+and the hinge rotation), imposed as kinematic boundary conditions on the two
+bounding faces while the far field is Saint--Venant--relaxed. For each geometry
+$\bm{g}=(w_{\mathrm{lig}},\beta)$ (ligament width and cut angle) and load state,
+the simulation returns the condensed stored energy
+$W(\bm{\varepsilon};\bm{g})=\!\int_\Omega \psi\,\mathrm{d}V$, its work-conjugate
+generalized forces $\nabla_{\bm{\varepsilon}}W=(F_a,F_s,M_\vartheta)$, the peak
+von~Mises stress, and the 99th-percentile equivalent plastic strain
+$\varepsilon_p^{p99}$, whose ratio to the ductile failure strain $\varepsilon_f$
+defines the damage margin
+$D=\varepsilon_p^{p99}/\varepsilon_f$ ($D\!\ge\!1$ marking fracture).
+
+\begin{figure}
+    \centering
+    \includegraphics[width=1\linewidth]{Images/hinge_layout.png}
+    \caption{Enter Caption}
+    \label{fig:hinge_layout}
+\end{figure}
+
+
+\begin{figure}
+    \centering
+    \includegraphics[width=1\linewidth]{Images/energy_landscape.png}
+    \caption{Surrogate learned rotation energy landscape of steel hinges}
+    \label{fig:placeholder}
+\end{figure}
+
+\section{Results}\label{sec2}
+\subsection{Flat-sheet Kirigami}
+
+Material
+
+Calibration of the model
+
+Analysis of motifs of tiles
+
+Actual kirigami cutting
+
+
+\subsection{Computational efficiency}
+
+
+\section{Discussion}\label{secD}
+
+\subsection{Locality of out-of-plane buckling of the hinges : comparing paper and steel}
+
+In the thin-hinge regime $\delta\gg t$, the tension-induced instability need not
+tilt the square domains out of plane: when they are held coplanar by gravity or an
+overburden of areal weight $w=\rho g t+q$, buckling can instead localize in the
+ligaments. The selection between this localized mode and the domain-tilting mode,
+together with the fold geometry, follows in closed form.
+
+The relative motion of two adjacent domains shares only the primary-cut tip $O$, and
+by Chasles' theorem a rigid motion with a fixed point is a rotation about it. That $O$
+is fixed follows energetically: translating it strains the junction (cost $\sim Yu^2$,
+with $Y=Et$), whereas holding it fixed and folding costs only bending
+($\sim B\theta^2/\delta$, with $B=Et^3/[12(1-\nu^2)]$), the former larger by
+$(\delta/t)^2\gg1$; symmetry about the fold plane suppresses the remaining out-of-fold
+rotations. The fold apex localizes at $O$ rather than in the ligament interior because
+a developable fold concentrates an angle deficit $\sim 2\theta$ that, in the interior,
+would form a disclination requiring stretching ($\sim Y\theta^2\delta^2$), whereas at
+the free edge it is absorbed by the cut opening at no stretching cost---that is, by the
+cut-opening angle $2\theta_o$.
+
+The bulge is therefore a developable cone anchored at $O$; with $\delta$ the only
+available transverse length, its width is $\lambda\simeq\delta$. The idealized cone's
+curvature discontinuities are smoothed over a bending boundary layer
+$\ell_B=[B/(Y\theta^2)]^{1/2}$; since the buckling angle
+$\theta\simeq\sqrt{2\varepsilon_c}=t/\delta$ (with $\varepsilon_c\simeq\tfrac12(t/\delta)^2$),
+one has $\ell_B\sim\delta$ and the fold is a single smooth mound of finite curvature.
+
+Mode selection follows from a moment balance about the hinge axis of one domain.
+Gravity resists tilting with $\mathcal{M}_{\mathrm{grav}}\simeq\tfrac12 wL^3$, while the
+folded hinge drives it with $\mathcal{M}_{\mathrm{el}}=E I_o\,\theta/\lambda\simeq
+Et^4/(12\delta)$ (with $I_o=\delta t^3/12$). Introducing the elasto-gravity length
+$\ell_{\mathrm{eg}}=(B/w)^{1/3}$, their ratio is
+\begin{equation}
+\Gamma\equiv\frac{\mathcal{M}_{\mathrm{grav}}}{\mathcal{M}_{\mathrm{el}}}
+=\frac{6\,w\,L^{3}\,\delta}{E\,t^{4}}
+=C\left(\frac{L}{\ell_{\mathrm{eg}}}\right)^{3}\frac{\delta}{t},
+\qquad C=O(1).
+\end{equation}
+The domains remain coplanar (localized buckling) for $\Gamma>1$, i.e.\ above a critical
+edge length $L^{\star}\sim\ell_{\mathrm{eg}}(t/\delta)^{1/3}$, and tilt below it. The single
+inequality $\delta\gg t$ underlies both the pinning of $O$ and the isometry of the fold;
+as $\delta\to t$ the junction stretches and peels, $O$ unpins, and the planar auxetic
+response of the thick limit is recovered.
+
+
+
+\begin{table}[h!]
+\centering
+\begin{tabular}{lcc}
+\toprule
+\textbf{Material} & \textbf{Sheet Thickness $t$ (mm)} & \textbf{Critical Length $L^\star$ (cm)} \\
+\midrule
+Paper & 0.2 & 7.3 \\
+Polypropylene & 0.8 & 22.2 \\
+Aluminium & 1.0 & 69.4 \\
+Soft Steel & 1.5 & 103.7 \\
+\bottomrule
+\end{tabular}
+\caption{Critical lengths $L^\star$ for several thin materials
+($\bar{\varepsilon}=1.2$, $\delta=5$~mm).}
+\label{tab:longueur_critique}
+\end{table}
+
+
+\section{Conclusion}\label{sec13}
+
+Conclusions may be used to restate your hypothesis or research question, restate your major findings, explain the relevance and the added value of your work, highlight any limitations of your study, describe future directions for research and recommendations. 
+
+In some disciplines use of Discussion or 'Conclusion' is interchangeable. It is not mandatory to use both. Please refer to Journal-level guidance for any specific requirements. 
+
+\backmatter
+
+\bmhead{Supplementary information}
+
+If your article has accompanying supplementary file/s please state so here. 
+
+Authors reporting data from electrophoretic gels and blots should supply the full unprocessed scans for key as part of their Supplementary information. This may be requested by the editorial team/s if it is missing.
+
+Please refer to Journal-level guidance for any specific requirements.
+
+
+\noindent
+If any of the sections are not relevant to your manuscript, please include the heading and write `Not applicable' for that section. 
+
+%%===================================================%%
+%% For presentation purpose, we have included        %%
+%% \bigskip command. Please ignore this.             %%
+%%===================================================%%
+\bigskip
+\begin{flushleft}%
+Editorial Policies for:
+
+\bigskip\noindent
+Springer journals and proceedings: \url{https://www.springer.com/gp/editorial-policies}
+
+\bigskip\noindent
+Nature Portfolio journals: \url{https://www.nature.com/nature-research/editorial-policies}
+
+\bigskip\noindent
+\textit{Scientific Reports}: \url{https://www.nature.com/srep/journal-policies/editorial-policies}
+
+\bigskip\noindent
+BMC journals: \url{https://www.biomedcentral.com/getpublished/editorial-policies}
+\end{flushleft}
+
+\begin{appendices}
+
+\section{Section title of first appendix}\label{secA1}
+
+An appendix contains supplementary information that is not an essential part of the text itself but which may be helpful in providing a more comprehensive understanding of the research problem or it is information that is too cumbersome to be included in the body of the paper.
+
+%%=============================================%%
+%% For submissions to Nature Portfolio Journals %%
+%% please use the heading ``Extended Data''.   %%
+%%=============================================%%
+
+%%=============================================================%%
+%% Sample for another appendix section			       %%
+%%=============================================================%%
+
+%% \section{Example of another appendix section}\label{secA2}%
+%% Appendices may be used for helpful, supporting or essential material that would otherwise 
+%% clutter, break up or be distracting to the text. Appendices can consist of sections, figures, 
+%% tables and equations etc.
+
+\end{appendices}
+
+%%===========================================================================================%%
+%% If you are submitting to one of the Nature Portfolio journals, using the eJP submission   %%
+%% system, please include the references within the manuscript file itself. You may do this  %%
+%% by copying the reference list from your .bbl file, paste it into the main manuscript .tex %%
+%% file, and delete the associated \verb+\bibliography+ commands.                            %%
+%%===========================================================================================%%
+
+\bibliography{sn-bibliography}% common bib file
+%% if required, the content of .bbl file can be included here once bbl is generated
+%%\input sn-article.bbl
+
+\end{document}

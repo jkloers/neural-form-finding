@@ -25,9 +25,15 @@ import time
 import numpy as np
 
 from nff.rve.geometry import RVEParams, build_rve_domain, boundary_tag
-from nff.rve.damage import ductile_damage
+from nff.rve.damage import (LIG_CENTER_FRAC, LIG_RADIUS_FRAC, max_principal_strain,
+                            mean_triaxiality, peak_peeq)
+from nff.rve.materials import Hypotheses, coerce_material
+from nff.rve.materials.steel import STEEL   # re-exported for back-compat (callers import from here)
 
-STEEL = dict(E=210_000.0, nu=0.30, sigma_y=235.0, Et=2100.0)      # S235, hardening E/100
+# CalculiX lives in its own conda env here (`/opt/miniconda3/envs/ccx/bin/ccx`, v2.23) and is NOT
+# on the kgnn_mac PATH, so a bare "ccx" resolves only when the caller has arranged it. Override
+# with $CCX_BIN or the ``ccx_bin`` argument.
+CCX_BIN = os.environ.get("CCX_BIN", "ccx")
 
 
 def _build_mesh(p: RVEParams, pivot, imp_amp, n_through, lc_min, lc_max):
@@ -57,10 +63,11 @@ def _build_mesh(p: RVEParams, pivot, imp_amp, n_through, lc_min, lc_max):
         # deforming region. The free main cut below/beside the fillet stays coarse.
         gmsh.model.mesh.field.add("Ball", 1)
         gmsh.model.mesh.field.setNumber(1, "XCenter", 0.0)
-        gmsh.model.mesh.field.setNumber(1, "YCenter", -0.5 * p.w_lig)   # mid-ligament
+        # same disc the damage average uses -- refined region == averaged region, one constant pair
+        gmsh.model.mesh.field.setNumber(1, "YCenter", LIG_CENTER_FRAC * p.w_lig)   # mid-ligament
         gmsh.model.mesh.field.setNumber(1, "ZCenter", 0.5 * p.thickness)
-        gmsh.model.mesh.field.setNumber(1, "Radius", 0.75 * p.w_lig)    # covers fillet + strip + secondary
-        gmsh.model.mesh.field.setNumber(1, "Thickness", 0.75 * p.w_lig)  # transition to coarse
+        gmsh.model.mesh.field.setNumber(1, "Radius", LIG_RADIUS_FRAC * p.w_lig)    # fillet + strip + secondary
+        gmsh.model.mesh.field.setNumber(1, "Thickness", LIG_RADIUS_FRAC * p.w_lig)  # transition to coarse
         gmsh.model.mesh.field.setNumber(1, "VIn", lc_min)
         gmsh.model.mesh.field.setNumber(1, "VOut", lc_max)
         gmsh.model.mesh.field.setAsBackgroundMesh(1)
@@ -114,7 +121,7 @@ def _build_mesh(p: RVEParams, pivot, imp_amp, n_through, lc_min, lc_max):
         gmsh.finalize()
 
 
-def _write_inp(path, xyz, conn, arcA, arcB, pivot, mat, angle, elastic_only, n_frames):
+def _write_inp(path, xyz, conn, arcA, arcB, pivot, mat, angle, elastic_only, n_frames, hyp):
     L = ["*NODE"]
     for i, (x, y, z) in enumerate(xyz, start=1):
         L.append(f"{i}, {x:.6e}, {y:.6e}, {z:.6e}")
@@ -122,14 +129,8 @@ def _write_inp(path, xyz, conn, arcA, arcB, pivot, mat, angle, elastic_only, n_f
     for e, row in enumerate(conn, start=1):
         L.append(f"{e}, " + ", ".join(str(v) for v in row))
     L.append("*NSET, NSET=ARCA\n" + ",\n".join(str(v) for v in arcA))
-    L.append("*MATERIAL, NAME=STEEL")
-    L.append("*ELASTIC")
-    L.append(f"{mat['E']:.1f}, {mat['nu']:.3f}")
-    if not elastic_only:
-        L.append("*PLASTIC")
-        L.append(f"{mat['sigma_y']:.1f}, 0.0")
-        L.append(f"{mat['sigma_y'] + mat['Et'] * 0.5:.1f}, 0.5")  # hardening slope Et
-    L.append("*SOLID SECTION, ELSET=EALL, MATERIAL=STEEL")
+    L.append(mat.constitutive_cards(hyp, elastic_only=elastic_only))
+    L.append(mat.section_cards("EALL", hyp))
     L.append("*STEP, NLGEOM, INC=1000")
     L.append("*STATIC")
     L.append(f"{1.0/n_frames:.4f}, 1.0, 1e-6, {1.0/n_frames:.4f}")
@@ -157,17 +158,19 @@ def _write_inp(path, xyz, conn, arcA, arcB, pivot, mat, angle, elastic_only, n_f
 
 
 def deploy_ccx(p, pivot, angle_deg, material=STEEL, imp_amp=None, elastic_only=False,
-               n_through=1, lc_min=None, lc_max=None, n_frames=10, workdir="/tmp/ccx_job"):
+               n_through=1, lc_min=None, lc_max=None, n_frames=10, workdir="/tmp/ccx_job",
+               hyp=None):
     """Single-step deployment (straight-line ramp). Kept for quick smoke tests."""
+    mat, hyp = coerce_material(material), hyp or Hypotheses()
     lc_min = lc_min if lc_min is not None else max(p.w_c / 2, p.w_lig / 8)
     lc_max = lc_max if lc_max is not None else p.r_win / 4
     imp_amp = imp_amp if imp_amp is not None else 0.3 * p.thickness
     os.makedirs(workdir, exist_ok=True)
     job = os.path.join(workdir, "hinge")
     xyz, conn, arcA, arcB = _build_mesh(p, pivot, imp_amp, n_through, lc_min, lc_max)
-    _write_inp(job + ".inp", xyz, conn, arcA, arcB, pivot, material,
-               np.radians(angle_deg), elastic_only, n_frames)
-    r = subprocess.run(["ccx", "hinge"], cwd=workdir, capture_output=True, text=True, timeout=600)
+    _write_inp(job + ".inp", xyz, conn, arcA, arcB, pivot, mat,
+               np.radians(angle_deg), elastic_only, n_frames, hyp)
+    r = subprocess.run([CCX_BIN, "hinge"], cwd=workdir, capture_output=True, text=True, timeout=600)
     return dict(returncode=r.returncode, stdout=r.stdout[-2000:], n_nodes=len(xyz),
                 n_elems=len(conn), job=job)
 
@@ -186,8 +189,14 @@ def _arc_disp(xyz, arcB, pivot, a, s, theta):
 
 
 def _write_deck(path, xyz, conn, arcA, arcB, pivot, mat, states, elastic_only, field_every,
-                solver=None):
-    """One *STEP per kinematic state (a,s,theta) -> correct arc path; energy+reaction+fields out."""
+                solver=None, hyp=None, min_inc=1e-3, stabilize=None):
+    """One *STEP per kinematic state (a,s,theta) -> correct arc path; energy+reaction+fields out.
+
+    ``stabilize`` (None = off): add ``*STATIC, STABILIZE=<val>`` automatic viscous damping to walk
+    through buckling snap-through (e.g. the fold past the localization wall). NOTE the viscous
+    reaction contaminates F/M -- use only when the out-of-plane displacement (uz) is the target.
+    """
+    hyp = hyp or Hypotheses()
     L = ["*NODE"]
     for i, (x, y, z) in enumerate(xyz, start=1):
         L.append(f"{i}, {x:.6e}, {y:.6e}, {z:.6e}")
@@ -196,18 +205,16 @@ def _write_deck(path, xyz, conn, arcA, arcB, pivot, mat, states, elastic_only, f
         L.append(f"{e}, " + ", ".join(str(v) for v in row))
     L.append("*NSET, NSET=ARCA\n" + ",\n".join(str(v) for v in arcA))
     L.append("*NSET, NSET=ARCB\n" + ",\n".join(str(v) for v in arcB))
-    L.append("*MATERIAL, NAME=STEEL\n*ELASTIC")
-    L.append(f"{mat['E']:.1f}, {mat['nu']:.3f}")
-    if not elastic_only:
-        L.append("*PLASTIC")
-        L.append(f"{mat['sigma_y']:.1f}, 0.0")
-        L.append(f"{mat['sigma_y'] + mat['Et'] * 0.5:.1f}, 0.5")
-    L.append("*SOLID SECTION, ELSET=EALL, MATERIAL=STEEL")
-    stat = "*STATIC" + (f", SOLVER={solver}" if solver else "")
-    # min increment 1e-3: the solver bails (ends the job) once it needs tiny steps -- which is
-    # exactly the deep-plastic grind past rupture -> natural stop-at-fracture, no endless cutbacks.
+    L.append(mat.constitutive_cards(hyp, elastic_only=elastic_only))
+    L.append(mat.section_cards("EALL", hyp))
+    stat = "*STATIC" + (f", SOLVER={solver}" if solver else "") \
+         + (f", STABILIZE={stabilize:g}" if stabilize else "")
+    # min increment (default 1e-3): the solver bails (ends the job) once it needs tiny steps -- for
+    # steel that is the deep-plastic grind past rupture (natural stop-at-fracture, no endless
+    # cutbacks). Thin elastic sheets (paper) buckle-snap instead and need a smaller floor to walk
+    # through the fold -> tunable via ``min_inc``.
     for k, (a, s, th) in enumerate(states):
-        L.append(f"*STEP, NLGEOM, INC=200\n{stat}\n0.25, 1.0, 1e-3, 1.0\n*BOUNDARY")
+        L.append(f"*STEP, NLGEOM, INC=500\n{stat}\n0.25, 1.0, {min_inc:g}, 1.0\n*BOUNDARY")
         if k == 0:
             L.append("ARCA, 1, 3, 0.0")
         ux, uy = _arc_disp(xyz, arcB, pivot, a, s, th)
@@ -216,7 +223,7 @@ def _write_deck(path, xyz, conn, arcA, arcB, pivot, mat, states, elastic_only, f
         L.append("*EL PRINT, ELSET=EALL, TOTALS=ONLY\nELSE")
         L.append("*NODE PRINT, NSET=ARCB\nRF")
         if (k % field_every == 0) or (k == len(states) - 1):
-            L.append("*NODE FILE\nU\n*EL FILE\n" + ("E, S" if elastic_only else "E, PEEQ, S"))
+            L.append("*NODE FILE\nU\n*EL FILE\n" + mat.el_file_fields(elastic_only=elastic_only))
         L.append("*END STEP")
     open(path, "w").write("\n".join(L) + "\n")
 
@@ -267,7 +274,10 @@ def _parse_frd(path):
     for ln in open(path):
         tag = ln[:3]
         if tag == " -4":
-            field = ln.split()[1]; ncomp = int(ln.split()[2]); data = []
+            parts = ln.split()
+            if len(parts) < 3:                        # truncated header (ccx killed mid-write) -> keep complete frames
+                break
+            field = parts[1]; ncomp = int(parts[2]); data = []
         elif tag == " -5":
             continue
         elif tag == " -1" and field:
@@ -290,19 +300,16 @@ def _parse_frd(path):
 
 
 def _principal_strain_max(tostrain):
-    """Max principal strain per frame from TOSTRAIN (exx,eyy,ezz,exy,eyz,ezx)."""
-    e = tostrain
-    out = np.zeros(len(e))
-    for i, (xx, yy, zz, xy, yz, zx) in enumerate(e):
-        T = np.array([[xx, xy, zx], [xy, yy, yz], [zx, yz, zz]])
-        out[i] = np.linalg.eigvalsh(T)[-1]
-    return out
+    """Back-compat shim: per-element max principal strain (see damage.max_principal_strain)."""
+    return max_principal_strain(tostrain)
 
 
 def prepare_job(p, angle_deg=60.0, n_steps=15, pivot=None, material=STEEL, imp_amp=None,
                 elastic_only=False, n_through=1, lc_min=None, lc_max=None, field_every=1,
-                a=0.0, s=0.0, solver=None, workdir="/tmp/ccx_job"):
+                a=0.0, s=0.0, solver=None, workdir="/tmp/ccx_job", hyp=None, min_inc=1e-3,
+                stabilize=None):
     """Build the mesh + write the deck (the gmsh part — NOT thread-safe, run serially)."""
+    mat, hyp = coerce_material(material), hyp or Hypotheses()
     lc_min = lc_min if lc_min is not None else max(p.w_c / 2, p.w_lig / 8)
     lc_max = lc_max if lc_max is not None else p.r_win / 4
     imp_amp = imp_amp if imp_amp is not None else 0.3 * p.thickness
@@ -313,29 +320,32 @@ def prepare_job(p, angle_deg=60.0, n_steps=15, pivot=None, material=STEEL, imp_a
     xyz, conn, arcA, arcB = _build_mesh(p, pivot, imp_amp, n_through, lc_min, lc_max)
     dth = np.radians(angle_deg) / n_steps
     states = [(a * (k + 1) / n_steps, s * (k + 1) / n_steps, (k + 1) * dth) for k in range(n_steps)]
-    _write_deck(job + ".inp", xyz, conn, arcA, arcB, pivot, material, states, elastic_only,
-                field_every, solver=solver)
+    _write_deck(job + ".inp", xyz, conn, arcA, arcB, pivot, mat, states, elastic_only,
+                field_every, solver=solver, hyp=hyp, min_inc=min_inc, stabilize=stabilize)
     return dict(job=job, workdir=workdir, xyz=xyz, conn=conn, arcA=arcA, arcB=arcB, pivot=pivot,
-                angle_deg=angle_deg, n_steps=n_steps)
+                angle_deg=angle_deg, n_steps=n_steps, material=mat, hyp=hyp, w_lig=p.w_lig)
 
 
-def solve_job(meta, ncpus=1, timeout=1800, eps_f=None, fracture_margin=1.1, poll=4.0):
+def solve_job(meta, ncpus=1, timeout=1800, eps_f=None, fracture_margin=1.1, poll=4.0,
+              ccx_bin=CCX_BIN):
     """Run ccx on a prepared job (subprocess — safe to run many concurrently).
 
-    stop-at-fracture: if ``eps_f`` is given, poll the incrementally-written .frd and kill ccx
-    once PEEQ p99 >= fracture_margin*eps_f. This skips the deep-plastic grind PAST ductile
-    failure — the dominant cost, since most hinges tear at small angle then ccx crawls to the
-    cap in tiny increments (that data is also unphysical: CalculiX has no element deletion).
+    stop-at-fracture: if ``eps_f`` is given, poll the incrementally-written .frd and kill ccx once
+    the hottest ligament element passes ``fracture_margin*eps_f``. This skips the deep-plastic
+    grind PAST ductile failure — the dominant cost, since most hinges tear at small angle then ccx
+    crawls to the cap in tiny increments (that data is also unphysical: CalculiX has no element
+    deletion). Pass the MATERIAL's own ``eps_f``, not a campaign constant.
     Returns a CompletedProcess-like object (``.stdout`` = the ccx log).
     """
     env = {**os.environ, "OMP_NUM_THREADS": str(ncpus), "CCX_NPROC_EQUATION_SOLVER": str(ncpus)}
     if eps_f is None:
-        return subprocess.run(["ccx", "hinge"], cwd=meta["workdir"], capture_output=True, text=True,
-                              timeout=timeout, env=env)
+        return subprocess.run([ccx_bin, "hinge"], cwd=meta["workdir"], capture_output=True,
+                              text=True, timeout=timeout, env=env)
 
+    xyz, conn, w_lig = meta["xyz"], meta["conn"], meta["w_lig"]
     frd, logpath = meta["job"] + ".frd", os.path.join(meta["workdir"], "ccx.log")
     with open(logpath, "w") as logf:                             # file, not PIPE: no buffer deadlock
-        proc = subprocess.Popen(["ccx", "hinge"], cwd=meta["workdir"], stdout=logf,
+        proc = subprocess.Popen([ccx_bin, "hinge"], cwd=meta["workdir"], stdout=logf,
                                 stderr=subprocess.STDOUT, text=True, env=env)
         t0 = time.time()
         while True:
@@ -348,7 +358,7 @@ def solve_job(meta, ncpus=1, timeout=1800, eps_f=None, fracture_margin=1.1, poll
                 proc.terminate(); break
             try:                                                 # peek the partial .frd for fracture
                 frames = _parse_frd(frd) if os.path.exists(frd) else []
-                if frames and _peeq_pct(frames[-1], 99.0) >= fracture_margin * eps_f:
+                if frames and peak_peeq(frames[-1], xyz, conn, w_lig) >= fracture_margin * eps_f:
                     proc.terminate(); break                      # stop-at-fracture
             except Exception:
                 pass
@@ -359,7 +369,7 @@ def solve_job(meta, ncpus=1, timeout=1800, eps_f=None, fracture_margin=1.1, poll
                 proc.kill()
     with open(logpath) as f:
         out = f.read()
-    return subprocess.CompletedProcess(["ccx", "hinge"], proc.returncode or 0, out, "")
+    return subprocess.CompletedProcess([ccx_bin, "hinge"], proc.returncode or 0, out, "")
 
 
 def parse_job(meta, stdout=""):
@@ -382,13 +392,21 @@ def parse_job(meta, stdout=""):
     strain_max = np.array([_principal_strain_max(f["TOSTRAIN"]).max()
                            for f in frames if "TOSTRAIN" in f])
     peeq_max = np.array([_peeq_max(f) for f in frames])
-    peeq_p99 = np.array([_peeq_pct(f, 99.0) for f in frames])
-    damage_p99 = np.array([_damage_pct(f, 99.0) for f in frames])
+    # THE damage column: normalized plastic dissipation <PEEQ>_lig / eps_f (nff.rve.damage).
+    # peeq_lig is the hottest ligament element -- it calibrates the tear line (the value of
+    # `damage` where it first reaches eps_f); eta_mean_lig audits the constant-eps_f assumption.
+    conn, w_lig = meta["conn"], meta["w_lig"]
+    mat = coerce_material(meta["material"])
+    hyp = meta.get("hyp") or Hypotheses()
+    damage = np.array([mat.damage(f, hyp, xyz=xyz, conn=conn, w_lig=w_lig) for f in frames])
+    peeq_lig = np.array([peak_peeq(f, xyz, conn, w_lig) for f in frames])
+    eta_mean_lig = np.array([mean_triaxiality(f, xyz, conn, w_lig) for f in frames])
     return dict(ok=ok, stdout=stdout[-1500:], theta_deg=theta_deg, W=W, M_theta=np.array(Mt),
                 F_a=np.array(Fa), F_s=np.array(Fs), uz_max=uz_max, strain_max=strain_max,
-                peeq_max=peeq_max, peeq_p99=peeq_p99, damage_p99=damage_p99, frames=frames, xyz=xyz, conn=meta["conn"],
+                peeq_max=peeq_max, peeq_lig=peeq_lig, damage=damage, eta_mean_lig=eta_mean_lig,
+                eps_f=mat.eps_f, frames=frames, xyz=xyz, conn=conn,
                 arcA=meta["arcA"], arcB=meta["arcB"], pivot=pivot, n_nodes=len(xyz),
-                n_elems=len(meta["conn"]), job=job)
+                n_elems=len(conn), job=job)
 
 
 def deploy(p, ncpus=1, solver=None, timeout=1800, eps_f=None, **kw):
@@ -407,43 +425,13 @@ def deploy(p, ncpus=1, solver=None, timeout=1800, eps_f=None, **kw):
 
 
 def _peeq_max(frame):
-    """Max equivalent plastic strain (PEEQ) over the frame; NaN if absent.
+    """Max equivalent plastic strain (PEEQ) anywhere in the frame; NaN if absent.
 
-    NOTE: the raw max is contaminated by the fillet stress singularity -- use
-    ``_peeq_pct(frame, 99)`` for the ductile-failure flag, not this.
+    Raw nodal max over the WHOLE mesh, so it is contaminated by the fillet stress singularity and
+    by the coarse panels -- diagnostic only. The tear indicator is ``peeq_lig``
+    (:func:`nff.rve.damage.peak_peeq`), which is an element mean inside the ligament.
     """
     for k in ("PE", "PEEQ"):
         if k in frame and frame[k].size:
             return float(np.abs(frame[k]).max())
     return np.nan
-
-
-def _peeq_pct(frame, q=99.0):
-    """Robust (singularity-insensitive) PEEQ percentile for the ductile-failure flag."""
-    for k in ("PE", "PEEQ"):
-        if k in frame and frame[k].size:
-            return float(np.percentile(np.abs(frame[k]), q))
-    return np.nan
-
-
-def _damage_pct(frame, q=99.0, eps_f0=0.25, k=1.5):
-    """Robust continuous ductile-damage percentile ``D`` (>=1 => fracture) from PEEQ + STRESS.
-
-    Triaxiality-based (``nff.rve.damage.ductile_damage``); NaN if either field is absent.
-    NOTE: the .frd field shapes (PEEQ scalar-per-elem, STRESS N x 6) must be validated on the
-    first real ccx run -- this is additive and never disturbs the existing ``peeq_p99`` path.
-    """
-    peeq = None
-    for key in ("PEEQ", "PE"):
-        if key in frame and frame[key].size:
-            arr = np.abs(np.asarray(frame[key], float))
-            peeq = arr[:, 0] if arr.ndim > 1 else arr
-            break
-    S = frame.get("STRESS")
-    if peeq is None or S is None or not np.size(S):
-        return np.nan
-    S = np.asarray(S, float)
-    if S.ndim != 2 or S.shape[1] < 6 or S.shape[0] != peeq.shape[0]:
-        return np.nan
-    _, D_p99, _ = ductile_damage(peeq, S[:, :6], eps_f0=eps_f0, k=k, q=q)
-    return D_p99
