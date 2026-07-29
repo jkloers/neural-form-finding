@@ -86,7 +86,8 @@ def run_campaign(args):
                            el_fields=args.el_fields)
     if args.path_prior:
         # aim at the region the deployed sheet actually visits, in PHYSICAL mm -- see nff.rve.path_prior
-        env = measure_envelope(args.path_prior, q=args.envelope_trim)
+        env = measure_envelope(args.path_prior, q=args.envelope_trim,
+                               max_load_N=args.max_load)
         jobs = sample_campaign_jobs(args.n, env, seed=args.seed, n_steps=args.steps,
                                     w_lig=(args.w_lig_min, args.w_lig_max),
                                     fillet_ratio=args.fillet_ratio, spine_frac=args.spine_frac,
@@ -143,6 +144,9 @@ def main():
     ap.add_argument("--path-prior", dest="path_prior", default=None,
                     help="harvest dir to take the sampling ENVELOPE from (physical mm). Without it "
                          "the legacy eta box is used, which excludes compression entirely.")
+    ap.add_argument("--max-load", dest="max_load", type=float, default=300.0,
+                    help="drop harvest examples pulled harder than this [N]; the envelope width is "
+                         "otherwise set by a grip-ceiling calibration, not by the mechanism")
     ap.add_argument("--envelope-trim", dest="envelope_trim", type=float, default=0.5,
                     help="percent trimmed off each tail of the measured envelope")
     ap.add_argument("--inflate", type=float, default=1.5,

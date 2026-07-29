@@ -64,7 +64,7 @@ class Envelope:
                     alpha_deg=list(self.alpha_deg), n_points=self.n_points, source=self.source)
 
 
-def measure_envelope(prior_dir: str, q: float = 0.5) -> Envelope:
+def measure_envelope(prior_dir: str, q: float = 0.5, max_load_N: float | None = 300.0) -> Envelope:
     """Quantile-trimmed bounds of a harvest, de-normalised to millimetres.
 
     Args:
@@ -72,6 +72,14 @@ def measure_envelope(prior_dir: str, q: float = 0.5) -> Envelope:
         q: percent trimmed from each tail (0.5 -> the p0.5..p99.5 range). Trimming matters: a
            single diverged deployment once reached ``eta_a = -1.1e42``, which is finite and would
            otherwise define the box.
+        max_load_N: drop examples pulled harder than this. **Load-conditioning is not optional.**
+            The harvest samples a FRACTION of each grip's ceiling, and correcting the contact
+            barrier moved those ceilings from 374 N to 1842 N -- so the same spec now reaches
+            ~5500 N against a 60 N operating load. The width of the envelope is therefore an
+            artifact of the ceiling calibration, not a property of the mechanism: unconditioned,
+            ``a`` spans [-6.35, +20.80] mm, and at <=300 N (5x operating) it is [-1.26, +1.93].
+            Rotation is unaffected either way (theta p99.5 ~80 deg at every load, because the
+            mechanism locks), and so is the compressive fraction (40% throughout).
 
     Returns:
         The measured :class:`Envelope`.
@@ -83,18 +91,28 @@ def measure_envelope(prior_dir: str, q: float = 0.5) -> Envelope:
 
     eta, alpha = A["eta"], A["alpha"]                  # (E, T+1, H, 3), (E, H)
     mask = A["hinge_mask"] if "hinge_mask" in A else np.ones(alpha.shape, bool)
+    keep = np.ones(len(eta), bool)
+    if max_load_N is not None and "load_value" in A:
+        keep = np.asarray(A["load_value"], float) <= max_load_N
+    mask = mask & keep[:, None]
     pts = eta[np.broadcast_to(mask[:, None, :], eta.shape[:3])]      # (n_points, 3)
     a_mm, s_mm = pts[:, 0] * w_lig_harvest, pts[:, 1] * w_lig_harvest
     th_deg = np.degrees(pts[:, 2])
+
+    # A harvest that was never run through filter_dataset still carries diverged deployments; theta
+    # outside [0, 90] is tiles passing through each other or a spinning tile, not a region to cover.
+    ok = np.isfinite(a_mm) & np.isfinite(s_mm) & (th_deg >= -0.5) & (th_deg <= Envelope.THETA_MAX_DEG)
+    a_mm, s_mm, th_deg = a_mm[ok], s_mm[ok], th_deg[ok]
     al_deg = np.degrees(alpha[mask])
 
     lo, hi = q, 100.0 - q
+    src = os.path.basename(prior_dir.rstrip("/"))
     return Envelope(a=tuple(np.percentile(a_mm, [lo, hi])),
                     s=tuple(np.percentile(s_mm, [lo, hi])),
                     theta_deg=(0.0, float(np.percentile(th_deg, hi))),
                     alpha_deg=tuple(np.percentile(al_deg, [lo, hi])),
-                    n_points=int(pts.shape[0]),
-                    source=os.path.basename(prior_dir.rstrip("/")))
+                    n_points=int(a_mm.size),
+                    source=src if max_load_N is None else f"{src} (load<={max_load_N:g}N)")
 
 
 def _lhs(n, d, seed):

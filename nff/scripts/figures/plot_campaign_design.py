@@ -44,10 +44,11 @@ def main() -> None:
     ap.add_argument("--w-lig-max", type=float, default=50.0)
     ap.add_argument("--spine-frac", type=float, default=0.25)
     ap.add_argument("--inflate", type=float, default=1.5)
+    ap.add_argument("--max-load", type=float, default=300.0, help="load cut [N]; None-like 0 = all")
     ap.add_argument("--out", default="data/outputs/campaign_design.png")
     args = ap.parse_args()
 
-    env = measure_envelope(args.prior)
+    env = measure_envelope(args.prior, max_load_N=args.max_load)
     jobs = sample_campaign_jobs(args.n, env, seed=args.seed,
                                 w_lig=(args.w_lig_min, args.w_lig_max),
                                 spine_frac=args.spine_frac, inflate=args.inflate)
