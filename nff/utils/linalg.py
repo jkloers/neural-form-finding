@@ -60,6 +60,60 @@ def corotated_bond_deformation(DOFs1, DOFs2, reference_vector):
     return corot_bond - reference_vector, dRot
 
 
+# ── rigid-tile kinematics: face DOFs → node DOFs → the two nodes of each hinge ────────
+
+def _face_to_node_displacement(face_displacement, centroid_node_vectors):
+    """Displacement of one node on a rigidly displaced face.
+
+    Args:
+        face_displacement: (3,) = [dx, dy, d_theta].
+        centroid_node_vectors: (2,) vector from the face centroid to the node.
+
+    Returns:
+        (3,) = [node_dx, node_dy, d_theta].
+    """
+    face_centroid_displacement = face_displacement[:2]
+    face_rotation = face_displacement[2]
+
+    node_displacement = face_centroid_displacement + \
+        jnp.dot(rotation_matrix(face_rotation) - jnp.eye(2), centroid_node_vectors)
+
+    return jnp.concatenate([node_displacement, jnp.array([face_rotation]).flatten()])
+
+
+# Vectorize over nodes per face (inner) and then over faces (outer).
+# Lives here rather than in nff/stages/physics/kinematics.py (which re-exports it) so that
+# nff/models/ can reach it: the models layer may import nff/utils/linalg but not nff/stages/physics.
+face_to_node_kinematics_fn = vmap(
+    vmap(_face_to_node_displacement, in_axes=(None, 0)), in_axes=(0, 0)
+)
+
+
+def gather_bond_node_dofs(face_fields, centroid_node_vectors, bond_pairs):
+    """Face DOFs -> the node-DOF pair of every hinge, the gather Stage-2's bond energy performs.
+
+    ``bond_pairs`` indexes FLATTENED nodes (face_id * n_nodes_per_face + local_node_id), so the face
+    displacements must be pushed through the rigid-tile kinematics and flattened FIRST. Skipping that
+    silently reads the wrong rows -- JAX clamps out-of-bounds indices instead of raising -- which is
+    the failure mode this helper exists to make unrepeatable.
+
+    Args:
+        face_fields: (n_faces, 3) one state, or (n_steps, n_faces, 3) a whole load history.
+        centroid_node_vectors: (n_faces, n_nodes, 2).
+        bond_pairs: (n_hinges, 2) int, the two connected flattened node ids (``bond_connectivity``).
+
+    Returns:
+        ``(DOFs1, DOFs2)``, each (n_hinges, 3) or (n_steps, n_hinges, 3) mirroring the input rank.
+    """
+    if face_fields.ndim == 3:
+        return vmap(lambda f: gather_bond_node_dofs(f, centroid_node_vectors, bond_pairs),
+                    out_axes=0)(face_fields)
+    n_faces, n_nodes, _ = centroid_node_vectors.shape
+    nodes = face_to_node_kinematics_fn(face_fields, centroid_node_vectors)
+    nodes = nodes.reshape(n_faces * n_nodes, 3)
+    return nodes[bond_pairs[:, 0]], nodes[bond_pairs[:, 1]]
+
+
 def compute_edge_unit_vectors(current_face_nodes: jnp.ndarray, node_id: int):
     """Computes unit vectors from bond node to the two closest nodes of the same face.
 

@@ -63,8 +63,6 @@ hinge_model:
   length_scale: 406.4        # mm per pipeline unit = the real panel pitch
   energy_scale: 2.4606e-3    # 1 / length_scale -> load values are newtons
   barrier: 0.05
-  w_damage: 10.0             # THE damage term: continuous mean(D^2) over all hinges
-  w_ood: 1.0e-3
   fail_line: 1.0             # reporting overlay only (count of hinges past fracture initiation)
   learn_w_lig: true
 
@@ -107,22 +105,19 @@ target:
   radius: 3.0
 
 loss_weights:
+  # ── hinge health (surrogate only; inert under the ROM) ──────────────────
+  damage: 10.0        # path-max D over the load steps, mean(D**2)
+  ood: 0.001          # design-side trust-box barrier
+  # Axial compression (eta_a < 0) at ANY load step. 0.0 = off; raise it to resist
+  # hinges being pressed shut. NOTE once the checkpoint's box allows compression
+  # (eta_a_min < 0), the OOD barrier stops resisting it and this is the only handle.
+  compression: 0.0
   chamfer: 50.0
   # coverage = 0, same as the ROM twin. With only 12 boundary vertices against a 23.5-unit
   # perimeter the coverage term has a ~0.32 floor no design can beat, and it actively fights
   # precision. The measured sweep and the full argument are in sheet_4x8ft_rom.yaml; it is a
   # property of this 3x3 tessellation, so it applies here identically.
   coverage: 0.0
-  stretching: 0.0
-  shearing: 0.0
-  bending: 0.0
-  contact: 0.0
-  material_area: 0.0
-  hinge_gap: 0.0
-  openness: 0.0
-  deformation: 0.0
-  void_closure: 0.0
-  closure_delta: 0.0
   regularization: 1.0e-4
 
 training:

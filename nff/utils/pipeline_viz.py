@@ -384,41 +384,40 @@ def plot_loss_history(history, config, run_dir=None):
         return bool(np.any(np.abs(arr) > 1e-10))
 
     # ── Positive (penalty) terms — regularization excluded (too small to read) ─
-    chamfer    = _s('comp_geom_chamfer')
-    void_cl    = _s('void_closure')
-    hinge_gap  = _s('hinge_gap')
-    stretching = _s('comp_phys_stretching')
-    shearing   = _s('comp_phys_shearing')
-    bending    = _s('comp_phys_bending')
-    contact    = _s('comp_phys_contact')
-    mat_area   = _s('comp_geom_material_area')
-    damage     = _s('stab_damage')     # surrogate ductile-damage penalty (mean D^2)
-    ood        = _s('stab_ood')        # out-of-training-box barrier
+    # Every series is the WEIGHTED contribution the loss registry emits as `comp_<term>`.
+    chamfer     = _s('comp_chamfer')
+    void_cl     = _s('comp_void_closure')
+    hinge_gap   = _s('comp_hinge_gap')
+    stretching  = _s('comp_stretching')
+    shearing    = _s('comp_shearing')
+    bending     = _s('comp_bending')
+    contact     = _s('comp_contact')
+    mat_area    = _s('comp_material_area')
+    damage      = _s('comp_damage')       # path-max ductile damage
+    compression = _s('comp_compression')  # hinges driven into axial compression
+    ood         = _s('comp_ood')          # out-of-training-box barrier
 
     # ── Negative (reward) terms ───────────────────────────────────────────────
-    cl_delta   = _s('closure_delta')   # ≤ 0
-    openness   = _s('openness')        # ≤ 0
-    deform     = _s('deformation')     # ≤ 0
+    cl_delta   = _s('comp_closure_delta')   # ≤ 0
 
     total = _s('total')
 
     # Build active stacks (no regularization)
     pos_terms = [
-        (chamfer,    'Chamfer',          '#E07B39'),
-        (damage,     'Damage (mean D²)', '#C1121F'),   # distinct crimson for the ductile-damage term
-        (ood,        'OOD barrier',      '#5A189A'),
-        (void_cl,    'Void closure',     '#1565C0'),
-        (hinge_gap,  'Hinge gap',        '#8E24AA'),
-        (stretching, 'Stretching',       '#2D6A4F'),
-        (shearing,   'Shearing',         '#4CAF50'),
-        (bending,    'Bending',          '#80CBC4'),
-        (contact,    'Contact',          '#9E9E9E'),
-        (mat_area,   'Material area',    '#BDBDBD'),
+        (chamfer,     'Chamfer',            '#E07B39'),
+        (damage,      'Damage (path max)',  '#C1121F'),   # crimson for the ductile-damage term
+        (compression, 'Compression',        '#0077B6'),
+        (ood,         'OOD barrier',        '#5A189A'),
+        (void_cl,     'Void closure',       '#1565C0'),
+        (hinge_gap,   'Hinge gap',          '#8E24AA'),
+        (stretching,  'Stretching',         '#2D6A4F'),
+        (shearing,    'Shearing',           '#4CAF50'),
+        (bending,     'Bending',            '#80CBC4'),
+        (contact,     'Contact',            '#9E9E9E'),
+        (mat_area,    'Material area',      '#BDBDBD'),
     ]
     neg_terms = [
         (cl_delta, 'Closure delta  (reward ↓)', '#D32F2F'),
-        (openness, 'Openness  (reward ↓)',       '#1976D2'),
-        (deform,   'Deformation  (reward ↓)',    '#F57C00'),
     ]
 
     active_pos = [(a, l, c) for a, l, c in pos_terms if _active(a)]

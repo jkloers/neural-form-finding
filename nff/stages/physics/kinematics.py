@@ -8,32 +8,12 @@ import jax.numpy as jnp
 from jax import vmap
 import numpy as np
 
-from nff.utils.linalg import rotation_matrix
+from nff.utils.linalg import (rotation_matrix, _face_to_node_displacement,  # noqa: F401
+                              face_to_node_kinematics_fn, gather_bond_node_dofs)
 
-
-def _face_to_node_displacement(face_displacement: jnp.ndarray, centroid_node_vectors: jnp.ndarray):
-    """Computes displacement of a node belonging to a rigidly displaced face.
-
-    Args:
-        face_displacement (ndarray): shape (3,) = [dx, dy, d_theta].
-        centroid_node_vectors (ndarray): shape (2,) vector from centroid to node.
-
-    Returns:
-        ndarray: shape (3,) = [node_dx, node_dy, d_theta].
-    """
-    face_centroid_displacement = face_displacement[:2]
-    face_rotation = face_displacement[2]
-
-    node_displacement = face_centroid_displacement + \
-        jnp.dot(rotation_matrix(face_rotation) - jnp.eye(2), centroid_node_vectors)
-
-    return jnp.concatenate([node_displacement, jnp.array([face_rotation]).flatten()])
-
-
-# Vectorize over nodes per face (inner) and then over faces (outer)
-face_to_node_kinematics_fn = vmap(
-    vmap(_face_to_node_displacement, in_axes=(None, 0)), in_axes=(0, 0)
-)
+# The rigid-tile kinematics themselves live in nff/utils/linalg.py -- the bottom leaf, which
+# nff/models/ is allowed to import and this package is not. Re-exported here because every physics
+# caller already reaches for them under this name.
 
 
 def DOFsInfo(n_faces: int, constrained_face_DOF_pairs: jnp.ndarray) -> Tuple:

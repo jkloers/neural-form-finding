@@ -21,6 +21,7 @@ Run:
 """
 
 import os
+import json
 import math
 import shutil
 import datetime
@@ -62,6 +63,27 @@ def _overlap(tess):
     return twisted, sum(p.area for p in polys) - unary_union(polys).area
 
 
+def _write_loss_history(run_dir, history):
+    """Dump the per-epoch metrics to JSON alongside the plot.
+
+    The history was previously plotted and discarded, which made weight-tuning runs impossible to
+    compare after the fact. Only scalar metrics are kept -- ``grad_norms`` is a whole PyTree.
+    """
+    rows = []
+    for aux in history:
+        row = {}
+        for key, value in aux.items():
+            if key == 'grad_norms':
+                continue
+            try:
+                row[key] = float(value)
+            except (TypeError, ValueError):
+                continue          # non-scalar diagnostic; the plot does not read it either
+        rows.append(row)
+    with open(os.path.join(run_dir, "loss_history.json"), "w") as fh:
+        json.dump(rows, fh, indent=1)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config-dir", default="closed")
@@ -92,7 +114,7 @@ def main():
 
     initial_state, tessellation = build_closed_initial_state(config)
     params, static_features = init_closed_les_params(config)
-    bond_energy, stability_fn, geometry_fn, damage_fn, w_lig_logit0 = build_surrogate_energy(
+    bond_energy, hinge_probe_fn, geometry_fn, damage_fn, w_lig_logit0 = build_surrogate_energy(
         config, static_features, initial_state, params)
     if w_lig_logit0 is not None:                        # learnable per-hinge ligament width (option A)
         params = {**params, 'w_lig_logit': w_lig_logit0}
@@ -160,28 +182,37 @@ def main():
         initial_state, target_eff, config.validity, config.physics, config.training,
         map_type=config.mapping.type, use_jit=True,
         load_specs=load_specs, static_features=static_features,
-        target_cloud=target_cloud_override, bond_energy_fn=bond_energy, stability_fn=stability_fn,
-        hinge_geometry_fn=geometry_fn)
+        target_cloud=target_cloud_override, bond_energy_fn=bond_energy,
+        hinge_probe_fn=hinge_probe_fn, hinge_geometry_fn=geometry_fn)
     state = TrainState(params=params, opt_state=optimizer.init(params), rng=jax.random.PRNGKey(0))
 
     history, snaps = [], [(0, state.params)]
-    best = (math.inf, state.params)
+    # Selection is on the TOTAL loss, not chamfer alone: with damage/compression switched on, a
+    # chamfer-only rule would happily return the shape-best design that tore or buckled its hinges.
+    # The consequence to keep in mind is that the ranking moves whenever a weight is retuned, so
+    # best-loss values are comparable only within one weight setting (chamfer is printed alongside).
+    best = (math.inf, state.params, math.inf)
     for epoch in range(config.training.num_epochs):
         state, loss, aux = step(state)
         history.append(aux)
         ch = float(aux.get('chamfer_total', math.inf))
-        if math.isfinite(ch) and ch < best[0]:
-            best = (ch, state.params)
+        tot = float(loss)
+        if math.isfinite(tot) and tot < best[0]:
+            best = (tot, state.params, ch)
         if (epoch + 1) % args.every == 0 or epoch == config.training.num_epochs - 1:
             snaps.append((epoch + 1, state.params))
         if epoch % 25 == 0 or epoch == config.training.num_epochs - 1:
-            msg = f"  epoch {epoch:3d}  loss={float(loss):.4e}  chamfer={ch:.4e}"
+            msg = f"  epoch {epoch:3d}  loss={tot:.4e}  chamfer={ch:.4e}"
             if aux.get('hinge_max_D') is not None:    # surrogate damage metrics, when tracked
-                msg += (f"  maxD={float(aux['hinge_max_D']):.2f} meanD={float(aux['hinge_mean_D']):.2f}"
-                        f" p90D={float(aux['hinge_p90_D']):.2f} over={int(aux['hinge_n_over'])}")
+                msg += (f"  maxD={float(aux['hinge_max_D']):.3g} meanD={float(aux['hinge_mean_D']):.3g}"
+                        f" gap={float(aux.get('damage_path_gap', 0.0)):.2g}")
+            if aux.get('min_eta_a') is not None:      # compression metrics, when tracked
+                msg += (f"  minEtaA={float(aux['min_eta_a']):.3f}"
+                        f" nComp={int(aux['n_hinges_compressive'])}")
             print(msg)
     best_params = best[1]
-    print(f"  best chamfer={best[0]:.4e}")
+    print(f"  best loss={best[0]:.4e}  (chamfer there={best[2]:.4e})")
+    _write_loss_history(run_dir, history)
     import pickle
     with open(os.path.join(run_dir, "best_params.pkl"), "wb") as _pf:
         pickle.dump({k: np.asarray(v) for k, v in best_params.items()}, _pf)  # trained design, for analysis

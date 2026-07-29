@@ -80,7 +80,7 @@ def _closed_target_and_energy(config, initial_state, static_features, init_param
     surrogate calibration and the deploy-fitted target are bit-reproducible.
     """
     load_specs = config.topology.get('loads', [])
-    bond_energy, stability_fn, geometry_fn, damage_fn, w_lig_logit0 = build_surrogate_energy(
+    bond_energy, hinge_probe_fn, geometry_fn, damage_fn, w_lig_logit0 = build_surrogate_energy(
         config, static_features, initial_state, init_params)
 
     circle_fit = config.training.geometric_loss_type == "circle_fit"
@@ -127,7 +127,7 @@ def _closed_target_and_energy(config, initial_state, static_features, init_param
             rad0 *= sc
             target_eff = TargetConfig(type='circle', center=(float(cen0[0]), float(cen0[1])),
                                       radius=float(rad0))
-    return (bond_energy, stability_fn, geometry_fn, damage_fn, w_lig_logit0,
+    return (bond_energy, hinge_probe_fn, geometry_fn, damage_fn, w_lig_logit0,
             target_eff, target_cloud, load_specs)
 
 
@@ -153,7 +153,7 @@ def build_loss_fn_from_run(run_dir, solver_tol=None):
     if mt == 'closed_les':
         initial_state, tess = build_closed_initial_state(config)
         init_params, static_features = init_closed_les_params(config)  # seeded init (calibration + target)
-        (bond_energy, stability_fn, geometry_fn, damage_fn, w_lig_logit0,
+        (bond_energy, hinge_probe_fn, geometry_fn, damage_fn, w_lig_logit0,
          target_eff, target_cloud, load_specs) = \
             _closed_target_and_energy(config, initial_state, static_features, init_params)
         tcloud = jnp.asarray(target_cloud, dtype=jnp.float64) if target_cloud is not None else None
@@ -162,12 +162,12 @@ def build_loss_fn_from_run(run_dir, solver_tol=None):
             return compute_end_to_end_loss(
                 params, initial_state, target_eff, config.validity, phys_analysis, config.training,
                 map_type=mt, static_features=static_features, load_specs=load_specs,
-                target_cloud=tcloud, bond_energy_fn=bond_energy, stability_fn=stability_fn,
+                target_cloud=tcloud, bond_energy_fn=bond_energy, hinge_probe_fn=hinge_probe_fn,
                 hinge_geometry_fn=geometry_fn)[0]
 
         meta = dict(config=config, tess=tess, initial_state=initial_state,
                     static_features=static_features, geometry_fn=geometry_fn, damage_fn=damage_fn,
-                    bond_energy=bond_energy, stability_fn=stability_fn, target_eff=target_eff,
+                    bond_energy=bond_energy, hinge_probe_fn=hinge_probe_fn, target_eff=target_eff,
                     target_cloud=tcloud, load_specs=load_specs, w_lig_logit0=w_lig_logit0)
         return loss_fn, params0, meta
 
@@ -402,7 +402,7 @@ def capture_trajectory(meta):
         meta['initial_state'], meta['target_eff'], cfg.validity, cfg.physics, cfg.training,
         map_type=cfg.mapping.type, use_jit=True, load_specs=meta['load_specs'],
         static_features=meta['static_features'], target_cloud=meta['target_cloud'],
-        bond_energy_fn=meta['bond_energy'], stability_fn=meta['stability_fn'],
+        bond_energy_fn=meta['bond_energy'], hinge_probe_fn=meta['hinge_probe_fn'],
         hinge_geometry_fn=meta['geometry_fn'])
 
     init_params, _ = init_closed_les_params(cfg)                       # seeded init
