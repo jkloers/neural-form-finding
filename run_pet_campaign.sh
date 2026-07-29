@@ -18,7 +18,9 @@ PIDFILE="/tmp/pet_campaign.pid"
 # STEPS: 15 states per job, not 30. Rows/hour is unchanged but the JOB count roughly doubles,
 # and jobs are what generalisation is measured over -- the train/val split is by job, and rows
 # within one job share a geometry and a ray, so they are far from independent.
-N=1200; SEED=0; STEPS=30; PARALLEL=9; BATCH=50; TIMEOUT=3000
+# PARALLEL 14, not 9: ccx sits at ~70% CPU (it blocks writing .dat/.sta/.cvg every increment),
+# so 9 procs used only ~6.3 of 10 cores. Memory is not the constraint -- 9 jobs took 2.7 GB of 17.
+N=1200; SEED=0; STEPS=30; PARALLEL=14; BATCH=50; TIMEOUT=3000
 # w_lig capped at 25 mm, not 50: r_win is 100 mm, so at 50 mm the Saint-Venant window is
 # only 2x the ligament and the locality the RVE rests on stops holding. At 25 mm it is 4x.
 W_LIG_MIN=5; W_LIG_MAX=25
