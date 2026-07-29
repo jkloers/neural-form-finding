@@ -15,7 +15,10 @@ PIDFILE="/tmp/pet_campaign.pid"
 
 # n/seed MUST stay identical between start and resume, or the job list regenerates differently and
 # the finished prefix no longer lines up.
-N=1200; SEED=0; STEPS=30; PARALLEL=9; BATCH=50; TIMEOUT=3000
+# STEPS: 15 states per job, not 30. Rows/hour is unchanged but the JOB count roughly doubles,
+# and jobs are what generalisation is measured over -- the train/val split is by job, and rows
+# within one job share a geometry and a ray, so they are far from independent.
+N=1200; SEED=0; STEPS=15; PARALLEL=9; BATCH=50; TIMEOUT=3000
 
 run() {
   cd "$WORK" || exit 1
