@@ -1,3 +1,4 @@
+import dataclasses
 import os
 import warnings
 import yaml
@@ -117,6 +118,17 @@ class PhysicsConfig(eqx.Module):
 
 
 class LossWeights(eqx.Module):
+    """Every weight in the design loss, in one place.
+
+    All ADDITIVE weights default to 0.0: a term contributes only when a config asks for it. The
+    previous non-zero defaults (material_area 1.0, contact 1.0, stretching/shearing/bending 0.1)
+    meant every closed config had to write eleven explicit zeros just to switch terms off, and a
+    config that merely forgot the block silently trained against contact and spring energies.
+
+    ``chamfer`` keeps its 1.0 default (a loss with no shape term is not an experiment), and
+    ``coverage`` is a MULTIPLIER inside the chamfer term rather than an additive weight -- it
+    scales the recall half of `precision + coverage * recall`.
+    """
     chamfer: float
     material_area: float
     stretching: float
@@ -126,18 +138,19 @@ class LossWeights(eqx.Module):
     regularization: float
     coverage: float
     hinge_gap: float
-    openness: float      # reward large void area at Stage 1 (open initial state)
-    deformation: float   # reward large Stage 2 displacement (significant closing)
     void_closure: float  # reward void closing between Stage 1 and Stage 2
     closure_delta: float # sharpness of the void-closure reward
+    damage: float        # surrogate hinge damage D, path-max over the deployment
+    compression: float   # hinge axial compression (eta_a < 0), path-min over the deployment
+    ood: float           # hinges leaving the surrogate's trustworthy training box
 
-    def __init__(self, chamfer: float = 1.0, material_area: float = 1.0,
-                 stretching: float = 0.1, shearing: float = 0.1,
-                 bending: float = 0.1, contact: float = 1.0,
-                 regularization: float = 0.001, coverage: float = 1.0,
+    def __init__(self, chamfer: float = 1.0, material_area: float = 0.0,
+                 stretching: float = 0.0, shearing: float = 0.0,
+                 bending: float = 0.0, contact: float = 0.0,
+                 regularization: float = 0.0, coverage: float = 1.0,
                  hinge_gap: float = 0.0,
-                 openness: float = 0.0, deformation: float = 0.0,
-                 void_closure: float = 0.0, closure_delta: float = 0.0):
+                 void_closure: float = 0.0, closure_delta: float = 0.0,
+                 damage: float = 0.0, compression: float = 0.0, ood: float = 0.0):
         self.chamfer = float(chamfer)
         self.material_area = float(material_area)
         self.stretching = float(stretching)
@@ -147,10 +160,11 @@ class LossWeights(eqx.Module):
         self.regularization = float(regularization)
         self.coverage = float(coverage)
         self.hinge_gap = float(hinge_gap)
-        self.openness = float(openness)
-        self.deformation = float(deformation)
         self.void_closure = float(void_closure)
         self.closure_delta = float(closure_delta)
+        self.damage = float(damage)
+        self.compression = float(compression)
+        self.ood = float(ood)
 
 
 class TrainingConfig(eqx.Module):
@@ -217,6 +231,11 @@ class HingeModelConfig(eqx.Module):
     changing them in config does NOT retrain it. ``w_lig_mm`` IS a real manufacturing choice within
     the trained range [1, 10] mm. ``calibrate`` co-solves length/energy scale to the pipeline's
     k_stretch/k_rot (Gap 2); set ``calibrate: false`` to pin ``length_scale``/``energy_scale``.
+
+    ``barrier`` stays here: it is part of the Stage-2 ENERGY (it makes W coercive so the solve
+    cannot run out of the trusted box), not part of the design objective. The design-loss weights
+    that used to live here -- ``w_damage``, ``w_ood`` -- moved to ``loss_weights:`` where the rest
+    of the objective is declared; see ``_migrate_hinge_model_weights``.
     """
     type: str
     checkpoint: str
@@ -227,14 +246,12 @@ class HingeModelConfig(eqx.Module):
     length_scale: float
     energy_scale: float
     barrier: float
-    w_damage: float
-    w_ood: float
     fail_line: float
     learn_w_lig: bool
 
     def __init__(self, type='rom', checkpoint='data/surrogates/hinge_surrogate.pkl', material='S235',
                  thickness_mm=1.0, w_lig_mm=5.0, calibrate=True, length_scale=0.0,
-                 energy_scale=0.0, barrier=0.05, w_damage=0.0, w_ood=0.0,
+                 energy_scale=0.0, barrier=0.05,
                  fail_line=1.0, learn_w_lig=False):
         self.type = type
         self.checkpoint = checkpoint
@@ -245,13 +262,8 @@ class HingeModelConfig(eqx.Module):
         self.length_scale = length_scale
         self.energy_scale = energy_scale
         self.barrier = barrier
-        # Design-loss damage/stability weights (0 = off):
-        #   w_damage: THE damage term, weight on mean(D^2) over ALL hinges (no failure threshold);
-        #   w_ood:    out-of-training-box barrier.
         # fail_line: REPORTING-only threshold (count of hinges above it); never enters the loss --
         #   set it to the campaign's calibrated Delta_tear, NOT to 1.
-        self.w_damage = w_damage
-        self.w_ood = w_ood
         self.fail_line = fail_line
         self.learn_w_lig = learn_w_lig    # per-hinge ligament width as a learnable design DOF
 
@@ -389,13 +401,39 @@ def _parse_physics_config(physics_raw: dict, domain_restriction: float,
     )
 
 
+# hinge_model key -> the loss_weights key it became. These are DESIGN-LOSS weights; they belong
+# with the rest of the objective, not in the block that identifies which hinge model to load.
+_MIGRATED_HINGE_WEIGHTS = {"w_damage": "damage", "w_ood": "ood"}
+
+
+def _migrate_hinge_model_weights(hinge_raw: dict, loss_weights_raw: dict) -> dict:
+    """Fold legacy ``hinge_model.w_damage`` / ``w_ood`` into the loss_weights dict.
+
+    An explicit ``loss_weights:`` entry always wins -- the migration only fills a weight the new
+    block does not mention, so a config already updated is never overridden by a stale key.
+    """
+    merged = dict(loss_weights_raw or {})
+    for old, new in _MIGRATED_HINGE_WEIGHTS.items():
+        if old not in (hinge_raw or {}):
+            continue
+        if new in merged:
+            warnings.warn(f"hinge_model.{old} and loss_weights.{new} are both set; "
+                          f"using loss_weights.{new}={merged[new]}.", stacklevel=3)
+            continue
+        warnings.warn(f"hinge_model.{old} moved to loss_weights.{new} (design-loss weights now live "
+                      f"in one block). Reading it from hinge_model for now.", stacklevel=3)
+        merged[new] = hinge_raw[old]
+    return merged
+
+
 def _parse_hinge_model_config(raw: dict) -> HingeModelConfig:
     # w_fail/m_safe were the second damage criterion (a softplus break barrier). Removed 2026-07-28:
     # there is now ONE damage term. Warn rather than ignore, so an old config that actually relied
     # on the barrier cannot change meaning silently.
     if float(raw.get("w_fail", 0.0)) != 0.0:
         warnings.warn("hinge_model.w_fail is removed (the break barrier was a second damage "
-                      "criterion); the single term is w_damage. Ignoring it.", stacklevel=2)
+                      "criterion); the single term is loss_weights.damage. Ignoring it.",
+                      stacklevel=2)
     return HingeModelConfig(
         type=str(raw.get("type", "rom")),
         checkpoint=str(raw.get("checkpoint", "data/surrogates/hinge_surrogate.pkl")),
@@ -406,8 +444,6 @@ def _parse_hinge_model_config(raw: dict) -> HingeModelConfig:
         length_scale=float(raw.get("length_scale", 0.0)),
         energy_scale=float(raw.get("energy_scale", 0.0)),
         barrier=float(raw.get("barrier", 0.05)),
-        w_damage=float(raw.get("w_damage", 0.0)),
-        w_ood=float(raw.get("w_ood", 0.0)),
         fail_line=float(raw.get("fail_line", 1.0)),
         learn_w_lig=bool(raw.get("learn_w_lig", False)),
     )
@@ -422,13 +458,45 @@ def _parse_target_config(target_raw: dict) -> TargetConfig:
     )
 
 
+# Weights deleted from LossWeights, mapped to why. A config may still carry them; they are dropped
+# with a warning instead of raising, so an old experiment file still loads.
+_REMOVED_LOSS_WEIGHTS = {
+    "openness": "rewarded Stage-1 void area; superseded by void_closure/closure_delta",
+    "deformation": "rewarded raw Stage-2 displacement, which a rigid-body swing maximises for free",
+}
+
+
+def _parse_loss_weights(raw: dict) -> LossWeights:
+    """Build LossWeights from the [loss_weights] YAML section, tolerating stale keys.
+
+    Unknown keys WARN and are dropped rather than raising TypeError. The strict splat this replaces
+    made any config carrying a since-removed weight fail to load at all -- which is how
+    ``architectures/hinge_closing.yaml`` and the legacy asymmetric_roots problems became unloadable.
+    """
+    known = {f.name for f in dataclasses.fields(LossWeights)}
+    clean, stale = {}, []
+    for key, value in (raw or {}).items():
+        if key in known:
+            clean[key] = value
+        elif key in _REMOVED_LOSS_WEIGHTS:
+            if float(value or 0.0) != 0.0:
+                warnings.warn(f"loss_weights.{key} is removed ({_REMOVED_LOSS_WEIGHTS[key]}) and "
+                              f"was set to {value}. Ignoring it.", stacklevel=3)
+        else:
+            stale.append(key)
+    if stale:
+        warnings.warn(f"unknown loss_weights ignored: {sorted(stale)}. "
+                      f"Known weights: {sorted(known)}.", stacklevel=3)
+    return LossWeights(**clean)
+
+
 def _parse_training_config(training_raw: dict, loss_weights_raw: dict) -> TrainingConfig:
     """Parse the [training] and [loss_weights] YAML sections."""
     return TrainingConfig(
         num_epochs=int(training_raw.get("num_epochs", 500)),
         learning_rate=float(training_raw.get("learning_rate", 0.01)),
         optimizer=str(training_raw.get("optimizer", "adam") or "adam"),
-        loss_weights=LossWeights(**loss_weights_raw),
+        loss_weights=_parse_loss_weights(loss_weights_raw),
         geometric_loss_type=str(training_raw.get("geometric_loss_type", "boundary_vertices")),
         grad_clip=float(training_raw.get("grad_clip", 1.0)),
         lr_schedule=str(training_raw.get("lr_schedule", "constant")),
@@ -520,9 +588,12 @@ def _parse_full_raw(raw: dict, config_dir: str) -> 'ExperimentConfig':
     physics_cfg = _parse_physics_config(raw.get("physics", {}), mapping_cfg.domain_restriction,
                                         raw.get("displacement_control"))
     target_cfg = _parse_target_config(raw.get("target", {}))
-    training_cfg = _parse_training_config(raw.get("training", {}), raw.get("loss_weights", {}))
+    hinge_model_raw = raw.get("hinge_model", {})
+    # hinge_model is read BEFORE training: its legacy w_damage/w_ood are folded into loss_weights.
+    loss_weights_raw = _migrate_hinge_model_weights(hinge_model_raw, raw.get("loss_weights", {}))
+    training_cfg = _parse_training_config(raw.get("training", {}), loss_weights_raw)
     vis_cfg = _parse_visualization_config(raw.get("visualization", {}))
-    hinge_model_cfg = _parse_hinge_model_config(raw.get("hinge_model", {}))
+    hinge_model_cfg = _parse_hinge_model_config(hinge_model_raw)
 
     topo_combined = {
         **topo_raw,

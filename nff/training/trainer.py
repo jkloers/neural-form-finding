@@ -65,7 +65,7 @@ def create_train_step(
         static_features=None,
         target_cloud=None,
         bond_energy_fn=None,
-        stability_fn=None,
+        hinge_probe_fn=None,
         hinge_geometry_fn=None,
 ):
     """Creates a compiled training step for optimizing map_params.
@@ -153,7 +153,7 @@ def create_train_step(
             load_specs=load_specs,
             target_cloud=_target_cloud,
             bond_energy_fn=bond_energy_fn,
-            stability_fn=stability_fn,
+            hinge_probe_fn=hinge_probe_fn,
             hinge_geometry_fn=hinge_geometry_fn,
         )
 
@@ -269,16 +269,13 @@ def train_pipeline(
                         if not learn_global_scale else "")
             hinge_str = (f" | HingeGap: {aux.get('hinge_gap', 0.0):.4e}"
                          if aux.get('hinge_gap', 0.0) > 0 else "")
-            open_val    = aux.get('openness', 0.0)
-            deform_val  = aux.get('deformation', 0.0)
-            vc_val      = aux.get('void_closure', 0.0)
-            cd_val      = aux.get('closure_delta', 0.0)
-            closing_str = ""
-            if open_val != 0.0 or deform_val != 0.0 or vc_val != 0.0 or cd_val != 0.0:
-                closing_str = (f" | Open: {float(open_val):.3e}"
-                               f" | Deform: {float(deform_val):.3e}"
-                               f" | VoidS2: {float(vc_val):.3e}"
-                               f" | CloseDelta: {float(cd_val):.3e}")
+            # Report whichever optional terms this config actually switched on.
+            extras = [(label, float(aux[key])) for label, key in
+                      (("VoidS2", 'void_closure'), ("CloseDelta", 'closure_delta'),
+                       ("Damage", 'comp_damage'), ("Compress", 'comp_compression'),
+                       ("OOD", 'comp_ood'))
+                      if aux.get(key) is not None and float(aux[key]) != 0.0]
+            closing_str = "".join(f" | {label}: {value:.3e}" for label, value in extras)
             print(
                 f"Epoch {epoch:03d} | Loss: {aux['total']:.4e} | "
                 f"Chamfer: {aux['chamfer_total']:.4e} | Energy: {aux['energy']:.4e}"

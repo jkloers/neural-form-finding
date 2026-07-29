@@ -128,15 +128,17 @@ def _alpha_sec_bond_order(hs, perm, coords):
 def build_surrogate_energy(config, static_features, state, init_map_params):
     """Config-driven Stage-2 surrogate energy with DESIGN-TRACKED hinge geometry.
 
-    The energy + stability are built ONCE (they close over only the net, the Gap-2 scales, and the
+    The energy + probe are built ONCE (they close over only the net, the Gap-2 scales, and the
     fixed fillet). The design-dependent ``HingeGeometry(w_lig, alpha, sec_dir)`` is supplied PER STEP
     as data by ``hinge_geometry_from_design(map_params)`` and the caller threads it into the solver via
-    ``forward_pipeline(hinge_geometry=)`` (control_params) and into ``stability_fn``. Because it is an
+    ``forward_pipeline(hinge_geometry=)`` (control_params) and into ``probe_fn``. Because it is an
     explicit solver input (not closed over), jaxopt's implicit diff carries the full ``d/d(design)``.
 
-    Returns ``(bond_energy_fn, stability_fn, hinge_geometry_from_design, damage_fn, w_lig_logit0)``;
-    ``hinge_geometry_from_design(map_params) -> HingeGeometry``, ``damage_fn(node_disp, geom, ref) ->
-    per-hinge D`` (diagnostics/visuals). ``(None,)*5`` for the ROM.
+    Returns ``(bond_energy_fn, probe_fn, hinge_geometry_from_design, damage_fn, w_lig_logit0)``;
+    ``hinge_geometry_from_design(map_params) -> HingeGeometry``, ``probe_fn(fields, cnv, geom, ref) ->
+    per-step per-hinge surrogate readings`` (the design loss aggregates them; the weights live in
+    ``loss_weights:``), ``damage_fn(node_disp, geom, ref) -> per-hinge D`` (diagnostics/visuals).
+    ``(None,)*5`` for the ROM.
     """
     import numpy as np
     hm = getattr(config, 'hinge_model', None)
@@ -145,7 +147,7 @@ def build_surrogate_energy(config, static_features, state, init_map_params):
         return None, None, None, None, None
 
     from nff.models.hinge_surrogate import (load_hinge_surrogate, build_hinge_bond_energy_fn,
-                                            build_hinge_stability_fn, build_hinge_damage_fn,
+                                            build_hinge_probe_fn, build_hinge_damage_fn,
                                             calibrate_scales, DOMAIN, HingeGeometry, W_LIG_BOUNDS,
                                             w_lig_from_logit, w_lig_logit_from_width)
     from nff.topology.hinge_descriptor import build_hinge_descriptor_structure
@@ -159,7 +161,6 @@ def build_surrogate_energy(config, static_features, state, init_map_params):
                                'thickness': getattr(hm, 'thickness_mm', None)})
     fr = float(getattr(hm, 'fillet_ratio', 0.16))     # design cut-tip fillet (3rd g DOF for 6-feat nets)
     dom = stats.get("domain", DOMAIN)                 # data-driven OOD box (wide v2 auto-widens it)
-    w_damage = float(getattr(hm, 'w_damage', 0.0)); w_ood = float(getattr(hm, 'w_ood', 0.0))
     fail_line = float(getattr(hm, 'fail_line', 1.0))
     bond_pairs = np.asarray(state.bond_connectivity)
     w_lig_arr = jnp.full(state.hinge_node_pairs.shape[0], float(hm.w_lig_mm))
@@ -188,10 +189,15 @@ def build_surrogate_energy(config, static_features, state, init_map_params):
     print(f"[hinge_model] SURROGATE  material={hm.material} t={hm.thickness_mm}mm w_lig={hm.w_lig_mm}mm "
           f"eps_f={eps_f}  |  {len(alpha0)} hinges  alpha {a0.min():.0f}-{a0.max():.0f}deg (RVE-frame)"
           f"  length_scale={ls:.3g}mm/u  energy_scale={es:.3g}  barrier={hm.barrier}")
-    if w_damage or w_ood:
-        print(f"[hinge_model]   + damage loss  w_damage={w_damage} (mean (D/D_scale)^2, "
-              f"D_scale={float(stats.get('D_scale', 1.0)):.3g})  "
-              f"w_ood={w_ood}  fail_line(report only)={fail_line}")
+    lw = getattr(getattr(config, 'training', None), 'loss_weights', None)
+    if lw is not None and (lw.damage or lw.ood or lw.compression):
+        print(f"[hinge_model]   + design loss  damage={lw.damage} (path-max, D/D_scale, "
+              f"D_scale={float(stats.get('D_scale', 1.0)):.3g})  compression={lw.compression}  "
+              f"ood={lw.ood}  fail_line(report only)={fail_line}")
+        if float(dom.get('eta_a_min', 0.0)) < 0.0 and not lw.compression:
+            print(f"[hinge_model]   NOTE this checkpoint's box allows compression "
+                  f"(eta_a_min={dom['eta_a_min']:.3g}), so the OOD barrier no longer resists it; "
+                  "loss_weights.compression is the only handle left")
 
     w_lig_logit0 = None
     if bool(getattr(hm, 'learn_w_lig', False)):
@@ -205,13 +211,12 @@ def build_surrogate_energy(config, static_features, state, init_map_params):
                   f"[{lo:g},{hi:g}] -- the optimizer starts at {got:.1f}mm while the cut export "
                   "writes the config value")
 
-    # Energy + stability built ONCE; they close over only the net / scales / fillet. The per-hinge
+    # Energy + probe built ONCE; they close over only the net / scales / fillet. The per-hinge
     # geometry is threaded per step (see hinge_geometry_from_design below).
     bond_energy = build_hinge_bond_energy_fn(net, stats, length_scale=ls, energy_scale=es,
                                              barrier=hm.barrier, domain=dom, fillet_ratio=fr)
-    stability_fn = build_hinge_stability_fn(net, stats, bond_pairs=bond_pairs, length_scale=ls,
-                                            domain=dom, w_damage=w_damage, w_ood=w_ood,
-                                            fail_line=fail_line, fillet_ratio=fr)
+    probe_fn = build_hinge_probe_fn(net, stats, bond_pairs=bond_pairs, length_scale=ls,
+                                    domain=dom, fillet_ratio=fr)
     damage_fn = build_hinge_damage_fn(net, stats, bond_pairs=bond_pairs, length_scale=ls, fillet_ratio=fr)
 
     def hinge_geometry_from_design(map_params):
@@ -223,4 +228,4 @@ def build_surrogate_energy(config, static_features, state, init_map_params):
                  if isinstance(map_params, dict) and 'w_lig_logit' in map_params else w_lig_arr)
         return HingeGeometry(w_lig=w_lig, alpha=alpha, sec_dir=sec_dir)
 
-    return bond_energy, stability_fn, hinge_geometry_from_design, damage_fn, w_lig_logit0
+    return bond_energy, probe_fn, hinge_geometry_from_design, damage_fn, w_lig_logit0

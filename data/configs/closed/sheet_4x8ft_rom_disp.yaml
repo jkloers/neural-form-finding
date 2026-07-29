@@ -52,7 +52,7 @@
 # ⚠ If you want the free deployment rather than a flat top edge, prescribe the three tiles
 # individually — that is the round trip, and it returns exactly 55.33 N at each tile.
 #
-# ⚠ NO DAMAGE, as in the ROM twin: the ROM branch returns `(None,)*5`, so `w_damage`, `w_ood`,
+# ⚠ NO DAMAGE, as in the ROM twin: the ROM branch returns `(None,)*5`, so `loss_weights.damage`, `.ood`,
 # `fail_line` and `learn_w_lig` are all inert and w_lig stays uniform at 18.0 mm.
 #
 # ── MEASURED, 200 epochs (2026-07-27) ────────────────────────────────────────────────────────────
@@ -108,8 +108,6 @@ hinge_model:
   length_scale: 406.4        # mm per pipeline unit = the real panel pitch
   energy_scale: 2.4606e-3    # 1 / length_scale -> reaction values come out in newtons
   barrier: 0.05
-  w_damage: 10.0
-  w_ood: 1.0e-3
   fail_line: 1.0
   learn_w_lig: true
 
@@ -159,22 +157,14 @@ target:                      # fallback TargetConfig; run_closed overrides it wi
   radius: 3.3457
 
 loss_weights:
+  # No hinge-health terms here: this is the ROM (linear-spring ligament),
+  # which has no damage model. They only apply under hinge_model.type: surrogate.
   # ★ coverage = 0 — see sheet_4x8ft_rom.yaml: with only 12 boundary vertices against a 23.5-unit
   # perimeter the coverage term has a ~0.32 floor no design can beat, and it actively FIGHTS
-  # precision. At 0, `chamfer_total` IS the precision term, so best-checkpoint selection ranks by
-  # the metric we care about.
+  # precision. At 0, `chamfer_total` IS the precision term, so it reads cleanly.
+  # (Best-checkpoint selection itself now ranks on the TOTAL loss, not chamfer alone.)
   chamfer: 50.0
   coverage: 0.0
-  stretching: 0.0
-  shearing: 0.0
-  bending: 0.0
-  contact: 0.0
-  material_area: 0.0
-  hinge_gap: 0.0
-  openness: 0.0
-  deformation: 0.0
-  void_closure: 0.0
-  closure_delta: 0.0
   regularization: 1.0e-4
 
 training:

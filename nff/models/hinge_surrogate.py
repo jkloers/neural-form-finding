@@ -47,7 +47,7 @@ import jax.numpy as jnp
 import numpy as np
 from jaxtyping import Array, Float
 
-from nff.utils.linalg import corotated_bond_deformation
+from nff.utils.linalg import corotated_bond_deformation, gather_bond_node_dofs
 
 # u = (a, s, theta); geometry g = (w_lig, alpha[rad]) or (w_lig, alpha, fillet_ratio) for the swept
 # 3rd DOF. Standardized network features: [a, s, theta, log(w_lig), alpha (, fillet)] -> 5-D or 6-D.
@@ -413,66 +413,61 @@ def build_hinge_bond_energy_fn(net_params, stats, *, length_scale: float = 1.0,
     return bond_energy
 
 
-def build_hinge_stability_fn(net_params, stats, *, bond_pairs,
-                             length_scale: float = 1.0, domain: dict = DOMAIN,
-                             w_damage: float = 0.0, w_ood: float = 0.0,
-                             fail_line: float = 1.0, fillet_ratio=None):
-    """Damage / stability penalty at the DEPLOYED state, for the design loss:
+def build_hinge_probe_fn(net_params, stats, *, bond_pairs, length_scale: float = 1.0,
+                         domain: dict = DOMAIN, fillet_ratio=None):
+    """Per-hinge, per-load-step surrogate readings over a whole deployment. NO weights, NO objective.
 
-        w_damage * mean((D/D_scale)^2)   (reduce accumulated irreversibility on EVERY hinge)
-      + w_ood    * sum domain_barrier(u) (hinges leaving the trustworthy training box)
+    This is the models layer's half of the design loss: it PREDICTS, and ``nff/training/loss.py``
+    decides what to do with the predictions. (Its predecessor, ``build_hinge_stability_fn``, also
+    carried ``w_damage``/``w_ood`` and did the aggregation, which put loss weights below the
+    training layer and split the objective across two config blocks.)
 
-    ``D`` is the surrogate's damage prediction (:func:`nff.rve.damage.plastic_damage`). It is
-    divided by ``stats["D_scale"]`` -- the train-set RMS of the same quantity -- so that
-    ``mean((D/D_scale)^2) ~ 1`` on the training distribution and ``w_damage`` stays an O(1) knob.
-    Without it the weight has to absorb the target's absolute scale: on the PET campaign ``D`` has
-    p50 5e-4, so the raw ``mean(D^2)`` is 2.8e-5 and the configs' ``w_damage: 10`` produced 2.8e-4
-    against chamfer terms of order 1 -- silently dead. Checkpoints with no ``D_scale`` fall back to
-    1.0, i.e. the old raw behaviour.
+    Reads the FULL history rather than the deployed state alone. That matters for damage: the real
+    material's PEEQ is monotone along any path, but ``D`` is a STATE function, so a hinge that swings
+    out and comes back leaves permanent set that ``D`` at the endpoint has forgotten. The per-step
+    values let the loss take a path max and recover it.
 
-    There is ONE damage term and NO failure threshold in the gradient -- it simply pushes every
-    hinge's permanent set down, weighting the worst hinges (grip concentration) hardest. That suits
-    a kirigami, where hinges are MEANT to fold and to carry more plastic set than a normal structure
-    would tolerate, and where a tear in a single deployment is rare.
+    ``u = (a, s, theta)`` is the SAME corotated projection the bond energy uses
+    (:func:`hinge_kinematics`), so these numbers are what the solver itself saw at each step.
 
-    ``fail_line`` is a REPORTING overlay only (the count of hinges above it): set it to the
-    campaign's calibrated ``Delta_tear``. It never enters the loss. The old ``w_fail``/``m_safe``
-    softplus break barrier is gone -- it was a second damage criterion, and it was already 0 in
-    every live config.
+    Args:
+        bond_pairs: (n_hinges, 2) connected FLATTENED node ids (Stage-2 ``bond_connectivity``).
+        length_scale: mm per pipeline length-unit.
+        domain: the surrogate's trust box; ``eta_a_min`` is data-driven, so a checkpoint trained on
+            compressive rows reports a wider in-domain region than a tension-only one.
 
-    ``u = (a, s, theta)`` is the SAME corotated projection the bond energy uses (``hinge_kinematics``).
-    The per-hinge ``HingeGeometry`` is passed PER CALL (same design-tracked value as the bond energy).
-    ``bond_pairs`` (n_hinges, 2): the two connected NODES per hinge (= Stage-2 bond_connectivity); the
-    caller MUST pass NODE displacements (face displacements mapped through the rigid-tile kinematics).
-
-    Returns ``fn(node_displacements, hinge_geometry, reference_vectors) -> (penalty, aux)``, or ``None``
-    if all weights are 0.
+    Returns:
+        ``probe(face_fields, centroid_node_vectors, hinge_geometry, reference_vectors) -> dict`` with
+        ``D``, ``eta_a``, ``eta_s``, ``theta``, ``ood``, each (n_steps, n_hinges). ``D`` is already
+        divided by ``stats["D_scale"]`` (the train-set RMS), so ``mean(D**2) ~ 1`` on the training
+        distribution and a weight on it stays an O(1) knob; checkpoints without ``D_scale`` fall back
+        to 1.0, i.e. the old raw behaviour. ``eta_a``/``eta_s`` are the dimensionless ``a/w_lig``,
+        ``s/w_lig`` the oracle samples in -- SIGNED, so ``eta_a < 0`` is axial compression.
     """
-    if w_damage == 0.0 and w_ood == 0.0:
-        return None
-    fi = jnp.asarray(np.asarray(bond_pairs)[:, 0])
-    fj = jnp.asarray(np.asarray(bond_pairs)[:, 1])
+    pairs = jnp.asarray(np.asarray(bond_pairs))
     fr = jnp.asarray(fillet_ratio if fillet_ratio is not None else 0.16, dtype=jnp.float64)
     d_scale = jnp.asarray(stats.get("D_scale", 1.0), dtype=jnp.float64)
 
-    def stability(node_displacements, hinge_geometry, reference_vectors=None):
-        # ``reference_vectors`` (per-hinge rest bond) makes the margin's (a, s) frame-invariant,
-        # exactly matching the bond energy; None -> zero (closed-hinge fast path, identical result).
+    def probe(face_fields, centroid_node_vectors, hinge_geometry, reference_vectors=None):
         geo = hinge_geometry
-        a, sh, dRot = hinge_kinematics((node_displacements[fi], node_displacements[fj]),
-                                       _unit(geo.sec_dir), length_scale, reference_vector=reference_vectors)
-        u = jnp.stack([a, sh, dRot], axis=-1)
+        sec = _unit(geo.sec_dir)
         gg = _geom_vector(geo.w_lig, geo.alpha, fr, stats)
-        D = apply_hinge_failure(net_params, u, gg, stats)         # normalized plastic dissipation
-        damage_pen = w_damage * jnp.mean((D / d_scale) ** 2)      # ONE damage term, threshold-free
-        ood_pen = w_ood * jnp.sum(_domain_barrier(a, sh, dRot, geo.w_lig, domain))
-        aux = {"stab_damage": damage_pen, "stab_ood": ood_pen,
-               "hinge_max_D": jnp.max(D), "hinge_mean_D": jnp.mean(D),
-               "hinge_p90_D": jnp.percentile(D, 90.0),
-               "hinge_n_over": jnp.sum((D >= fail_line).astype(jnp.float64))}  # display line only
-        return damage_pen + ood_pen, aux
 
-    return stability
+        def one_step(face_disp):
+            dofs1, dofs2 = gather_bond_node_dofs(face_disp, centroid_node_vectors, pairs)
+            a, sh, dRot = hinge_kinematics((dofs1, dofs2), sec, length_scale,
+                                           reference_vector=reference_vectors)
+            u = jnp.stack([a, sh, dRot], axis=-1)
+            D = apply_hinge_failure(net_params, u, gg, stats) / d_scale
+            return dict(D=D, eta_a=a / geo.w_lig, eta_s=sh / geo.w_lig, theta=dRot,
+                        ood=_domain_barrier(a, sh, dRot, geo.w_lig, domain))
+
+        # A single (n_faces, 3) state is promoted to a one-step history, so callers get the same
+        # (n_steps, n_hinges) shape whether they pass one frame or the whole scan output.
+        fields = face_fields if face_fields.ndim == 3 else face_fields[None]
+        return jax.vmap(one_step)(fields)
+
+    return probe
 
 
 def build_hinge_damage_fn(net_params, stats, *, bond_pairs, length_scale: float = 1.0,

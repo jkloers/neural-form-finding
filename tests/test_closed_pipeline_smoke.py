@@ -33,14 +33,14 @@ def test_closed_pipeline_trains_finite_and_non_diverging():
 
     state0, _ = build_closed_initial_state(cfg)
     params, sf = init_closed_les_params(cfg)
-    bond, stab, geometry_fn, _damage_fn, w_lig_logit0 = build_surrogate_energy(cfg, sf, state0, params)
+    bond, probe, geometry_fn, _damage_fn, w_lig_logit0 = build_surrogate_energy(cfg, sf, state0, params)
     if w_lig_logit0 is not None:
         params = {**params, "w_lig_logit": w_lig_logit0}
 
     optimizer, step = create_train_step(
         state0, cfg.target, cfg.validity, cfg.physics, cfg.training,
         map_type=cfg.mapping.type, use_jit=True, load_specs=cfg.topology.get("loads", []),
-        static_features=sf, bond_energy_fn=bond, stability_fn=stab, hinge_geometry_fn=geometry_fn)
+        static_features=sf, bond_energy_fn=bond, hinge_probe_fn=probe, hinge_geometry_fn=geometry_fn)
     st = TrainState(params=params, opt_state=optimizer.init(params), rng=jax.random.PRNGKey(0))
 
     losses = []

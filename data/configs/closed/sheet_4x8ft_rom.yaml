@@ -21,7 +21,7 @@
 # which spreads auxetically (+23% lateral at 60 N) and saturates by 160 N. Those numbers are NOT
 # comparable to the calibrated run below: k_stretch is now ~97x stiffer in pipeline units.
 #
-# ⚠ NO DAMAGE. The ROM branch returns `(None,)*5`, so there is no damage_fn: `w_damage`, `w_ood`,
+# ⚠ NO DAMAGE. The ROM branch returns `(None,)*5`, so there is no damage_fn: `loss_weights.damage`, `.ood`,
 # `fail_line` and `learn_w_lig` are all inert, the maxD/meanD/over columns vanish
 # from the log, and w_lig stays uniform at 18.0 mm (so the cut export has identical hinges).
 # `physics.backward_reg` is harmless but unnecessary — linear springs give a positive-definite
@@ -88,8 +88,6 @@ hinge_model:
   length_scale: 406.4        # mm per pipeline unit = the real panel pitch
   energy_scale: 2.4606e-3    # 1 / length_scale -> load values are newtons
   barrier: 0.05
-  w_damage: 10.0             # THE damage term: continuous mean(D^2) over all hinges
-  w_ood: 1.0e-3
   fail_line: 1.0             # reporting overlay only (count of hinges past fracture initiation)
   learn_w_lig: true
 
@@ -188,6 +186,8 @@ target:                      # fallback TargetConfig; run_closed overrides it wi
   radius: 3.3457
 
 loss_weights:
+  # No hinge-health terms here: this is the ROM (linear-spring ligament),
+  # which has no damage model. They only apply under hinge_model.type: surrogate.
   chamfer: 50.0
   # ★ coverage = 0 (was 1.0). `chamfer_loss = precision + coverage * coverage_loss`, where
   # `precision` = each deployed BOUNDARY VERTEX to its nearest target point (the thing we want) and
@@ -205,19 +205,9 @@ loss_weights:
   # 45-deg deployment, so no angle constraint is needed. Coverage exists to stop a collapse to a
   # point; that cannot happen here (fixed target + rigid connected tiles + physics-bounded deploy),
   # verified stable to 600 epochs. Raise it to ~0.01 if a future target ever does collapse.
-  # ⚠ side benefit: at 0, `chamfer_total` IS the precision term, so run_closed's best-checkpoint
+  # ⚠ side benefit: at 0, `chamfer_total` IS the precision term, so it reads cleanly; run_closed's best-checkpoint now ranks on TOTAL loss, and
   # selection ranks by the metric we actually care about instead of by the floor.
   coverage: 0.0
-  stretching: 0.0
-  shearing: 0.0
-  bending: 0.0
-  contact: 0.0
-  material_area: 0.0
-  hinge_gap: 0.0
-  openness: 0.0
-  deformation: 0.0
-  void_closure: 0.0
-  closure_delta: 0.0
   regularization: 1.0e-4
 
 training:

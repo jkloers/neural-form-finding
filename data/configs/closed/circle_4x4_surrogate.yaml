@@ -65,13 +65,6 @@ loss_weights:
   stretching: 0.01
   shearing: 0.01
   bending: 0.001
-  contact: 0.0
-  material_area: 0.0
-  hinge_gap: 0.0
-  openness: 0.0
-  deformation: 0.0
-  void_closure: 0.0
-  closure_delta: 0.0
   regularization: 1.0e-4
 
 training:
