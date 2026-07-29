@@ -51,9 +51,9 @@ def build_distribution_figure(ens, out_png: str, label: str = "") -> str:
     pts = np.column_stack([pts[:, 0], pts[:, 1], np.degrees(pts[:, 2])])
     ends = np.column_stack([ends[:, 0], ends[:, 1], np.degrees(ends[:, 2])])
 
-    cur = {'eta_a': (0.0, DOMAIN['eta_a_max']),
+    cur = {'eta_a': (DOMAIN.get('eta_a_min', 0.0), DOMAIN['eta_a_max']),
            'eta_s': (-DOMAIN['eta_s_max'], DOMAIN['eta_s_max']),
-           'theta': (0.0, float(np.degrees(DOMAIN['theta_max'])))}
+           'theta': (float(np.degrees(DOMAIN.get('theta_min', 0.0))), float(np.degrees(DOMAIN['theta_max'])))}
     # eta_a/eta_s ranges are measured over ALL path points, so they bound the density directly.
     # theta1 is measured over ENDPOINTS -- it names a ray, which then sweeps 0 -> theta1 -- so the
     # region such rays actually cover starts at 0, and that is what is drawn.

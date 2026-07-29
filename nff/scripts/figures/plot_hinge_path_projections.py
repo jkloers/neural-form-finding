@@ -72,9 +72,9 @@ def build_path_projection_figure(ds, out_png: str, *, max_paths: int = 1500, see
         norm = (key - lo) / max(hi - lo, 1e-9)
 
     # the box the oracle samples today, for reference
-    cur = {0: (0.0, DOMAIN['eta_a_max']),
+    cur = {0: (DOMAIN.get('eta_a_min', 0.0), DOMAIN['eta_a_max']),
            1: (-DOMAIN['eta_s_max'], DOMAIN['eta_s_max']),
-           2: (0.0, float(np.degrees(DOMAIN['theta_max'])))}
+           2: (float(np.degrees(DOMAIN.get('theta_min', 0.0))), float(np.degrees(DOMAIN['theta_max'])))}
 
     fig, axes = plt.subplots(1, 3, figsize=(15.5, 5.2), facecolor="white")
     # Axes are set from the DATA, so when the sampled box is much larger than the ridden region it

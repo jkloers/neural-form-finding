@@ -94,21 +94,6 @@ def init_closed_les_params(config):
     return params, static_features
 
 
-def surrogate_scales(config):
-    """Gap-2 unit bridges for the closed_les hinge-energy surrogate (from config, with defaults).
-
-    The surrogate is trained in physical units (mm, N.mm) but the closed pipeline runs in abstract
-    units. Two scalars reconcile them at integration:
-      length_scale : mm per pipeline length-unit — pick a physical tile size so w_lig ~ 1/10 tile,
-      energy_scale : pipeline-energy per N.mm — so the surrogate energy is commensurate with the
-                     chamfer loss (neither swamps nor vanishes).
-    Passed to ``nff.models.hinge_surrogate.build_hinge_bond_energy_fn`` at setup.
-    """
-    phys = getattr(config, 'physics', None) or {}
-    get = phys.get if isinstance(phys, dict) else (lambda k, d: getattr(phys, k, d))
-    return float(get('length_scale_mm', 1.0)), float(get('energy_scale', 1.0))
-
-
 # ── the simple logic, factored into three small steps ──────────────────────────────
 #   {r, boundary} --(1)--> flat cut vertices --(2)--> per-hinge frame --(3)--> bond order
 
@@ -161,12 +146,17 @@ def build_surrogate_energy(config, static_features, state, init_map_params):
 
     from nff.models.hinge_surrogate import (load_hinge_surrogate, build_hinge_bond_energy_fn,
                                             build_hinge_stability_fn, build_hinge_damage_fn,
-                                            calibrate_scales, DOMAIN, HingeGeometry, w_lig_from_logit)
+                                            calibrate_scales, DOMAIN, HingeGeometry, W_LIG_BOUNDS,
+                                            w_lig_from_logit, w_lig_logit_from_width)
     from nff.topology.hinge_descriptor import build_hinge_descriptor_structure
 
     topo = config.topology
     M, N = int(topo['M']), int(topo['N'])
-    net, stats, eps_f = load_hinge_surrogate(hm.checkpoint)
+    # The net is dimensional, so a checkpoint condensed from a different material or thickness is
+    # silently wrong rather than an error. `expect` makes the mismatch print.
+    net, stats, eps_f = load_hinge_surrogate(
+        hm.checkpoint, expect={'material': getattr(hm, 'material', None),
+                               'thickness': getattr(hm, 'thickness_mm', None)})
     fr = float(getattr(hm, 'fillet_ratio', 0.16))     # design cut-tip fillet (3rd g DOF for 6-feat nets)
     dom = stats.get("domain", DOMAIN)                 # data-driven OOD box (wide v2 auto-widens it)
     w_damage = float(getattr(hm, 'w_damage', 0.0)); w_ood = float(getattr(hm, 'w_ood', 0.0))
@@ -199,14 +189,21 @@ def build_surrogate_energy(config, static_features, state, init_map_params):
           f"eps_f={eps_f}  |  {len(alpha0)} hinges  alpha {a0.min():.0f}-{a0.max():.0f}deg (RVE-frame)"
           f"  length_scale={ls:.3g}mm/u  energy_scale={es:.3g}  barrier={hm.barrier}")
     if w_damage or w_ood:
-        print(f"[hinge_model]   + damage loss  w_damage={w_damage} (mean D^2, D=<PEEQ>_lig/eps_f)  "
+        print(f"[hinge_model]   + damage loss  w_damage={w_damage} (mean (D/D_scale)^2, "
+              f"D_scale={float(stats.get('D_scale', 1.0)):.3g})  "
               f"w_ood={w_ood}  fail_line(report only)={fail_line}")
 
     w_lig_logit0 = None
     if bool(getattr(hm, 'learn_w_lig', False)):
-        frac = np.clip((np.asarray(w_lig_arr) - 1.0) / 9.0, 1e-3, 1.0 - 1e-3)
-        w_lig_logit0 = jnp.asarray(np.log(frac / (1.0 - frac)))
-        print(f"[hinge_model]   + LEARNABLE w_lig (per-hinge, [1,10]mm; init {float(hm.w_lig_mm):.1f}mm)")
+        w_lig_logit0 = w_lig_logit_from_width(w_lig_arr)
+        lo, hi = W_LIG_BOUNDS
+        got = float(np.mean(np.asarray(w_lig_from_logit(w_lig_logit0))))
+        print(f"[hinge_model]   + LEARNABLE w_lig (per-hinge, [{lo:g},{hi:g}]mm; "
+              f"asked {float(hm.w_lig_mm):.1f}mm -> init {got:.1f}mm)")
+        if abs(got - float(hm.w_lig_mm)) > 1e-3:
+            print(f"[hinge_model]   WARNING w_lig_mm={hm.w_lig_mm} is outside the learnable box "
+                  f"[{lo:g},{hi:g}] -- the optimizer starts at {got:.1f}mm while the cut export "
+                  "writes the config value")
 
     # Energy + stability built ONCE; they close over only the net / scales / fillet. The per-hinge
     # geometry is threaded per step (see hinge_geometry_from_design below).

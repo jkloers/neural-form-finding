@@ -34,9 +34,9 @@ SERIES = [ORANGE, INK, "#00838F", "#6A1B9A"]
 
 def _box(ax, x, y):
     """Outline the region ``sample_jobs`` actually covers, in whatever pair of axes is plotted."""
-    lim = {'eta_a': (0.0, DOMAIN['eta_a_max']),
+    lim = {'eta_a': (DOMAIN.get('eta_a_min', 0.0), DOMAIN['eta_a_max']),
            'eta_s': (-DOMAIN['eta_s_max'], DOMAIN['eta_s_max']),
-           'theta': (0.0, np.degrees(DOMAIN['theta_max'])),
+           'theta': (float(np.degrees(DOMAIN.get('theta_min', 0.0))), np.degrees(DOMAIN['theta_max'])),
            'lam': None}
     (x0, x1), (y0, y1) = lim[x], lim[y]
     ax.add_patch(plt.Rectangle((x0, y0), x1 - x0, y1 - y0, facecolor="none", edgecolor=GREY,
@@ -78,9 +78,9 @@ def build_figure(runs, out_png: str):
     proj = [(0, 2, r"$\eta_a=a/w_{lig}$", r"$\theta$  [deg]", 'eta_a', 'theta'),
             (1, 2, r"$\eta_s=s/w_{lig}$", r"$\theta$  [deg]", 'eta_s', 'theta'),
             (0, 1, r"$\eta_a=a/w_{lig}$", r"$\eta_s=s/w_{lig}$", 'eta_a', 'eta_s')]
-    lim_of = {'eta_a': (0.0, DOMAIN['eta_a_max']),
+    lim_of = {'eta_a': (DOMAIN.get('eta_a_min', 0.0), DOMAIN['eta_a_max']),
               'eta_s': (-DOMAIN['eta_s_max'], DOMAIN['eta_s_max']),
-              'theta': (0.0, np.degrees(DOMAIN['theta_max']))}
+              'theta': (float(np.degrees(DOMAIN.get('theta_min', 0.0))), np.degrees(DOMAIN['theta_max']))}
     for ax, (i, j, xl, yl, kx, ky) in zip(axes[0], proj):
         allX, allY = [], []
         for (paths, _), col in zip(runs, SERIES):

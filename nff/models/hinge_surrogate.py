@@ -3,8 +3,13 @@
 The hinge as a differentiable energy: given the relative-tile kinematics ``u = (a, s, theta)``
 (mm, mm, rad) and the hinge geometry ``g = (w_lig, alpha)`` (mm, rad), return the stored
 energy ``W`` [N.mm]. Its autodiff gradient ``dW/du`` is the internal force ``(F_a, F_s, M_theta)``
-the Stage-2 solver balances; the pipeline differentiates this directly. Trained on the CalculiX
-dataset (``data/fea/hinge_dataset.npz``) with a Sobolev (energy + force) loss.
+the Stage-2 solver balances; the pipeline differentiates this directly. Trained on a CalculiX
+campaign (``nff/scripts/generate_hinge_dataset.py``) with a Sobolev (energy + force) loss.
+
+The net is DIMENSIONAL -- raw mm in, raw N.mm out -- so thickness, material, ``r_win`` and ``w_c``
+are invisible constants baked in by whichever campaign produced the checkpoint. They are recorded
+in the checkpoint's ``meta`` block and checked against the config at load; see
+:func:`load_hinge_surrogate`.
 
 Architecture (locked 2026-07-03) -- the SQUARED energy form:
 
@@ -24,10 +29,14 @@ by ~0.6 deg). The unavoidable quadratic flattening at the origin -- intrinsic to
 with a zero there -- only weakens identification of that (negligible) origin curvature, so we
 accept it and keep the simplest robust form.
 
-A separate small head predicts the hinge DAMAGE ``D = <PEEQ>_lig / eps_f`` (normalized plastic
-dissipation, :mod:`nff.rve.damage`), kept distinct so it does not distort the smooth W.
+A separate small head predicts the hinge DAMAGE ``D`` (normalized plastic dissipation,
+:func:`nff.rve.damage.plastic_damage`), kept distinct so it does not distort the smooth W.
 
-Follows the repo ``init_*`` / ``apply_*`` raw-JAX convention (no flax), float64.
+Follows the repo ``init_*`` / ``apply_*`` raw-JAX convention (no flax), float64. Training and
+inference MUST run with ``JAX_PLATFORMS=cpu`` and x64 enabled: the default backend here is Metal,
+which cannot carry float64 at all, and any process that unpickles a checkpoint WITHOUT x64
+silently truncates the weights to float32 -- the wrong place to lose precision, since the IFT
+backward solve differentiates ``W`` twice.
 """
 
 import pickle
@@ -61,10 +70,33 @@ class HingeGeometry(NamedTuple):
     sec_dir: Any
 
 
-def w_lig_from_logit(logit):
-    """Learnable ligament width in [1, 10] mm: ``1 + 9*sigmoid(logit)``. The single definition of the
-    map_params `w_lig_logit` -> physical width (used by the loss and the visual deploys)."""
-    return 1.0 + 9.0 * jax.nn.sigmoid(logit)
+# Learnable-width box, in mm. Must stay inside the campaign's TRAINED w_lig window: the surrogate
+# extrapolates outside it, and above ~r_win/4 the RVE stops isolating hinge compliance from the
+# panels (see the --w-lig-max filter in nff/scripts/train_hinge_surrogate.py).
+W_LIG_BOUNDS = (5.0, 25.0)
+
+
+def w_lig_from_logit(logit, bounds=W_LIG_BOUNDS):
+    """Learnable ligament width: ``lo + (hi - lo)*sigmoid(logit)``.
+
+    THE definition of map_params `w_lig_logit` -> physical width, used by the Stage-2 geometry, the
+    loss, and the visual deploys. :func:`w_lig_logit_from_width` is its inverse -- always use the
+    pair, never re-derive one of them, or the optimizer and the cut export disagree about the part.
+    """
+    lo, hi = bounds
+    return lo + (hi - lo) * jax.nn.sigmoid(logit)
+
+
+def w_lig_logit_from_width(w_lig, bounds=W_LIG_BOUNDS):
+    """Inverse of :func:`w_lig_from_logit`: physical width [mm] -> the logit that reproduces it.
+
+    Clipped off the saturating ends so the initial gradient is finite. A width outside ``bounds``
+    silently pins to the nearest end -- which is what a too-narrow box does to a design that asked
+    for a wider hinge, so keep ``bounds`` matched to the checkpoint's trained window.
+    """
+    lo, hi = bounds
+    frac = jnp.clip((jnp.asarray(w_lig, dtype=jnp.float64) - lo) / (hi - lo), 1e-3, 1.0 - 1e-3)
+    return jnp.log(frac / (1.0 - frac))
 
 
 # ── input / target normalization ────────────────────────────────────────────────
@@ -83,23 +115,39 @@ def _robust_std(std):
     return np.where(std < 1e-6, 1.0, std)
 
 
-def compute_norm_stats(a, s, theta, w_lig, alpha_rad, W, fillet_ratio=None) -> dict:
+def compute_norm_stats(a, s, theta, w_lig, alpha_rad, W, fillet_ratio=None, F=None, D=None) -> dict:
     """Standardization stats from the training arrays (static; closed over at inference).
 
     ``fillet_ratio`` optional: when given, the geometry input ``g`` is 3-D (w_lig, alpha, fillet) and
     the feature vector is 6-D; otherwise the legacy 2-D g / 5-D features. The chosen width is baked
     into ``feat_mean``/``feat_std`` length, so inference reads it back from the checkpoint.
+
+    ``F`` (n, 3) and ``D`` (n,) optional: supply them to get FIXED target scales -- ``sigma_F``
+    per force component and ``D_scale`` -- computed once from the train split. Their presence is
+    what switches :func:`sobolev_loss` off its legacy per-batch variance normalization; see there
+    for why the pooled version left ``dW/da`` and ``dW/ds`` untrained.
     """
     cols = [a, s, theta, np.log(w_lig), alpha_rad]
     if fillet_ratio is not None:
         cols.append(fillet_ratio)
     feats = np.stack(cols, axis=-1)
-    return dict(
+    stats = dict(
         feat_mean=jnp.asarray(feats.mean(0), dtype=jnp.float64),
         feat_std=jnp.asarray(_robust_std(feats.std(0)), dtype=jnp.float64),
         # a positive energy scale so the net's ||dh||^2 ~ O(1) maps to physical N.mm
         W_scale=jnp.asarray(np.sqrt((W ** 2).mean()) + 1e-12, dtype=jnp.float64),
     )
+    if F is not None:
+        # PER COMPONENT: F_a [N], F_s [N] and M_theta [N.mm] differ by ~10x in RMS, so one pooled
+        # scale hands the whole force term to the moment (99.2% of the sum-of-squares on the PET
+        # campaign) and the two translational forces go unsupervised -- while Stage-2 equilibrium
+        # is in face (dx, dy, dtheta) DOF and needs all three.
+        stats["sigma_F"] = jnp.asarray(
+            np.sqrt((np.asarray(F, dtype=float) ** 2).mean(0)) + 1e-12, dtype=jnp.float64)
+    if D is not None:
+        stats["D_scale"] = jnp.asarray(
+            np.sqrt((np.asarray(D, dtype=float) ** 2).mean()) + 1e-12, dtype=jnp.float64)
+    return stats
 
 
 def _features(u: Float[Array, "... 3"], g: Float[Array, "... _"], stats: dict) -> Float[Array, "... _"]:
@@ -172,21 +220,19 @@ def _mlp(x, layers):
 # ── energy + force + failure ──────────────────────────────────────────────────────
 
 def apply_hinge_energy(params: dict, u: Float[Array, "... 3"], g: Float[Array, "... 2"],
-                       stats: dict, h0=None) -> Float[Array, "..."]:
-    """Condensed energy ``W(u; g)`` [N.mm]. Batched over the leading axes of ``u``/``g``.
-
-    ``h0`` optionally supplies the precomputed zero-state embedding ``h(0, g)`` -- constant for a
-    fixed geometry, so a Stage-2 solve can pass it once instead of recomputing it every evaluation
-    (halves the MLP forward passes). ``None`` recomputes it (default, geometry-agnostic callers).
-    """
+                       stats: dict) -> Float[Array, "..."]:
+    """Condensed energy ``W(u; g)`` [N.mm]. Batched over the leading axes of ``u``/``g``."""
     h_u = _mlp(_features(u, g, stats), params["energy"])
-    if h0 is None:
-        h0 = _mlp(_features(jnp.zeros_like(u), g, stats), params["energy"])   # same geometry, zero motion
+    h0 = _mlp(_features(jnp.zeros_like(u), g, stats), params["energy"])   # same geometry, zero motion
     return stats["W_scale"] * jnp.sum((h_u - h0) ** 2, axis=-1)
 
 
 def apply_hinge_force(params, u, g, stats):
     """Internal force ``dW/du = (F_a, F_s, M_theta)``. Per-sample grad, vmapped over the batch."""
+    # Unlike apply_hinge_energy, which broadcasts g against u, the vmap below pairs them row by row:
+    # a broadcastable-but-unequal pair would silently return forces for the wrong geometries.
+    assert u.shape[:-1] == g.shape[:-1], (
+        f"apply_hinge_force needs matching batch shapes, got u {u.shape} vs g {g.shape}")
     grad_one = jax.grad(lambda uu, gg: apply_hinge_energy(params, uu, gg, stats).squeeze())
     flat_u = u.reshape(-1, 3)
     flat_g = g.reshape(-1, g.shape[-1])   # 2 or 3 geom features (fillet DOF swept -> 3)
@@ -195,30 +241,56 @@ def apply_hinge_force(params, u, g, stats):
 
 
 def apply_hinge_failure(params, u, g, stats):
-    """The hinge DAMAGE ``D`` (>=0 via softplus): normalized plastic dissipation in the ligament.
+    """The hinge DAMAGE ``D`` (>=0 via softplus): normalized plastic dissipation.
 
-    Trained on ``nff.rve.damage.plastic_damage`` -- the volume-averaged ``<PEEQ>_lig / eps_f``.
+    Trained on ``nff.rve.damage.plastic_damage``: plastic strain integrated over the WHOLE RVE
+    window, per unit LIGAMENT volume, over ``eps_f`` -- ``(sum_window V*PEEQ) / (V_lig * eps_f)``.
     ``D`` measures accumulated irreversibility, so 0 is a pristine hinge and larger is more
     permanent set. It is NOT a fracture fraction: the tear line is the campaign-calibrated
     ``Delta_tear``, reported alongside the dataset, not the value 1.
+
+    Caveat worth carrying: this is an energy-like VOLUME INTEGRAL, while tearing is LOCAL -- the
+    campaign stops at fracture on ``peak_peeq`` (the hottest ligament element), a different
+    quantity on a different scale. Compare the two before reading ``fail_line`` as a tear count.
+
+    Scaled by ``stats["D_scale"]`` exactly as the energy head is scaled by ``W_scale``: a bare
+    softplus starts at 0.693 while D is ~1e-3, so the head would open ~100x above its target and
+    the (normalized) damage term would swamp energy and force for hundreds of epochs. Checkpoints
+    without ``D_scale`` fall back to 1.0, i.e. the old unscaled head.
     """
     m = _mlp(_features(u, g, stats), params["fail"])[..., 0]
-    return jax.nn.softplus(m)
+    return stats.get("D_scale", 1.0) * jax.nn.softplus(m)
 
 
-def load_hinge_surrogate(path: str):
+def load_hinge_surrogate(path: str, expect: dict = None):
     """Load a trained surrogate checkpoint -> (net_params, stats, eps_f).
 
     Defensively re-floors ``feat_std`` (see ``_robust_std``) so older checkpoints trained before the
     floor — e.g. spine-only runs whose a/s variance was ~0 — cannot explode the normalization when a
     feature is differentiated. Physically such a checkpoint is still under-trained; this only keeps it
-    numerically finite.
+    numerically finite. Params are upcast to float64 because unpickling in a process that has not
+    enabled x64 truncates them to float32 -- silently, and the IFT backward differentiates ``W``
+    twice. (The upcast cannot restore lost mantissa bits; it stops the truncation propagating.)
+
+    ``expect`` (e.g. ``{"material": "PET", "thickness": 0.5}``) is checked against the checkpoint's
+    ``meta`` provenance block. Mismatches WARN rather than raise -- the net is dimensional, so a
+    steel checkpoint driving a PET config is silently wrong rather than an error, and printing is
+    what surfaces it. Checkpoints predating the block cannot be validated at all; they say so.
     """
     with open(path, "rb") as f:
         ck = pickle.load(f)
     stats = ck["stats"]
     stats = {**stats, "feat_std": jnp.asarray(_robust_std(stats["feat_std"]), dtype=jnp.float64)}
-    return ck["params"], stats, ck.get("eps_f", 0.25)
+    params = jax.tree_util.tree_map(lambda x: jnp.asarray(x, dtype=jnp.float64), ck["params"])
+
+    meta = ck.get("meta")
+    if meta is None:
+        print(f"[surrogate] {path}: no provenance block -- material/thickness CANNOT be validated")
+    elif expect:
+        for k, v in expect.items():
+            if v is not None and k in meta and str(meta[k]) != str(v):
+                print(f"[surrogate] WARNING mismatch {k}: checkpoint={meta[k]!r} config={v!r}")
+    return params, stats, ck.get("eps_f", 0.25)
 
 
 def calibrate_scales(net_params, stats, *, alpha, w_lig, k_stretch, k_rot,
@@ -253,8 +325,11 @@ def calibrate_scales(net_params, stats, *, alpha, w_lig, k_stretch, k_rot,
 
 # ── pipeline adapter: the surrogate as a Stage-2 bond energy ───────────────────────
 
-# training-box bounds (from the campaign), in the surrogate's normalized units, for the OOD barrier
-DOMAIN = dict(eta_a_max=1.0, eta_s_max=0.7, theta_max=0.66)   # a/w_lig, s/w_lig, theta [rad]
+# Fallback training-box bounds, in the surrogate's normalized units (a/w_lig, s/w_lig, theta [rad]),
+# used only for checkpoints that carry no data-driven ``stats["domain"]``. The box is TWO-SIDED in
+# eta_a: the steel campaign sampled tension only, but the PET campaign samples the measured
+# deployment envelope, where 52% of hinge-states are in COMPRESSION.
+DOMAIN = dict(eta_a_min=0.0, eta_a_max=1.0, eta_s_max=0.7, theta_min=0.0, theta_max=0.66)
 
 
 def _domain_barrier(a, sh, dRot, w_lig, dom):
@@ -263,14 +338,19 @@ def _domain_barrier(a, sh, dRot, w_lig, dom):
     The squared-form W saturates (tanh h), so it is not coercive: a load can push hinges out of
     the trustworthy region where W extrapolates arbitrarily and the Stage-2 minimizer runs off to
     infinity. This penalty grows as ||u|| leaves the box, guaranteeing a bounded minimizer AND
-    acting as the validity barrier that keeps the solve in the domain (brief section 10). Tension
-    only: a < 0 (compression) is out of domain."""
+    acting as the validity barrier that keeps the solve in the domain.
+
+    ``dom`` may omit the lower bounds. The defaults then reproduce the legacy one-sided behaviour
+    EXACTLY -- ``eta_a_min = 0`` is the old tension-only term, and ``theta_min = -theta_max`` is
+    the old ``r(|dRot| - theta_max)`` -- so a checkpoint trained before the box became two-sided
+    scores bit-identically.
+    """
     r = lambda x: jnp.maximum(x, 0.0) ** 3     # C^2 (was **2 = C^1: jump in 2nd deriv at boundary
                                                # -> stiffness-matrix jumps in the IFT backward solve)
     eta_a, eta_s = a / w_lig, sh / w_lig
-    return (r(eta_a - dom["eta_a_max"]) + r(-eta_a)
+    return (r(eta_a - dom["eta_a_max"]) + r(dom.get("eta_a_min", 0.0) - eta_a)
             + r(jnp.abs(eta_s) - dom["eta_s_max"])
-            + r(jnp.abs(dRot) - dom["theta_max"]))
+            + r(dRot - dom["theta_max"]) + r(dom.get("theta_min", -dom["theta_max"]) - dRot))
 
 
 def hinge_kinematics(nodal_DOFs, sec, length_scale, reference_vector=None):
@@ -339,10 +419,17 @@ def build_hinge_stability_fn(net_params, stats, *, bond_pairs,
                              fail_line: float = 1.0, fillet_ratio=None):
     """Damage / stability penalty at the DEPLOYED state, for the design loss:
 
-        w_damage * mean(D^2)             (reduce accumulated irreversibility on EVERY hinge)
+        w_damage * mean((D/D_scale)^2)   (reduce accumulated irreversibility on EVERY hinge)
       + w_ood    * sum domain_barrier(u) (hinges leaving the trustworthy training box)
 
-    ``D`` is the surrogate's damage prediction: normalized plastic dissipation ``<PEEQ>_lig/eps_f``.
+    ``D`` is the surrogate's damage prediction (:func:`nff.rve.damage.plastic_damage`). It is
+    divided by ``stats["D_scale"]`` -- the train-set RMS of the same quantity -- so that
+    ``mean((D/D_scale)^2) ~ 1`` on the training distribution and ``w_damage`` stays an O(1) knob.
+    Without it the weight has to absorb the target's absolute scale: on the PET campaign ``D`` has
+    p50 5e-4, so the raw ``mean(D^2)`` is 2.8e-5 and the configs' ``w_damage: 10`` produced 2.8e-4
+    against chamfer terms of order 1 -- silently dead. Checkpoints with no ``D_scale`` fall back to
+    1.0, i.e. the old raw behaviour.
+
     There is ONE damage term and NO failure threshold in the gradient -- it simply pushes every
     hinge's permanent set down, weighting the worst hinges (grip concentration) hardest. That suits
     a kirigami, where hinges are MEANT to fold and to carry more plastic set than a normal structure
@@ -366,6 +453,7 @@ def build_hinge_stability_fn(net_params, stats, *, bond_pairs,
     fi = jnp.asarray(np.asarray(bond_pairs)[:, 0])
     fj = jnp.asarray(np.asarray(bond_pairs)[:, 1])
     fr = jnp.asarray(fillet_ratio if fillet_ratio is not None else 0.16, dtype=jnp.float64)
+    d_scale = jnp.asarray(stats.get("D_scale", 1.0), dtype=jnp.float64)
 
     def stability(node_displacements, hinge_geometry, reference_vectors=None):
         # ``reference_vectors`` (per-hinge rest bond) makes the margin's (a, s) frame-invariant,
@@ -375,8 +463,8 @@ def build_hinge_stability_fn(net_params, stats, *, bond_pairs,
                                        _unit(geo.sec_dir), length_scale, reference_vector=reference_vectors)
         u = jnp.stack([a, sh, dRot], axis=-1)
         gg = _geom_vector(geo.w_lig, geo.alpha, fr, stats)
-        D = apply_hinge_failure(net_params, u, gg, stats)     # damage = <PEEQ>_lig/eps_f  (>=0)
-        damage_pen = w_damage * jnp.mean(D ** 2)              # the ONE damage term, threshold-free
+        D = apply_hinge_failure(net_params, u, gg, stats)         # normalized plastic dissipation
+        damage_pen = w_damage * jnp.mean((D / d_scale) ** 2)      # ONE damage term, threshold-free
         ood_pen = w_ood * jnp.sum(_domain_barrier(a, sh, dRot, geo.w_lig, domain))
         aux = {"stab_damage": damage_pen, "stab_ood": ood_pen,
                "hinge_max_D": jnp.max(D), "hinge_mean_D": jnp.mean(D),
@@ -414,22 +502,38 @@ def build_hinge_damage_fn(net_params, stats, *, bond_pairs, length_scale: float 
 def sobolev_loss(params, batch, stats, lam: float = 0.8, w_damage: float = 0.1):
     """lambda-weighted Sobolev loss (energy-priority) + damage term.
 
-    L = lam * ||W - W*||^2 / sigma_W^2  +  (1 - lam) * ||dW/du - F*||^2 / sigma_F^2
-        + w_damage * ||D - D*||^2 / sigma_D^2
+    L = lam * ||W - W*||^2 / W_scale^2
+      + (1 - lam) * mean_over_components( ||dW/du - F*||^2 / sigma_F^2 )
+      + w_damage * ||D - D*||^2 / D_scale^2
 
-    All THREE terms are variance-normalized, so ``lam`` and ``w_damage`` are clean priority knobs
-    on comparable scales. (The damage term used to be raw MSE on an unnormalized target whose max
-    ran to ~60, letting a handful of rows dominate that head.) ``batch`` holds u, g, W,
-    F=(F_a,F_s,M_theta), and margin = the damage measure ``<PEEQ>_lig/eps_f``.
+    Every term is normalized by a FIXED scale computed once from the train split
+    (:func:`compute_norm_stats`), so ``lam`` and ``w_damage`` are clean priority knobs that mean
+    the same thing across runs. Two things this fixes:
+
+      * the force term is normalized PER COMPONENT. Pooling F_a [N], F_s [N] and M_theta [N.mm]
+        before the mean and the scale gave the moment 99.2% of the term on the PET campaign,
+        leaving ``dW/da`` and ``dW/ds`` effectively untrained -- and those are exactly the internal
+        forces Stage-2's translational equilibrium balances.
+      * the scales are fixed, not ``jnp.var(batch[...])`` recomputed per minibatch, which made the
+        loss scale stochastic and ``lam`` incomparable between runs.
+
+    ``stats`` without ``sigma_F``/``D_scale`` (i.e. built without ``F=``/``D=``) falls back to the
+    legacy per-batch variance form, bit-identically. ``batch`` holds u, g, W, F=(F_a,F_s,M_theta),
+    and margin = the damage measure.
     """
     u, g = batch["u"], batch["g"]
     W_pred = apply_hinge_energy(params, u, g, stats)
     F_pred = apply_hinge_force(params, u, g, stats)
+    D_pred = apply_hinge_failure(params, u, g, stats)
 
-    e_W = jnp.mean((W_pred - batch["W"]) ** 2) / (jnp.var(batch["W"]) + 1e-12)
-    e_F = jnp.mean((F_pred - batch["F"]) ** 2) / (jnp.var(batch["F"]) + 1e-12)
-    e_D = (jnp.mean((apply_hinge_failure(params, u, g, stats) - batch["margin"]) ** 2)
-           / (jnp.var(batch["margin"]) + 1e-12))
+    if "sigma_F" in stats:
+        e_W = jnp.mean((W_pred - batch["W"]) ** 2) / stats["W_scale"] ** 2
+        e_F = jnp.mean(((F_pred - batch["F"]) / stats["sigma_F"]) ** 2)
+        e_D = jnp.mean((D_pred - batch["margin"]) ** 2) / stats["D_scale"] ** 2
+    else:
+        e_W = jnp.mean((W_pred - batch["W"]) ** 2) / (jnp.var(batch["W"]) + 1e-12)
+        e_F = jnp.mean((F_pred - batch["F"]) ** 2) / (jnp.var(batch["F"]) + 1e-12)
+        e_D = jnp.mean((D_pred - batch["margin"]) ** 2) / (jnp.var(batch["margin"]) + 1e-12)
 
     loss = lam * e_W + (1.0 - lam) * e_F + w_damage * e_D
     return loss, dict(energy=e_W, force=e_F, damage=e_D)
