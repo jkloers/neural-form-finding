@@ -43,6 +43,9 @@ case "${1:-status}" in
     [ -f "$PIDFILE" ] && kill "$(cat $PIDFILE)" 2>/dev/null
     pkill -f "generate_hinge_dataset" 2>/dev/null
     pkill -x ccx 2>/dev/null
+    # `caffeinate` is a separate process holding the no-sleep assertion; without this a stopped
+    # campaign leaves the machine unable to sleep forever, and repeated start/stop cycles stack them.
+    pkill -f "caffeinate -dimsu" 2>/dev/null
     rm -f "$PIDFILE"
     echo "stopped -- everything through the last completed batch is on disk; 'resume' to continue" ;;
   status)
