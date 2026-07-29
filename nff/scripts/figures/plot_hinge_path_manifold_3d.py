@@ -88,8 +88,8 @@ def build_manifold_3d_figure(ens, out_png: str, label: str = "", max_points: int
     P = ens.all_points()
     P = np.column_stack([P[:, 0], P[:, 1], np.degrees(P[:, 2])])
 
-    cur = ((0.0, DOMAIN['eta_a_max']), (-DOMAIN['eta_s_max'], DOMAIN['eta_s_max']),
-           (0.0, float(np.degrees(DOMAIN['theta_max']))))
+    cur = ((DOMAIN.get('eta_a_min', 0.0), DOMAIN['eta_a_max']), (-DOMAIN['eta_s_max'], DOMAIN['eta_s_max']),
+           (float(np.degrees(DOMAIN.get('theta_min', 0.0))), float(np.degrees(DOMAIN['theta_max']))))
     new = (tuple(spec['eta_a']), tuple(spec['eta_s']), (0.0, float(spec['theta1_deg'][1])))
     lims = [(min(P[:, k].min(), cur[k][0], new[k][0]), max(P[:, k].max(), cur[k][1], new[k][1]))
             for k in range(3)]
@@ -161,8 +161,8 @@ def build_spin_gif(ens, out_gif: str, n_frames: int = 60, max_points: int = 9000
     spec = sampling_spec(ens)['sample_jobs_kwargs']
     P = ens.all_points()
     P = np.column_stack([P[:, 0], P[:, 1], np.degrees(P[:, 2])])
-    cur = ((0.0, DOMAIN['eta_a_max']), (-DOMAIN['eta_s_max'], DOMAIN['eta_s_max']),
-           (0.0, float(np.degrees(DOMAIN['theta_max']))))
+    cur = ((DOMAIN.get('eta_a_min', 0.0), DOMAIN['eta_a_max']), (-DOMAIN['eta_s_max'], DOMAIN['eta_s_max']),
+           (float(np.degrees(DOMAIN.get('theta_min', 0.0))), float(np.degrees(DOMAIN['theta_max']))))
     new = (tuple(spec['eta_a']), tuple(spec['eta_s']), (0.0, float(spec['theta1_deg'][1])))
     lims = [(min(P[:, k].min(), cur[k][0], new[k][0]), max(P[:, k].max(), cur[k][1], new[k][1]))
             for k in range(3)]

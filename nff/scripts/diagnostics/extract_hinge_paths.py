@@ -111,11 +111,12 @@ def main():
     d = summary['diagnostics']
     print(f"\n  {d['n_hinges']} hinges x {d['n_steps']} steps   length_scale={ls:.1f} mm/unit")
     print(f"  eta_a  {d['eta_a_range'][0]:+.3f} .. {d['eta_a_range'][1]:+.3f}"
-          f"   (box 0 .. {DOMAIN['eta_a_max']})")
+          f"   (box {DOMAIN.get('eta_a_min', 0.0)} .. {DOMAIN['eta_a_max']})")
     print(f"  eta_s  {d['eta_s_range'][0]:+.3f} .. {d['eta_s_range'][1]:+.3f}"
           f"   (box +-{DOMAIN['eta_s_max']})")
     print(f"  theta  {d['theta_range_deg'][0]:+.1f} .. {d['theta_range_deg'][1]:+.1f} deg"
-          f"   (box +-{np.degrees(DOMAIN['theta_max']):.1f})")
+          f"   (box {np.degrees(DOMAIN.get('theta_min', -DOMAIN['theta_max'])):+.1f}"
+          f" .. {np.degrees(DOMAIN['theta_max']):.1f})")
     print(f"  straightness  mean={d['straightness_mean']:.4f}  max={d['straightness_max']:.4f}"
           f"   (0 = a proportional ray reproduces it exactly)")
     print(f"  monotonic frac  eta_a={d['monotonic_frac']['eta_a']:.2f} "

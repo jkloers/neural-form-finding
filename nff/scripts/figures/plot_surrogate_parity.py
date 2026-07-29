@@ -13,8 +13,11 @@ for context, the y=x identity line, and a corner box with R^2 and relative RMSE.
 project viz charter -- no values in titles, Princeton palette, minimal chrome.
 
     JAX_PLATFORMS=cpu conda run -n kgnn_mac python nff/scripts/figures/plot_surrogate_parity.py \
-        --surrogate data/surrogates/hinge_surrogate_2x64_lam065 \
-        --data data/fea/hinge_dataset --out data/surrogates/parity_2x64_lam065.png
+        --surrogate data/surrogates/hinge_surrogate_pet_v2 \
+        --data data/fea/hinge_dataset_pet_v2 --out data/surrogates/parity_pet_v2.png
+
+``--w-lig-max`` must match the value the checkpoint was trained with, or the plot scores the
+surrogate on geometries it was deliberately never shown.
 """
 
 import argparse
@@ -81,15 +84,17 @@ def parity_panel(ax, true_tr, pred_tr, true_va, pred_va, color, xlabel, ylabel):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--surrogate", default="data/surrogates/hinge_surrogate_2x64_lam065")
-    ap.add_argument("--data", default="data/fea/hinge_dataset")
+    ap.add_argument("--surrogate", default="data/surrogates/hinge_surrogate_pet_v2")
+    ap.add_argument("--data", default="data/fea/hinge_dataset_pet_v2")
     ap.add_argument("--out", default="data/surrogates/parity.png")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--val-frac", dest="val_frac", type=float, default=0.15)
+    ap.add_argument("--w-lig-max", dest="w_lig_max", type=float, default=25.0,
+                    help="must match the value the checkpoint was trained with")
     args = ap.parse_args()
 
     params, stats, _ = load_hinge_surrogate(args.surrogate + ".pkl")
-    data, _ = load_dataset(args.data)
+    data, _, _ = load_dataset(args.data, w_lig_max=args.w_lig_max)
     # reproduce the training force-sign convention so the force parity is apples-to-apples
     sign, _ = check_force_sign(data)
     data["F"] *= sign

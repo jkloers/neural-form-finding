@@ -272,7 +272,18 @@ def visualize_pipeline_results(result, tessellation, config, target_params, conf
             print(f"  Saved animation to {ani_path}")
 
     # Energy Plot (Stage 2 Analysis)
-    if config.visualization.energy_plot and result.get('solution') and getattr(result['solution'], 'energies', None) is not None:
+    # The stretch/shear/rot decomposition is computed from the LINEAR SPRINGS. Under
+    # `hinge_model: surrogate` the solve never evaluated them, so the components would be
+    # fictitious and the balance would not close -- only `total_potential` (the solver's own
+    # objective) is meaningful there. Skip rather than draw a plot that invites the wrong reading.
+    # (The same components feed loss_weights.stretching/shearing/bending, which is why those must
+    # stay 0.0 under the surrogate.)
+    _hm = getattr(config, 'hinge_model', None)
+    _is_surrogate = getattr(_hm, 'type', 'rom') == 'surrogate' if _hm is not None else False
+    if config.visualization.energy_plot and _is_surrogate:
+        print("Skipping the energy decomposition plot: hinge_model=surrogate, so the "
+              "stretch/shear/rot components are spring energies the solve did not use.")
+    elif config.visualization.energy_plot and result.get('solution') and getattr(result['solution'], 'energies', None) is not None:
         print("Displaying Stage 2: Thermodynamic Balance Analysis...")
         energies_dict = result['solution'].energies
 
