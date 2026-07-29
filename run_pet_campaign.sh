@@ -20,7 +20,12 @@ PIDFILE="/tmp/pet_campaign.pid"
 # within one job share a geometry and a ray, so they are far from independent.
 # PARALLEL 14, not 9: ccx sits at ~70% CPU (it blocks writing .dat/.sta/.cvg every increment),
 # so 9 procs used only ~6.3 of 10 cores. Memory is not the constraint -- 9 jobs took 2.7 GB of 17.
-N=1200; SEED=0; STEPS=30; PARALLEL=14; BATCH=50; TIMEOUT=3000
+# DEG_PER_STEP 4.0, not 2.5: finer stepping was introduced to cut deep-fold divergence, and
+# measured over 46 deep folds it did not (22% vs 26%, indistinguishable). Giving it back costs
+# ~35% of the states on deep jobs and buys ~35% speed there.
+# TIMEOUT 1800, not 3000: 80-100 deg jobs average 2850 s. Cutting them still keeps every state
+# they solved -- a truncated job contributes its rows, it is not discarded.
+N=1200; SEED=0; STEPS=30; PARALLEL=14; BATCH=50; TIMEOUT=1800; DEG_PER_STEP=4.0
 # w_lig capped at 25 mm, not 50: r_win is 100 mm, so at 50 mm the Saint-Venant window is
 # only 2x the ligament and the locality the RVE rests on stops holding. At 25 mm it is 4x.
 W_LIG_MIN=5; W_LIG_MAX=25
@@ -33,6 +38,7 @@ run() {
       --path-prior "$PRIOR" --max-load 300 \
       --n "$N" --seed "$SEED" --steps "$STEPS" \
       --parallel "$PARALLEL" --batch-size "$BATCH" --timeout "$TIMEOUT" \
+      --deg-per-step "$DEG_PER_STEP" \
       --out "$OUT" "$@" >> "$LOG" 2>&1 &
   echo $! > "$PIDFILE"
   echo "launched pid $(cat $PIDFILE)  ->  $LOG"
