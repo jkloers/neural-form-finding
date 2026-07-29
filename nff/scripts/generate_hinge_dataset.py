@@ -20,6 +20,7 @@ import numpy as np
 from nff.rve.hinge_function import (HingeConstants, HingeGeometry, DeploymentRay, REGIME_NAME,
                                     evaluate_hinge)
 from nff.rve.dataset import sample_jobs, generate_dataset, run_jobs
+from nff.rve.path_prior import measure_envelope, sample_campaign_jobs
 
 
 # ── rehearsal: determine rho = c * w_lig and check alpha robustness ────────────────
