@@ -92,6 +92,7 @@ def run_campaign(args):
         jobs = sample_campaign_jobs(args.n, env, seed=args.seed, n_steps=args.steps,
                                     w_lig=(args.w_lig_min, args.w_lig_max),
                                     fillet_ratio=args.fillet_ratio, spine_frac=args.spine_frac,
+                                    deg_per_step=args.deg_per_step,
                                     inflate_frac=args.inflate_frac, inflate=args.inflate)
         print(f"Campaign: {args.n} jobs aimed at {env.source} ({env.n_points} measured points)")
         print(f"  envelope  a [{env.a[0]:+.2f}, {env.a[1]:+.2f}] mm   s [{env.s[0]:+.2f}, "
@@ -145,6 +146,9 @@ def main():
     ap.add_argument("--path-prior", dest="path_prior", default=None,
                     help="harvest dir to take the sampling ENVELOPE from (physical mm). Without it "
                          "the legacy eta box is used, which excludes compression entirely.")
+    ap.add_argument("--deg-per-step", dest="deg_per_step", type=float, default=2.5,
+                    help="rotation per *STEP; steps are set per job so the first bite does not "
+                         "scale with the target angle (--steps is the cap)")
     ap.add_argument("--resume", action="store_true",
                     help="continue an interrupted campaign at <out>, skipping the jobs already on "
                          "disk; pass the SAME --n/--seed so the job list regenerates identically")

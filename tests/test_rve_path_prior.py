@@ -64,3 +64,21 @@ def test_partial_runs_stay_representative():
     jobs = sample_campaign_jobs(400, ENV, seed=4)
     first = [bool(r.free_dofs) for _, r in jobs[:120]]
     assert 0.1 < np.mean(first) < 0.45          # spine interleaved, not front-loaded
+
+
+def test_steps_hold_the_angle_per_step_not_the_step_count():
+    """A flat count makes the FIRST bite scale with the target, which is what diverges deep folds."""
+    from nff.rve.path_prior import steps_for
+    for th in (20.0, 40.0, 70.0):
+        assert th / steps_for(th) == pytest.approx(2.5, abs=0.2)
+    assert steps_for(1.0) == 8                              # floor: shallow jobs stay cheap
+    assert steps_for(500.0) == 30                           # cap
+
+
+def test_deep_jobs_get_more_steps_than_shallow_ones():
+    jobs = sample_campaign_jobs(400, ENV, seed=0, n_steps=30)
+    th = np.array([r.theta1_deg for _, r in jobs])
+    ns = np.array([r.n_steps for _, r in jobs])
+    deep, shallow = ns[th > 60], ns[th < 20]
+    assert deep.mean() > shallow.mean()
+    assert (th / ns).max() <= 3.1, "no job may take a bite much larger than deg_per_step"

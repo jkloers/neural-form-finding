@@ -128,9 +128,22 @@ def _lerp(u, lo, hi):
     return lo + u * (hi - lo)
 
 
+def steps_for(theta_deg, deg_per_step=2.5, min_steps=8, max_steps=30):
+    """States to walk a ray of ``theta_deg``, at a roughly CONSTANT angle per step.
+
+    A flat step count makes the first bite proportional to the target: at 15 steps a 70 deg job
+    opens 4.7 deg in one step, which drives the buckling snap inside a single increment and
+    diverges. Measured on the flat-15 run, 3 of 4 divergences sat at theta 69-73 deg and died in
+    under 170 s, contributing no rows -- i.e. the dataset was being thinned exactly where the design
+    rides deepest (measured theta is p95 52 deg, p99 70 deg). Holding the per-step angle fixed
+    instead spends the compute where it is needed and leaves shallow jobs cheap.
+    """
+    return int(np.clip(round(float(theta_deg) / deg_per_step), min_steps, max_steps))
+
+
 def sample_campaign_jobs(n, envelope, *, seed=0, w_lig=(5.0, 50.0), fillet_ratio=0.16,
                          n_steps=30, spine_frac=0.25, inflate_frac=0.30, inflate=1.5,
-                         eta_cap=1.2):
+                         eta_cap=1.2, deg_per_step=2.5, min_steps=8):
     """Sample the campaign -> list of ``(HingeGeometry, DeploymentRay)``.
 
     Three groups, all sharing one geometry sampler (``w_lig`` log-uniform over the DESIGN range,
@@ -151,6 +164,9 @@ def sample_campaign_jobs(n, envelope, *, seed=0, w_lig=(5.0, 50.0), fillet_ratio
     envelope is in mm and ``w_lig`` is drawn independently, so a 15 mm translation on a 5 mm ligament
     is a guaranteed tear that will not converge and carries no information.
 
+    Steps are set per job by :func:`steps_for` so the angle per step stays ~``deg_per_step``;
+    ``n_steps`` is the cap. A flat count diverges on deep folds -- see that function.
+
     Returns:
         Shuffled ``[(geo, ray), ...]`` so a partial run stays representative of the whole design.
     """
@@ -163,8 +179,10 @@ def sample_campaign_jobs(n, envelope, *, seed=0, w_lig=(5.0, 50.0), fillet_ratio
     for i in range(n_spine):
         geo = HingeGeometry(float(np.exp(_lerp(us[i, 0], *np.log(w_lig)))),
                             float(_lerp(us[i, 1], *envelope.alpha_deg)), fillet_ratio)
-        jobs.append((geo, DeploymentRay(float(_lerp(us[i, 2], *envelope.theta_deg)),
-                                        0.0, 0.0, n_steps, f"sp{i:05d}", free_dofs=("a", "s"))))
+        th = float(_lerp(us[i, 2], *envelope.theta_deg))
+        jobs.append((geo, DeploymentRay(th, 0.0, 0.0,
+                                        steps_for(th, deg_per_step, min_steps, n_steps),
+                                        f"sp{i:05d}", free_dofs=("a", "s"))))
 
     for grp, (count, env, tag) in enumerate([(n_fan - n_infl, envelope, "fn"),
                                              (n_infl, envelope.inflate(inflate), "fx")]):
@@ -176,8 +194,10 @@ def sample_campaign_jobs(n, envelope, *, seed=0, w_lig=(5.0, 50.0), fillet_ratio
             a = float(np.clip(a, -eta_cap * wl, eta_cap * wl))      # keep eta physical at small w_lig
             sh = float(np.clip(sh, -eta_cap * wl, eta_cap * wl))
             geo = HingeGeometry(wl, float(_lerp(uf[i, 1], *env.alpha_deg)), fillet_ratio)
-            jobs.append((geo, DeploymentRay(float(_lerp(uf[i, 4], *env.theta_deg)),
-                                            a / wl, sh / wl, n_steps, f"{tag}{i:05d}")))
+            th = float(_lerp(uf[i, 4], *env.theta_deg))
+            jobs.append((geo, DeploymentRay(th, a / wl, sh / wl,
+                                            steps_for(th, deg_per_step, min_steps, n_steps),
+                                            f"{tag}{i:05d}")))
 
     np.random.default_rng(seed + 7).shuffle(jobs)
     return jobs
