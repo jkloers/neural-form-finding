@@ -81,11 +81,21 @@ def main() -> None:
             ax.scatter(np.zeros_like(st), st, s=14, c=TEAL, alpha=0.8, linewidths=0, marker="_",
                        label="spine: θ driven, a & s solved" if k == 0 else None)
         ax.axvline(0.0, color=GREY, lw=0.8, alpha=0.5)
+        # Frame the DESIGN, not the cloud: the measured points run to a = +59 mm at loads up to
+        # 3 kN (50x operating), which would render the sampled region as a sliver.
+        px = 0.30 * (sx.max() - sx.min()); py = 0.10 * (sy.max() - sy.min())
+        ax.set_xlim(sx.min() - px, sx.max() + px)
+        ax.set_ylim(min(sy.min() - py, 0.0), sy.max() + py)
+        n_out = int(((mx < sx.min() - px) | (mx > sx.max() + px)).sum())
         ax.set_xlabel(xl); ax.set_ylabel(yl)
+        if n_out:
+            ax.text(0.98, 0.02, f"{100 * n_out / len(mx):.0f}% of measured points off-panel\n"
+                                f"(pulled past the load cut)", transform=ax.transAxes,
+                    ha="right", va="bottom", fontsize=7, color=GREY)
     axes[0].legend(fontsize=8, loc="upper left", markerscale=2.5)
     axes[0].annotate("spine lands where the solver puts it\n(a ≈ −4 mm at 28°), not at a = 0",
                      xy=(0.0, float(np.median(st)) if len(st) else 0.0),
-                     xytext=(0.42, 0.06), textcoords="axes fraction", fontsize=7.5, color=TEAL,
+                     xytext=(0.60, 0.30), textcoords="axes fraction", fontsize=7.5, color=TEAL,
                      ha="left", arrowprops=dict(arrowstyle="->", color=TEAL, lw=0.8))
 
     ax = axes[3]
