@@ -156,7 +156,11 @@ def responses_to_columns(responses, const, job_id_offset=0):
     for local, r in enumerate(responses):
         job_id = job_id_offset + local
         if r is None or r.n_samples == 0:
-            meta.append(dict(job_id=job_id, ok=False)); continue
+            # A job that produced NO rows still has a reason, and it is the one that matters most:
+            # these are the deep folds that died at the buckling bifurcation. Without carrying it
+            # here the manifest under-reports divergences (batch 1 logged 6, the summary said 2).
+            meta.append(dict(job_id=job_id, ok=False,
+                             stop_reason=getattr(r, "stop_reason", "parse_failed"))); continue
         desc = descriptor(r.geo, const)
         keys = list(desc) + _KIN + _RESP + _AUX + ["job_id"]
         n = r.n_samples
