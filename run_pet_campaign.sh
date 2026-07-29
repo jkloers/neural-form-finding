@@ -8,9 +8,9 @@ set -uo pipefail
 
 REPO="/Users/julienkloers/Documents/Code2/princeton/neural-form-finding"
 WORK="$REPO/.claude/worktrees/pet-surrogate-campaign"
-OUT="$REPO/data/fea/hinge_dataset_pet_v1"
+OUT="$REPO/data/fea/hinge_dataset_pet_v2"
 PRIOR="$REPO/data/fea/path_priors/envelope_v3_w18"
-LOG="$REPO/data/fea/hinge_dataset_pet_v1.log"
+LOG="$REPO/data/fea/hinge_dataset_pet_v2.log"
 PIDFILE="/tmp/pet_campaign.pid"
 
 # n/seed MUST stay identical between start and resume, or the job list regenerates differently and
@@ -18,13 +18,16 @@ PIDFILE="/tmp/pet_campaign.pid"
 # STEPS: 15 states per job, not 30. Rows/hour is unchanged but the JOB count roughly doubles,
 # and jobs are what generalisation is measured over -- the train/val split is by job, and rows
 # within one job share a geometry and a ray, so they are far from independent.
-N=1200; SEED=0; STEPS=15; PARALLEL=9; BATCH=50; TIMEOUT=3000
+N=1200; SEED=0; STEPS=30; PARALLEL=9; BATCH=50; TIMEOUT=3000
+# w_lig capped at 25 mm, not 50: r_win is 100 mm, so at 50 mm the Saint-Venant window is
+# only 2x the ligament and the locality the RVE rests on stops holding. At 25 mm it is 4x.
+W_LIG_MIN=5; W_LIG_MAX=25
 
 run() {
   cd "$WORK" || exit 1
   CCX_BIN=/opt/miniconda3/envs/ccx/bin/ccx caffeinate -dimsu \
     conda run -n ccx --no-capture-output python -u -m nff.scripts.generate_hinge_dataset \
-      --material pet --thickness 0.5 --r-win 100 --w-lig-min 5 --w-lig-max 50 \
+      --material pet --thickness 0.5 --r-win 100 --w-lig-min "$W_LIG_MIN" --w-lig-max "$W_LIG_MAX" \
       --path-prior "$PRIOR" --max-load 300 \
       --n "$N" --seed "$SEED" --steps "$STEPS" \
       --parallel "$PARALLEL" --batch-size "$BATCH" --timeout "$TIMEOUT" \
