@@ -44,7 +44,7 @@ case "${1:-status}" in
     echo "stopped -- everything through the last completed batch is on disk; 'resume' to continue" ;;
   status)
     if pgrep -f generate_hinge_dataset >/dev/null; then
-      echo "RUNNING ($(pgrep -c -x ccx) ccx procs)"
+      echo "RUNNING ($(pgrep -x ccx | wc -l | tr -d ' ') ccx procs)"
     else
       echo "not running"
     fi
@@ -52,6 +52,6 @@ case "${1:-status}" in
 import json;d=json.load(open('$OUT.json'))
 print('jobs %d  usable %d  samples %d  stops %s'%(d['n_jobs'],d['n_usable'],d['n_samples'],d.get('stop_reasons')))
 print('Delta_tear', d.get('delta_tear'), ' from', d.get('n_tear_observations'), 'torn jobs')"
-    tail -3 "$LOG" 2>/dev/null ;;
+    tail -6 "$LOG" 2>/dev/null ;;
   *) echo "usage: $0 {start|resume|stop|status}"; exit 1 ;;
 esac

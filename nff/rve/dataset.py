@@ -13,9 +13,11 @@ Speed: gmsh is not thread-safe, so we phase the batch -- build all decks SERIALL
 ``ccx`` solves in PARALLEL (each an external subprocess), parse SERIALLY.
 """
 
+import itertools
 import json
 import os
 import shutil
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 
@@ -82,7 +84,7 @@ def sample_jobs(n, seed=0, *, w_lig=(1.0, 10.0), alpha_deg=(30.0, 150.0),
 # ── parallel evaluation ───────────────────────────────────────────────────────────
 
 def run_jobs(jobs, const=HingeConstants(), *, n_parallel=6, timeout=900,
-             root="/tmp/hinge_campaign", fracture_margin=1.1, keep_scratch=False):
+             root="/tmp/hinge_campaign", fracture_margin=1.1, keep_scratch=False, progress=False):
     """Evaluate many (geometry, ray) jobs -> list[HingeResponse | None].
 
     Phased: prepare (serial, gmsh) -> solve (parallel, ccx subprocess) -> parse (serial).
@@ -92,22 +94,33 @@ def run_jobs(jobs, const=HingeConstants(), *, n_parallel=6, timeout=900,
     metas = []                                                    # phase 1: decks (serial)
     for i, (geo, ray) in enumerate(jobs):
         try:
-            metas.append(prepare_job(to_rve_params(geo, const),
-                                     workdir=f"{root}/job{i:05d}",
-                                     **solver_kwargs(geo, ray, const)))
+            m = prepare_job(to_rve_params(geo, const), workdir=f"{root}/job{i:05d}",
+                            **solver_kwargs(geo, ray, const))
+            m["label"] = (f"{'spine' if getattr(ray, 'free_dofs', ()) else 'fan  '} "
+                          f"w{geo.w_lig:5.1f} a{geo.alpha_deg:5.1f} th{ray.theta1_deg:5.1f} "
+                          f"{len(m['conn'])}el")
+            metas.append(m)
         except Exception as e:
             metas.append({"error": f"prepare: {type(e).__name__}: {e}"})
+
+    counter = itertools.count(1)                                  # GIL makes next() atomic enough
 
     def _solve(m):                                                # phase 2: solve (parallel)
         if "error" in m:
             return ""
+        t0 = time.time()
         try:
-            return solve_job(m, ncpus=1, timeout=timeout,
-                             eps_f=const.eps_f if const.stop_at_fracture else None,
-                             fracture_margin=fracture_margin).stdout
+            out = solve_job(m, ncpus=1, timeout=timeout,
+                            eps_f=const.eps_f if const.stop_at_fracture else None,
+                            fracture_margin=fracture_margin).stdout
         except Exception:
             m["stop_reason"] = "timeout"
-            return ""                                             # parse whatever completed
+            out = ""                                              # parse whatever completed
+        if progress:
+            # Batches take ~40 min, so without this the run looks hung between checkpoints.
+            print(f"      [{next(counter):3d}/{len(metas)}] {m.get('label', '?')}  "
+                  f"{time.time() - t0:5.0f}s  {m.get('stop_reason', '?')}", flush=True)
+        return out
     with ThreadPoolExecutor(max_workers=n_parallel) as ex:
         stdouts = list(ex.map(_solve, metas))
 
@@ -213,7 +226,7 @@ def resume_state(out_path):
 
 def generate_dataset(jobs, out_path, const=HingeConstants(), *, n_parallel=9, timeout=300,
                      batch_size=50, root="/tmp/hinge_campaign", fracture_margin=1.1,
-                     resume=False):
+                     resume=False, progress=True):
     """Run the campaign in BATCHES, checkpointing the cumulative dataset after each batch.
 
     Overnight-safe: a crash / machine-sleep loses at most one in-flight batch — everything parsed
@@ -235,6 +248,7 @@ def generate_dataset(jobs, out_path, const=HingeConstants(), *, n_parallel=9, ti
             return _write_checkpoint(out_path, acc, meta, const)
         print(f"  resume: {done}/{n} jobs already on disk, continuing from job {done}", flush=True)
     n_batches = -(-n // batch_size)
+    t_start = time.time()
     for bi, b0 in enumerate(range(0, n, batch_size)):
         if b0 + batch_size <= done:                   # whole batch already on disk
             continue
@@ -248,13 +262,18 @@ def generate_dataset(jobs, out_path, const=HingeConstants(), *, n_parallel=9, ti
                 acc = {k: [np.concatenate(v)[:-cut]] for k, v in acc.items()}
         responses = run_jobs(jobs[b0:b0 + batch_size], const, n_parallel=n_parallel,
                              timeout=timeout, root=f"{root}/b{bi:04d}",
-                             fracture_margin=fracture_margin)
+                             fracture_margin=fracture_margin, progress=progress)
         cols, bmeta = responses_to_columns(responses, const, job_id_offset=b0)
         for k, v in cols.items():
             acc.setdefault(k, []).append(v)
         meta += bmeta
         summary = _write_checkpoint(out_path, acc, meta, const)   # checkpoint after every batch
+        el = time.time() - t_start
+        did = b0 + len(bmeta) - done
+        eta = el / max(did, 1) * (n - b0 - len(bmeta))
         print(f"  batch {bi + 1}/{n_batches}  ({b0 + len(bmeta)}/{n} jobs): "
               f"{summary['n_usable']} usable, {summary['n_errored']} errored, "
-              f"{summary['n_samples']} samples -> checkpointed", flush=True)
+              f"{summary['n_samples']} samples  |  {el / 3600:.2f} h elapsed, "
+              f"~{eta / 3600:.1f} h left ({3600 * did / max(el, 1):.0f} jobs/h) -> checkpointed",
+              flush=True)
     return summary if meta else _write_checkpoint(out_path, acc, meta, const)
