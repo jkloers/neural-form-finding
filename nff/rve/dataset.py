@@ -194,8 +194,26 @@ def _write_checkpoint(out_path, acc, meta, const):
     return summary
 
 
+def resume_state(out_path):
+    """Columns + per-job meta already on disk for ``out_path``, or ``({}, [])`` if it is new.
+
+    The job list is a pure function of (n, seed, envelope), so the first ``len(meta)`` entries of a
+    re-sampled list are exactly the ones already run: resuming is just skipping that prefix and
+    appending. That is what makes a 16-hour campaign safe to stop and restart at will.
+    """
+    npz_path, json_path = out_path + ".npz", out_path + ".json"
+    if not (os.path.exists(npz_path) and os.path.exists(json_path)):
+        return {}, []
+    with open(json_path) as f:
+        meta = json.load(f).get("jobs", [])
+    z = np.load(npz_path)
+    acc = {k: [z[k]] for k in z.files}                # one chunk; later batches append to it
+    return acc, meta
+
+
 def generate_dataset(jobs, out_path, const=HingeConstants(), *, n_parallel=9, timeout=300,
-                     batch_size=50, root="/tmp/hinge_campaign", fracture_margin=1.1):
+                     batch_size=50, root="/tmp/hinge_campaign", fracture_margin=1.1,
+                     resume=False):
     """Run the campaign in BATCHES, checkpointing the cumulative dataset after each batch.
 
     Overnight-safe: a crash / machine-sleep loses at most one in-flight batch — everything parsed
@@ -203,13 +221,34 @@ def generate_dataset(jobs, out_path, const=HingeConstants(), *, n_parallel=9, ti
     run_jobs (a failed/timed-out job returns None and is skipped), so one bad simulation never
     aborts the campaign. Batching also overlaps the serial gmsh meshing with parallel solves
     instead of meshing all N up front.
+
+    ``resume``: continue an interrupted run, skipping the jobs already on disk. Pass the SAME
+    ``n``/``seed``/envelope, since the job list must regenerate identically for the prefix to line
+    up. Without it an existing dataset at ``out_path`` would be silently overwritten from job 0.
     """
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
-    acc, meta, n = {}, [], len(jobs)
+    acc, meta = resume_state(out_path) if resume else ({}, [])
+    n, done = len(jobs), len(meta)
+    if done:
+        if done >= n:
+            print(f"  resume: all {done} jobs already on disk -- nothing to do")
+            return _write_checkpoint(out_path, acc, meta, const)
+        print(f"  resume: {done}/{n} jobs already on disk, continuing from job {done}", flush=True)
     n_batches = -(-n // batch_size)
     for bi, b0 in enumerate(range(0, n, batch_size)):
+        if b0 + batch_size <= done:                   # whole batch already on disk
+            continue
+        if b0 < done:
+            # A checkpoint is only written after a COMPLETE batch, so this is rare (it needs a
+            # dataset written with a different batch_size). Redo the batch whole rather than splice
+            # a partial one: drop the rows and meta of every job at or beyond b0 first.
+            cut = sum(m.get("n_samples", 0) for m in meta if m["job_id"] >= b0)
+            meta = [m for m in meta if m["job_id"] < b0]
+            if cut:
+                acc = {k: [np.concatenate(v)[:-cut]] for k, v in acc.items()}
         responses = run_jobs(jobs[b0:b0 + batch_size], const, n_parallel=n_parallel,
-                             timeout=timeout, root=root, fracture_margin=fracture_margin)
+                             timeout=timeout, root=f"{root}/b{bi:04d}",
+                             fracture_margin=fracture_margin)
         cols, bmeta = responses_to_columns(responses, const, job_id_offset=b0)
         for k, v in cols.items():
             acc.setdefault(k, []).append(v)

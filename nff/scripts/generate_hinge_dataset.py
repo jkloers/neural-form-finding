@@ -112,7 +112,7 @@ def run_campaign(args):
           f"eps_f={const.eps_f}  -> {args.out}.npz")
     summary = generate_dataset(jobs, args.out, const, n_parallel=args.parallel,
                                timeout=args.timeout, batch_size=args.batch_size,
-                               fracture_margin=args.fracture_margin)
+                               fracture_margin=args.fracture_margin, resume=args.resume)
     print(f"  jobs usable   : {summary['n_usable']}/{summary['n_jobs']}  "
           f"({summary['n_errored']} errored, {summary['n_finished_to_cap']} survived to cap)")
     print(f"  samples       : {summary['n_samples']}  "
@@ -144,6 +144,9 @@ def main():
     ap.add_argument("--path-prior", dest="path_prior", default=None,
                     help="harvest dir to take the sampling ENVELOPE from (physical mm). Without it "
                          "the legacy eta box is used, which excludes compression entirely.")
+    ap.add_argument("--resume", action="store_true",
+                    help="continue an interrupted campaign at <out>, skipping the jobs already on "
+                         "disk; pass the SAME --n/--seed so the job list regenerates identically")
     ap.add_argument("--max-load", dest="max_load", type=float, default=300.0,
                     help="drop harvest examples pulled harder than this [N]; the envelope width is "
                          "otherwise set by a grip-ceiling calibration, not by the mechanism")
