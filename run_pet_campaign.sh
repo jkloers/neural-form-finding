@@ -38,7 +38,7 @@ run() {
       --path-prior "$PRIOR" --max-load 300 \
       --n "$N" --seed "$SEED" --steps "$STEPS" \
       --parallel "$PARALLEL" --batch-size "$BATCH" --timeout "$TIMEOUT" \
-      --deg-per-step "$DEG_PER_STEP" \
+      --deg-per-step "$DEG_PER_STEP" --no-fracture-stop \
       --out "$OUT" "$@" >> "$LOG" 2>&1 &
   echo $! > "$PIDFILE"
   echo "launched pid $(cat $PIDFILE)  ->  $LOG"

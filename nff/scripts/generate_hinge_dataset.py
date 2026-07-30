@@ -84,7 +84,8 @@ def run_campaign(args):
     const = HingeConstants(fillet_ratio=args.fillet_ratio, n_through=args.n_through,
                            thickness=args.thickness, r_win=args.r_win, material=args.material,
                            lc_fillet_frac=args.lc_fillet_frac, lc_min_floor=args.lc_min_floor,
-                           el_fields=args.el_fields)
+                           el_fields=args.el_fields,
+                           stop_at_fracture=not args.no_fracture_stop)
     if args.path_prior:
         # aim at the region the deployed sheet actually visits, in PHYSICAL mm -- see nff.rve.path_prior
         env = measure_envelope(args.path_prior, q=args.envelope_trim,
@@ -172,6 +173,12 @@ def main():
     ap.add_argument("--thickness", type=float, default=1.0, help="sheet gauge [mm]; 1.0-2.0 = laser-cut standard")
     ap.add_argument("--eta-a-max", dest="eta_a_max", type=float, default=1.0, help="max axial neck-strain ratio a/w_lig")
     ap.add_argument("--eta-s-max", dest="eta_s_max", type=float, default=0.7, help="max |shear| neck-strain ratio s/w_lig")
+    ap.add_argument("--no-fracture-stop", dest="no_fracture_stop", action="store_true",
+                    help="skip the .frd fracture poll. It re-parses the file every few seconds in "
+                         "PURE PYTHON from every worker thread, so at high --parallel it saturates "
+                         "the GIL: the timeout check cannot run often enough to fire (jobs overran "
+                         "1800 s by 5x) and ccx loses a core. For a ductile material it can never "
+                         "fire anyway -- PET folds peak near 11% of eps_f.")
     ap.add_argument("--fracture-margin", dest="fracture_margin", type=float, default=1.1,
                     help="stop-at-fracture threshold x eps_f; raise (e.g. 2.5) to run PAST first fracture (D regime)")
     # smoothness knobs (energy jitter across geometries)
