@@ -178,7 +178,7 @@ def main():
                          "PURE PYTHON from every worker thread, so at high --parallel it saturates "
                          "the GIL: the timeout check cannot run often enough to fire (jobs overran "
                          "1800 s by 5x) and ccx loses a core. For a ductile material it can never "
-                         "fire anyway -- PET folds peak near 11% of eps_f.")
+                         "fire anyway -- PET folds peak near 11%% of eps_f.")
     ap.add_argument("--fracture-margin", dest="fracture_margin", type=float, default=1.1,
                     help="stop-at-fracture threshold x eps_f; raise (e.g. 2.5) to run PAST first fracture (D regime)")
     # smoothness knobs (energy jitter across geometries)
