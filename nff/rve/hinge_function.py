@@ -70,6 +70,14 @@ class HingeConstants:
     imp_amp: float | None = None                      # out-of-plane buckle seed [mm]; None -> 0.3*t
     min_inc: float = 1e-3                             # min load increment (smaller babies through snaps)
     stabilize: float | None = None                    # *STATIC,STABILIZE damping past buckling (uz-only)
+    arcB_uz_free: bool = False                        # leave the driven arc free out of plane
+    field_freq: int = 1000                            # *NODE/EL FILE FREQUENCY -> 1 frame per state
+    el_fields: str | None = None                      # *EL FILE list; None -> the material's own
+    stop_at_fracture: bool = True                     # poll the .frd and kill ccx past eps_f
+    # ^ worth it for a brittle material, where it skips the deep-plastic grind past rupture. For a
+    # ductile one it is pure cost: PET folds peak near PEEQ 0.4 against eps_f 1.784, so the poll can
+    # never fire, yet it re-parses the whole (growing) .frd every few seconds in Python under the
+    # GIL, once per worker. Set False for a PET campaign; `eps_f` still labels the regime.
 
     def __post_init__(self):
         # normalise the material once, and take eps_f from it unless explicitly overridden -- so a
@@ -121,10 +129,59 @@ class DeploymentRay:
     eta_s: float = 0.0                                # shear neck-strain ratio: s1 = eta_s * w_lig
     n_steps: int = 20
     tag: str = ""
+    free_dofs: tuple = ()                             # subset of {"a","s"} left UNPRESCRIBED
+    # ^ with free DOF the arc is driven through a *RIGID BODY reference node on the pivot and the
+    # solver picks the translation that minimises energy at each imposed rotation -- a least-energy
+    # route from the physics, not one inherited from the ROM. eta_a/eta_s are then ignored.
 
     def targets(self, geo: HingeGeometry):
         """(a1, s1, theta1_deg) full-deployment handle motion for this geometry."""
         return self.eta_a * geo.w_lig, self.eta_s * geo.w_lig, self.theta1_deg
+
+    def states(self, geo: HingeGeometry) -> np.ndarray:
+        """(n_steps, 3) kinematic states (a, s, theta[rad]) driven into the oracle."""
+        a1, s1, theta1_deg = self.targets(geo)
+        dth = np.radians(theta1_deg) / self.n_steps
+        return np.array([(a1 * (k + 1) / self.n_steps, s1 * (k + 1) / self.n_steps, (k + 1) * dth)
+                         for k in range(self.n_steps)], float)
+
+
+@dataclass(frozen=True)
+class DeploymentPath:
+    """An arbitrary measured polyline ``u(k) = (a, s, theta)``, replayed state by state.
+
+    The oracle is elastoplastic, so ``W`` is a path-dependent work rather than a potential: two
+    routes to the same endpoint do not carry the same energy or the same accumulated damage. A
+    surrogate fitted as a state function ``W(a, s, theta)`` is therefore only legitimate if it is
+    trained along paths resembling the ones the deployed sheet actually rides -- hence replay of
+    the harvested polylines (``nff.closed.path_dataset``) instead of proportional rays.
+
+    ``polyline`` is PHYSICAL: (a, s) in mm, theta in rad, one row per state, origin NOT included
+    (the undeformed state is implicit at t = 0).
+    """
+    polyline: np.ndarray                              # (n_steps, 3) = (a[mm], s[mm], theta[rad])
+    tag: str = ""
+
+    def __post_init__(self):
+        object.__setattr__(self, "polyline", np.asarray(self.polyline, float).reshape(-1, 3))
+
+    @property
+    def n_steps(self) -> int:
+        return len(self.polyline)
+
+    @property
+    def theta1_deg(self) -> float:
+        """Peak rotation along the path [deg] -- the campaign's rotation-depth descriptor."""
+        return float(np.degrees(np.max(self.polyline[:, 2])))
+
+    def targets(self, geo: HingeGeometry):
+        """(a, s, theta_deg) of the FINAL state -- the endpoint this path arrives at."""
+        a1, s1, th1 = self.polyline[-1]
+        return float(a1), float(s1), float(np.degrees(th1))
+
+    def states(self, geo: HingeGeometry) -> np.ndarray:
+        """(n_steps, 3) kinematic states -- the measured polyline, verbatim."""
+        return self.polyline
 
 
 @dataclass
@@ -135,7 +192,7 @@ class HingeResponse:
     Kinematics ``u = (a, s, theta)``; conjugate forces ``F = (F_a, F_s, M_theta)``.
     """
     geo: HingeGeometry
-    ray: DeploymentRay
+    ray: DeploymentRay | DeploymentPath
     const: HingeConstants
     # kinematics u
     a: np.ndarray
@@ -147,7 +204,7 @@ class HingeResponse:
     F_a: np.ndarray
     F_s: np.ndarray
     M_theta: np.ndarray                               # dW/du by the envelope theorem
-    damage: np.ndarray                                # Delta = <PEEQ>_lig / eps_f (nff.rve.damage)
+    damage: np.ndarray                                # Delta = sum_window V*PEEQ / (V_lig*eps_f)
     peeq_lig: np.ndarray                              # hottest ligament element -- the tear indicator
     eta_mean_lig: np.ndarray                          # <eta> over the ligament (diagnostic)
     uz_max: np.ndarray                                # out-of-plane amplitude [mm]
@@ -156,6 +213,9 @@ class HingeResponse:
     n_elems: int
     ok: bool
     failure_theta_deg: float                          # first theta with regime==FAILED (nan if survives)
+    stop_reason: str = "unknown"                      # completed | fractured | diverged | timeout
+    # ^ a truncated job still contributes its solved increments, so without this the fraction of the
+    # dataset that stopped early -- and WHY -- is unrecoverable after the run.
 
     @property
     def n_samples(self) -> int:
@@ -195,9 +255,14 @@ def solver_kwargs(geo: HingeGeometry, ray: DeploymentRay, const: HingeConstants)
     """
     a1, s1, theta1_deg = ray.targets(geo)
     rho = geo.rho(const)
-    return dict(angle_deg=theta1_deg, n_steps=ray.n_steps, a=a1, s=s1,
+    # Always drive the oracle from an explicit state list, so a DeploymentRay and a replayed
+    # DeploymentPath take the SAME code path (the ray's states are the proportional ramp).
+    return dict(angle_deg=theta1_deg, n_steps=ray.n_steps, a=a1, s=s1, states=ray.states(geo),
+                free_dofs=tuple(getattr(ray, "free_dofs", ())),
                 n_through=const.n_through, material=const.material,
                 imp_amp=const.imp_amp, min_inc=const.min_inc, stabilize=const.stabilize,
+                arcB_uz_free=const.arcB_uz_free, field_freq=const.field_freq,
+                el_fields=const.el_fields,
                 lc_min=max(const.lc_fillet_frac * rho, const.lc_min_floor),
                 lc_max=const.r_win / 5.0)
 
@@ -215,9 +280,9 @@ def classify_regime(peeq_lig: np.ndarray, eps_f: float) -> np.ndarray:
 def assemble_response(geo, ray, const, parsed) -> HingeResponse:
     """Turn a parsed CalculiX result into aligned samples of the constitutive map.
 
-    The imposed motion is a proportional ramp, so at fold fraction ``frac = theta/theta1``
-    the handle DOF are ``a = a1*frac``, ``s = s1*frac`` -- recovered here so every sample
-    carries its full ``u = (a, s, theta)``.
+    ``(a, s)`` come from the states actually imposed (``parse_job`` interpolates the driven state
+    list onto the solved increments), so a replayed polyline is labelled by its real route rather
+    than by a proportionality that only holds for a straight ray.
     """
     theta_deg = np.asarray(parsed["theta_deg"], float)
     # align every field to the common number of solved increments (guards ragged parses)
@@ -227,9 +292,12 @@ def assemble_response(geo, ray, const, parsed) -> HingeResponse:
     W, F_a, F_s, M_theta, damage, peeq_lig, eta_mean_lig, uz_max = (
         np.asarray(parsed[k], float)[:n] for k in fields)
 
-    a1, s1, theta1_deg = ray.targets(geo)
-    frac = theta_deg / theta1_deg if theta1_deg else np.zeros(n)
-    a, s = a1 * frac, s1 * frac
+    if parsed.get("a") is not None:
+        a, s = np.asarray(parsed["a"], float)[:n], np.asarray(parsed["s"], float)[:n]
+    else:                                             # legacy parse without imposed-state labels
+        a1, s1, theta1_deg = ray.targets(geo)
+        frac = theta_deg / theta1_deg if theta1_deg else np.zeros(n)
+        a, s = a1 * frac, s1 * frac
     theta = np.radians(theta_deg)
 
     regime = classify_regime(peeq_lig, const.eps_f)
@@ -241,6 +309,7 @@ def assemble_response(geo, ray, const, parsed) -> HingeResponse:
                          damage=damage, peeq_lig=peeq_lig, eta_mean_lig=eta_mean_lig,
                          uz_max=uz_max, regime=regime,
                          n_elems=int(parsed.get("n_elems", 0)), ok=bool(parsed.get("ok", False)),
+                         stop_reason=str(parsed.get("stop_reason", "unknown")),
                          failure_theta_deg=failure_theta)
 
 
@@ -254,7 +323,8 @@ def evaluate_hinge(geo: HingeGeometry, ray: DeploymentRay,
     The dataset campaign (``nff.rve.dataset``) is nothing but this, phased over many
     hinges for speed; it reuses ``solver_kwargs`` and ``assemble_response`` verbatim.
     """
-    parsed = deploy(to_rve_params(geo, const), timeout=timeout, eps_f=const.eps_f,
+    parsed = deploy(to_rve_params(geo, const), timeout=timeout,
+                    eps_f=const.eps_f if const.stop_at_fracture else None,
                     ncpus=ncpus,
                     workdir=workdir or f"/tmp/hinge/{geo.tag}_{ray.tag or 't'}",
                     **solver_kwargs(geo, ray, const))

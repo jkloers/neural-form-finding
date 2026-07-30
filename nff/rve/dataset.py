@@ -13,8 +13,11 @@ Speed: gmsh is not thread-safe, so we phase the batch -- build all decks SERIALL
 ``ccx`` solves in PARALLEL (each an external subprocess), parse SERIALLY.
 """
 
+import itertools
 import json
 import os
+import shutil
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 
@@ -81,7 +84,7 @@ def sample_jobs(n, seed=0, *, w_lig=(1.0, 10.0), alpha_deg=(30.0, 150.0),
 # ── parallel evaluation ───────────────────────────────────────────────────────────
 
 def run_jobs(jobs, const=HingeConstants(), *, n_parallel=6, timeout=900,
-             root="/tmp/hinge_campaign", fracture_margin=1.1):
+             root="/tmp/hinge_campaign", fracture_margin=1.1, keep_scratch=False, progress=False):
     """Evaluate many (geometry, ray) jobs -> list[HingeResponse | None].
 
     Phased: prepare (serial, gmsh) -> solve (parallel, ccx subprocess) -> parse (serial).
@@ -91,20 +94,33 @@ def run_jobs(jobs, const=HingeConstants(), *, n_parallel=6, timeout=900,
     metas = []                                                    # phase 1: decks (serial)
     for i, (geo, ray) in enumerate(jobs):
         try:
-            metas.append(prepare_job(to_rve_params(geo, const),
-                                     workdir=f"{root}/job{i:05d}",
-                                     **solver_kwargs(geo, ray, const)))
+            m = prepare_job(to_rve_params(geo, const), workdir=f"{root}/job{i:05d}",
+                            **solver_kwargs(geo, ray, const))
+            m["label"] = (f"{'spine' if getattr(ray, 'free_dofs', ()) else 'fan  '} "
+                          f"w{geo.w_lig:5.1f} a{geo.alpha_deg:5.1f} th{ray.theta1_deg:5.1f} "
+                          f"{len(m['conn'])}el")
+            metas.append(m)
         except Exception as e:
             metas.append({"error": f"prepare: {type(e).__name__}: {e}"})
+
+    counter = itertools.count(1)                                  # GIL makes next() atomic enough
 
     def _solve(m):                                                # phase 2: solve (parallel)
         if "error" in m:
             return ""
+        t0 = time.time()
         try:
-            return solve_job(m, ncpus=1, timeout=timeout, eps_f=const.eps_f,
-                             fracture_margin=fracture_margin).stdout
+            out = solve_job(m, ncpus=1, timeout=timeout,
+                            eps_f=const.eps_f if const.stop_at_fracture else None,
+                            fracture_margin=fracture_margin).stdout
         except Exception:
-            return ""                                             # parse whatever completed
+            m["stop_reason"] = "timeout"
+            out = ""                                              # parse whatever completed
+        if progress:
+            # Batches take ~40 min, so without this the run looks hung between checkpoints.
+            print(f"      [{next(counter):3d}/{len(metas)}] {m.get('label', '?')}  "
+                  f"{time.time() - t0:5.0f}s  {m.get('stop_reason', '?')}", flush=True)
+        return out
     with ThreadPoolExecutor(max_workers=n_parallel) as ex:
         stdouts = list(ex.map(_solve, metas))
 
@@ -116,6 +132,13 @@ def run_jobs(jobs, const=HingeConstants(), *, n_parallel=6, timeout=900,
             out.append(assemble_response(geo, ray, const, parse_job(m, so)))
         except Exception:
             out.append(None)
+        finally:
+            # Drop the CalculiX scratch as soon as it has been reduced to columns. Nothing
+            # downstream reads it, and an overnight campaign left to accumulate .frd files fills
+            # the disk long before it finishes -- which surfaces as a wave of unexplained job
+            # failures late in the run, not as an obvious out-of-space error.
+            if keep_scratch is False:
+                shutil.rmtree(m.get("workdir", ""), ignore_errors=True)
     return out
 
 
@@ -133,7 +156,11 @@ def responses_to_columns(responses, const, job_id_offset=0):
     for local, r in enumerate(responses):
         job_id = job_id_offset + local
         if r is None or r.n_samples == 0:
-            meta.append(dict(job_id=job_id, ok=False)); continue
+            # A job that produced NO rows still has a reason, and it is the one that matters most:
+            # these are the deep folds that died at the buckling bifurcation. Without carrying it
+            # here the manifest under-reports divergences (batch 1 logged 6, the summary said 2).
+            meta.append(dict(job_id=job_id, ok=False,
+                             stop_reason=getattr(r, "stop_reason", "parse_failed"))); continue
         desc = descriptor(r.geo, const)
         keys = list(desc) + _KIN + _RESP + _AUX + ["job_id"]
         n = r.n_samples
@@ -142,11 +169,15 @@ def responses_to_columns(responses, const, job_id_offset=0):
                "job_id": np.full(n, job_id)}
         for k in keys:
             cols.setdefault(k, []).append(np.asarray(row[k]))
-        meta.append(dict(job_id=job_id, ok=r.ok, tag=r.geo.tag, n_samples=n,
+        meta.append(dict(job_id=job_id, ok=r.ok, stop_reason=r.stop_reason, tag=r.geo.tag,
+                         n_samples=n,
                          failure_theta_deg=r.failure_theta_deg,
                          damage_at_tear=r.damage_at_tear,
                          w_lig=r.geo.w_lig, alpha_deg=r.geo.alpha_deg,
-                         eta_a=r.ray.eta_a, eta_s=r.ray.eta_s, theta1_deg=r.ray.theta1_deg))
+                         # a DeploymentPath has no eta_a/eta_s -- it carries a polyline, not a ray
+                         eta_a=getattr(r.ray, "eta_a", float("nan")),
+                         eta_s=getattr(r.ray, "eta_s", float("nan")),
+                         theta1_deg=r.ray.theta1_deg))
     cols = {k: np.concatenate(v) for k, v in cols.items()}
     return cols, meta
 
@@ -161,7 +192,11 @@ def _write_checkpoint(out_path, acc, meta, const):
     # hottest ligament element first reaches eps_f, pooled over every job that actually tore.
     tears = np.array([m["damage_at_tear"] for m in meta if np.isfinite(m.get("damage_at_tear", np.nan))])
     const_json = {**asdict(const), "material": coerce_material(const.material).name}
+    stops = {}
+    for m in meta:                                    # why each job ended -- see HingeResponse
+        stops[m.get("stop_reason", "unknown")] = stops.get(m.get("stop_reason", "unknown"), 0) + 1
     summary = dict(n_jobs=len(meta), n_usable=n_usable, n_errored=len(meta) - n_usable,
+                   stop_reasons=stops,
                    n_finished_to_cap=sum(m.get("ok", False) for m in meta),  # survived without fracture
                    n_samples=int(len(regime)),
                    n_elastic=int((regime == 0).sum()), n_plastic=int((regime == 1).sum()),
@@ -176,8 +211,26 @@ def _write_checkpoint(out_path, acc, meta, const):
     return summary
 
 
+def resume_state(out_path):
+    """Columns + per-job meta already on disk for ``out_path``, or ``({}, [])`` if it is new.
+
+    The job list is a pure function of (n, seed, envelope), so the first ``len(meta)`` entries of a
+    re-sampled list are exactly the ones already run: resuming is just skipping that prefix and
+    appending. That is what makes a 16-hour campaign safe to stop and restart at will.
+    """
+    npz_path, json_path = out_path + ".npz", out_path + ".json"
+    if not (os.path.exists(npz_path) and os.path.exists(json_path)):
+        return {}, []
+    with open(json_path) as f:
+        meta = json.load(f).get("jobs", [])
+    z = np.load(npz_path)
+    acc = {k: [z[k]] for k in z.files}                # one chunk; later batches append to it
+    return acc, meta
+
+
 def generate_dataset(jobs, out_path, const=HingeConstants(), *, n_parallel=9, timeout=300,
-                     batch_size=50, root="/tmp/hinge_campaign", fracture_margin=1.1):
+                     batch_size=50, root="/tmp/hinge_campaign", fracture_margin=1.1,
+                     resume=False, progress=True):
     """Run the campaign in BATCHES, checkpointing the cumulative dataset after each batch.
 
     Overnight-safe: a crash / machine-sleep loses at most one in-flight batch — everything parsed
@@ -185,19 +238,46 @@ def generate_dataset(jobs, out_path, const=HingeConstants(), *, n_parallel=9, ti
     run_jobs (a failed/timed-out job returns None and is skipped), so one bad simulation never
     aborts the campaign. Batching also overlaps the serial gmsh meshing with parallel solves
     instead of meshing all N up front.
+
+    ``resume``: continue an interrupted run, skipping the jobs already on disk. Pass the SAME
+    ``n``/``seed``/envelope, since the job list must regenerate identically for the prefix to line
+    up. Without it an existing dataset at ``out_path`` would be silently overwritten from job 0.
     """
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
-    acc, meta, n = {}, [], len(jobs)
+    acc, meta = resume_state(out_path) if resume else ({}, [])
+    n, done = len(jobs), len(meta)
+    if done:
+        if done >= n:
+            print(f"  resume: all {done} jobs already on disk -- nothing to do")
+            return _write_checkpoint(out_path, acc, meta, const)
+        print(f"  resume: {done}/{n} jobs already on disk, continuing from job {done}", flush=True)
     n_batches = -(-n // batch_size)
+    t_start = time.time()
     for bi, b0 in enumerate(range(0, n, batch_size)):
+        if b0 + batch_size <= done:                   # whole batch already on disk
+            continue
+        if b0 < done:
+            # A checkpoint is only written after a COMPLETE batch, so this is rare (it needs a
+            # dataset written with a different batch_size). Redo the batch whole rather than splice
+            # a partial one: drop the rows and meta of every job at or beyond b0 first.
+            cut = sum(m.get("n_samples", 0) for m in meta if m["job_id"] >= b0)
+            meta = [m for m in meta if m["job_id"] < b0]
+            if cut:
+                acc = {k: [np.concatenate(v)[:-cut]] for k, v in acc.items()}
         responses = run_jobs(jobs[b0:b0 + batch_size], const, n_parallel=n_parallel,
-                             timeout=timeout, root=root, fracture_margin=fracture_margin)
+                             timeout=timeout, root=f"{root}/b{bi:04d}",
+                             fracture_margin=fracture_margin, progress=progress)
         cols, bmeta = responses_to_columns(responses, const, job_id_offset=b0)
         for k, v in cols.items():
             acc.setdefault(k, []).append(v)
         meta += bmeta
         summary = _write_checkpoint(out_path, acc, meta, const)   # checkpoint after every batch
+        el = time.time() - t_start
+        did = b0 + len(bmeta) - done
+        eta = el / max(did, 1) * (n - b0 - len(bmeta))
         print(f"  batch {bi + 1}/{n_batches}  ({b0 + len(bmeta)}/{n} jobs): "
               f"{summary['n_usable']} usable, {summary['n_errored']} errored, "
-              f"{summary['n_samples']} samples -> checkpointed", flush=True)
+              f"{summary['n_samples']} samples  |  {el / 3600:.2f} h elapsed, "
+              f"~{eta / 3600:.1f} h left ({3600 * did / max(el, 1):.0f} jobs/h) -> checkpointed",
+              flush=True)
     return summary if meta else _write_checkpoint(out_path, acc, meta, const)

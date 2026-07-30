@@ -20,6 +20,7 @@ import numpy as np
 from nff.rve.hinge_function import (HingeConstants, HingeGeometry, DeploymentRay, REGIME_NAME,
                                     evaluate_hinge)
 from nff.rve.dataset import sample_jobs, generate_dataset, run_jobs
+from nff.rve.path_prior import measure_envelope, sample_campaign_jobs
 
 
 # ── rehearsal: determine rho = c * w_lig and check alpha robustness ────────────────
@@ -82,19 +83,39 @@ def run_rehearsal(parallel, timeout):
 def run_campaign(args):
     const = HingeConstants(fillet_ratio=args.fillet_ratio, n_through=args.n_through,
                            thickness=args.thickness, r_win=args.r_win, material=args.material,
-                           lc_fillet_frac=args.lc_fillet_frac, lc_min_floor=args.lc_min_floor)
-    jobs = sample_jobs(args.n, seed=args.seed, n_steps=args.steps,
-                       theta1_deg=(args.angle, args.angle),
-                       w_lig=(args.w_lig_min, args.w_lig_max),
-                       eta_a=(0.0, args.eta_a_max), eta_s=(-args.eta_s_max, args.eta_s_max),
-                       fillet_ratio=(args.fillet_min, args.fillet_max), spine_frac=args.spine_frac)
-    print(f"Campaign: {args.n} jobs (t={const.thickness}mm, w_lig=[{args.w_lig_min},{args.w_lig_max}]mm, "
-          f"fillet=[{args.fillet_min},{args.fillet_max}], n_through={const.n_through}, to {args.angle:.0f}deg, "
-          f"eta_a<={args.eta_a_max} |eta_s|<={args.eta_s_max}, fracture_margin={args.fracture_margin}) "
-          f"-> {args.out}.npz")
+                           lc_fillet_frac=args.lc_fillet_frac, lc_min_floor=args.lc_min_floor,
+                           el_fields=args.el_fields,
+                           stop_at_fracture=not args.no_fracture_stop)
+    if args.path_prior:
+        # aim at the region the deployed sheet actually visits, in PHYSICAL mm -- see nff.rve.path_prior
+        env = measure_envelope(args.path_prior, q=args.envelope_trim,
+                               max_load_N=args.max_load)
+        jobs = sample_campaign_jobs(args.n, env, seed=args.seed, n_steps=args.steps,
+                                    w_lig=(args.w_lig_min, args.w_lig_max),
+                                    fillet_ratio=args.fillet_ratio, spine_frac=args.spine_frac,
+                                    deg_per_step=args.deg_per_step,
+                                    inflate_frac=args.inflate_frac, inflate=args.inflate)
+        print(f"Campaign: {args.n} jobs aimed at {env.source} ({env.n_points} measured points)")
+        print(f"  envelope  a [{env.a[0]:+.2f}, {env.a[1]:+.2f}] mm   s [{env.s[0]:+.2f}, "
+              f"{env.s[1]:+.2f}] mm   theta [0, {env.theta_deg[1]:.1f}] deg   "
+              f"alpha [{env.alpha_deg[0]:.0f}, {env.alpha_deg[1]:.0f}] deg")
+        print(f"  {args.spine_frac:.0%} free-DOF spine (theta driven, a & s chosen by the solver) + "
+              f"fan, {args.inflate_frac:.0%} of it over a x{args.inflate:g} envelope")
+    else:
+        jobs = sample_jobs(args.n, seed=args.seed, n_steps=args.steps,
+                           theta1_deg=(args.angle, args.angle),
+                           w_lig=(args.w_lig_min, args.w_lig_max),
+                           eta_a=(0.0, args.eta_a_max), eta_s=(-args.eta_s_max, args.eta_s_max),
+                           fillet_ratio=(args.fillet_min, args.fillet_max),
+                           spine_frac=args.spine_frac)
+        print(f"Campaign: {args.n} jobs on the LEGACY eta box "
+              f"(eta_a<={args.eta_a_max} |eta_s|<={args.eta_s_max}, to {args.angle:.0f}deg)")
+    print(f"  t={const.thickness}mm  w_lig=[{args.w_lig_min},{args.w_lig_max}]mm  "
+          f"r_win={const.r_win}mm  n_through={const.n_through}  material={const.material.name}  "
+          f"eps_f={const.eps_f}  -> {args.out}.npz")
     summary = generate_dataset(jobs, args.out, const, n_parallel=args.parallel,
                                timeout=args.timeout, batch_size=args.batch_size,
-                               fracture_margin=args.fracture_margin)
+                               fracture_margin=args.fracture_margin, resume=args.resume)
     print(f"  jobs usable   : {summary['n_usable']}/{summary['n_jobs']}  "
           f"({summary['n_errored']} errored, {summary['n_finished_to_cap']} survived to cap)")
     print(f"  samples       : {summary['n_samples']}  "
@@ -102,6 +123,8 @@ def run_campaign(args):
     dt = summary["delta_tear"]
     print(f"  Delta_tear    : {'—  (nothing tore)' if dt is None else f'{dt:.3f}'}"
           f"  (n={summary['n_tear_observations']} torn jobs)   <- the calibrated fracture line")
+    print(f"  stopped       : " + "  ".join(f"{k} {v}" for k, v in
+                                             sorted(summary.get("stop_reasons", {}).items())))
     print(f"  wrote {args.out}.npz + {args.out}.json")
 
 
@@ -121,7 +144,27 @@ def main():
     ap.add_argument("--angle", type=float, default=60.0, help="full-deployment rotation [deg]")
     ap.add_argument("--fillet-ratio", dest="fillet_ratio", type=float, default=0.16)
     ap.add_argument("--n-through", dest="n_through", type=int, default=2)
-    ap.add_argument("--material", default="steel", choices=["steel", "pet", "paper"],
+    ap.add_argument("--path-prior", dest="path_prior", default=None,
+                    help="harvest dir to take the sampling ENVELOPE from (physical mm). Without it "
+                         "the legacy eta box is used, which excludes compression entirely.")
+    ap.add_argument("--deg-per-step", dest="deg_per_step", type=float, default=2.5,
+                    help="rotation per *STEP; steps are set per job so the first bite does not "
+                         "scale with the target angle (--steps is the cap)")
+    ap.add_argument("--resume", action="store_true",
+                    help="continue an interrupted campaign at <out>, skipping the jobs already on "
+                         "disk; pass the SAME --n/--seed so the job list regenerates identically")
+    ap.add_argument("--max-load", dest="max_load", type=float, default=300.0,
+                    help="drop harvest examples pulled harder than this [N]; the envelope width is "
+                         "otherwise set by a grip-ceiling calibration, not by the mechanism")
+    ap.add_argument("--envelope-trim", dest="envelope_trim", type=float, default=0.5,
+                    help="percent trimmed off each tail of the measured envelope")
+    ap.add_argument("--inflate", type=float, default=1.5,
+                    help="extrapolation margin on the translation axes (theta is capped at 90 deg)")
+    ap.add_argument("--inflate-frac", dest="inflate_frac", type=float, default=0.30,
+                    help="fraction of FAN jobs drawn from the inflated envelope")
+    ap.add_argument("--el-fields", dest="el_fields", default="PEEQ, S",
+                    help="*EL FILE list; the default drops E (parsed but never reaches a column)")
+    ap.add_argument("--material", required=True, choices=["steel", "pet", "paper"],
                     help="RVE material; sets the constitutive cards AND eps_f (the damage "
                          "normaliser and the stop-at-fracture threshold)")
     # geometry + displacement envelope (exposed so a deeper campaign is one command)
@@ -130,6 +173,12 @@ def main():
     ap.add_argument("--thickness", type=float, default=1.0, help="sheet gauge [mm]; 1.0-2.0 = laser-cut standard")
     ap.add_argument("--eta-a-max", dest="eta_a_max", type=float, default=1.0, help="max axial neck-strain ratio a/w_lig")
     ap.add_argument("--eta-s-max", dest="eta_s_max", type=float, default=0.7, help="max |shear| neck-strain ratio s/w_lig")
+    ap.add_argument("--no-fracture-stop", dest="no_fracture_stop", action="store_true",
+                    help="skip the .frd fracture poll. It re-parses the file every few seconds in "
+                         "PURE PYTHON from every worker thread, so at high --parallel it saturates "
+                         "the GIL: the timeout check cannot run often enough to fire (jobs overran "
+                         "1800 s by 5x) and ccx loses a core. For a ductile material it can never "
+                         "fire anyway -- PET folds peak near 11%% of eps_f.")
     ap.add_argument("--fracture-margin", dest="fracture_margin", type=float, default=1.1,
                     help="stop-at-fracture threshold x eps_f; raise (e.g. 2.5) to run PAST first fracture (D regime)")
     # smoothness knobs (energy jitter across geometries)

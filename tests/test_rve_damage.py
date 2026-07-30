@@ -8,7 +8,7 @@ mesh-convergence (where the old whole-mesh p99 drifts), and intensivity.
 import numpy as np
 import pytest
 
-from nff.rve.damage import (LIG_RADIUS_FRAC, _ligament_average, element_volumes, ligament_elements,
+from nff.rve.damage import (LIG_RADIUS_FRAC, _region_average, element_volumes, ligament_elements,
                             mean_triaxiality, peak_peeq, plastic_damage, stress_triaxiality)
 
 
@@ -64,10 +64,17 @@ def _nodal(xyz, fn):
     return np.array([fn(x, y, z) for x, y, z in xyz], float)
 
 
-def test_uniform_field_is_exactly_peeq_over_eps_f():
+def test_uniform_field_over_the_ligament_is_exactly_peeq_over_eps_f():
     xyz, conn = unit_wedge_mesh()
     frame = {"PEEQ": np.full(len(xyz), 0.42)}
-    assert plastic_damage(frame, xyz, conn, 4.0, eps_f=2.0) == pytest.approx(0.21, rel=1e-12)
+    assert plastic_damage(frame, xyz, conn, 4.0, eps_f=2.0,
+                          region="ligament") == pytest.approx(0.21, rel=1e-12)
+
+    # Whole-window numerator over the SAME (ligament) denominator scales by the volume ratio, so a
+    # uniformly-yielded window reads higher than a uniformly-yielded ligament -- by construction.
+    vol = element_volumes(xyz, conn)
+    ratio = vol.sum() / vol[ligament_elements(xyz, conn, 4.0)].sum()
+    assert plastic_damage(frame, xyz, conn, 4.0, eps_f=2.0) == pytest.approx(0.21 * ratio, rel=1e-12)
 
 
 def test_absent_plastic_field_is_nan_not_zero():
@@ -88,7 +95,7 @@ def test_weighting_is_by_volume_not_by_element_count():
 
     peeq = _nodal(xyz, lambda x, y, z: 1.0 if y > -0.5 * w_lig else 0.0)
     vals = peeq[conn - 1].mean(axis=1)
-    got = plastic_damage({"PEEQ": peeq}, xyz, conn, w_lig, 1.0)
+    got = plastic_damage({"PEEQ": peeq}, xyz, conn, w_lig, 1.0, region="ligament")
 
     assert got == pytest.approx(float(np.dot(vol[mask], vals[mask]) / vol[mask].sum()), rel=1e-12)
     assert got != pytest.approx(float(vals[mask].mean()), rel=1e-6)     # NOT the unweighted mean
@@ -99,7 +106,7 @@ def test_elements_outside_the_ligament_are_ignored():
     w_lig = 4.0
     xyz, conn = unit_wedge_mesh(w_lig=w_lig)
     peeq = np.full(len(xyz), 0.3)
-    inside = plastic_damage({"PEEQ": peeq}, xyz, conn, w_lig, 1.0)
+    inside = plastic_damage({"PEEQ": peeq}, xyz, conn, w_lig, 1.0, region="ligament")
 
     far, far_conn = unit_wedge_mesh(w_lig=w_lig)          # a copy translated well clear of the disc
     far[:, 0] += 50.0
@@ -108,7 +115,8 @@ def test_elements_outside_the_ligament_are_ignored():
     peeq2 = np.concatenate([peeq, np.zeros(len(far))])    # pristine material out there
 
     assert ligament_elements(xyz2, conn2, w_lig).sum() == ligament_elements(xyz, conn, w_lig).sum()
-    assert plastic_damage({"PEEQ": peeq2}, xyz2, conn2, w_lig, 1.0) == pytest.approx(inside, rel=1e-12)
+    assert plastic_damage({"PEEQ": peeq2}, xyz2, conn2, w_lig, 1.0,
+                          region="ligament") == pytest.approx(inside, rel=1e-12)
 
 
 def test_smooth_plastic_band_converges_under_refinement():
@@ -164,8 +172,10 @@ def test_damage_is_intensive():
     small_xyz, small_conn = unit_wedge_mesh(w_lig=w_lig, n=8, thickness=0.5)
     big_xyz, big_conn = unit_wedge_mesh(w_lig=w_lig, n=8, thickness=1.5)     # 3x the volume
 
-    d_small = plastic_damage({"PEEQ": _nodal(small_xyz, peeq_of)}, small_xyz, small_conn, w_lig, 1.0)
-    d_big = plastic_damage({"PEEQ": _nodal(big_xyz, peeq_of)}, big_xyz, big_conn, w_lig, 1.0)
+    d_small = plastic_damage({"PEEQ": _nodal(small_xyz, peeq_of)}, small_xyz, small_conn, w_lig, 1.0,
+                             region="ligament")
+    d_big = plastic_damage({"PEEQ": _nodal(big_xyz, peeq_of)}, big_xyz, big_conn, w_lig, 1.0,
+                           region="ligament")
     assert d_big == pytest.approx(d_small, rel=1e-12)      # intensive
 
     total = lambda xyz, conn: float(np.dot(element_volumes(xyz, conn),
@@ -204,8 +214,10 @@ def test_mean_triaxiality_is_weighted_where_plasticity_actually_is():
     S[~tensile, 0] = -100.0                      # eta = -1/3
     peeq = np.where(tensile, 0.5, 0.0)           # only the tensile side has yielded
 
-    vol_weighted = _ligament_average(stress_triaxiality(S), xyz, conn, w_lig)
-    plastic_weighted = mean_triaxiality({"STRESS": S, "PEEQ": peeq}, xyz, conn, w_lig)
+    vol_weighted = _region_average(stress_triaxiality(S), xyz, conn,
+                                   ligament_elements(xyz, conn, w_lig))
+    plastic_weighted = mean_triaxiality({"STRESS": S, "PEEQ": peeq}, xyz, conn, w_lig,
+                                        region="ligament")
 
     # elements straddling y = yc carry nodes of both signs, so a step field smears a little short
     # of the exact +1/3 -- the claim is that it lands on the tensile state, not that it is exact
@@ -213,3 +225,45 @@ def test_mean_triaxiality_is_weighted_where_plasticity_actually_is():
     # the volume average all but cancels -- several times smaller, and nowhere near +1/3
     assert abs(vol_weighted) < 0.05
     assert abs(vol_weighted) < 0.2 * plastic_weighted
+
+
+def test_default_region_is_the_whole_window_not_the_ligament_disc():
+    """Delta sums plastic work over the whole RVE but normalises by the LIGAMENT volume.
+
+    User-directed 2026-07-28: the window is the hinge at the local scale, so every stress in it
+    counts; but dividing by the window volume would dilute Delta to ~1e-5 and kill the design-loss
+    term, so the denominator stays the hinge's own size.
+    """
+    w_lig = 4.0
+    xyz, conn = unit_wedge_mesh(w_lig=w_lig, n=6, grade=1.0)
+    vol = element_volumes(xyz, conn)
+    mask = ligament_elements(xyz, conn, w_lig)
+    assert not mask.all(), "mesh must extend beyond the ligament for this test to mean anything"
+
+    peeq = _nodal(xyz, lambda x, y, z: 1.0 if y > -0.5 * w_lig else 0.0)
+    vals = peeq[conn - 1].mean(axis=1)
+
+    whole = plastic_damage({"PEEQ": peeq}, xyz, conn, w_lig, 1.0)
+    disc = plastic_damage({"PEEQ": peeq}, xyz, conn, w_lig, 1.0, region="ligament")
+    # numerator over the whole window, denominator always the ligament volume
+    assert whole == pytest.approx(float(np.dot(vol, vals) / vol[mask].sum()), rel=1e-12)
+    assert whole > disc
+
+
+def test_whole_window_damage_counts_plasticity_the_disc_would_miss():
+    """A hot spot OUTSIDE the ligament disc must move Delta -- that is the point of the change."""
+    w_lig = 4.0
+    xyz, conn = unit_wedge_mesh(w_lig=w_lig, n=6, grade=1.0)
+    mask = ligament_elements(xyz, conn, w_lig)
+    cen = xyz[conn[:, :6] - 1].mean(axis=1)
+    dist = np.hypot(cen[:, 0], cen[:, 1] + 0.5 * w_lig)
+    far = cen[np.argmax(dist)]                                 # the element furthest from the disc
+
+    cold = _nodal(xyz, lambda x, y, z: 0.0)
+    hot = _nodal(xyz, lambda x, y, z: 1.0 if np.hypot(x - far[0], y - far[1]) < 0.2 * w_lig else 0.0)
+    assert hot.sum() > 0 and not mask.all()
+
+    whole = plastic_damage({"PEEQ": hot}, xyz, conn, w_lig, 1.0)
+    disc = plastic_damage({"PEEQ": hot}, xyz, conn, w_lig, 1.0, region="ligament")
+    assert whole > plastic_damage({"PEEQ": cold}, xyz, conn, w_lig, 1.0)
+    assert whole > 10.0 * disc                                 # the disc barely sees it

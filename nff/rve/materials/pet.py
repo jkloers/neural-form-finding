@@ -17,11 +17,13 @@ Calibration provenance (9 drawn specimens, MD+CD, 1 mm/min):
                see PET_PLASTIC. Validated on the w=18mm hinge (opening 319 vs 287 N exp); that
                validation is UNAFFECTED by the extension -- peak force lands at PEEQ 0.188,
                and PEEQ only passes 1.189 well past the peak, at a = 4.8 mm.
-    E          3.0 GPa -- MEASURED, not assumed. Raw crosshead reads ~1.0 GPa, but the load
-               train adds C = 7.77 um/N in series (calibrated against the hinge fillet-hole
-               video, ``nff.calibration.compliance``). Removing it and taking the INITIAL
-               tangent (1-5 MPa; PET bends away from linear within a few MPa) gives
-               3.02 +- 0.91 GPa over the 10 coupons.
+    E          2.5 GPa, from the COMPLIANCE-FREE video ladder (``nff.calibration.ladder``), which
+               reads 1.8-2.7 GPa across the coupons. The earlier "3.02 +- 0.91 GPa" is RETIRED: it
+               applied the HINGE fixture's series compliance (C = 7.77 um/N) to COUPON data, and C
+               is not a machine constant -- the same coupon also fits C = 4.81, and batch slopes
+               scatter +-11%, i.e. specimen seating varies by more than the correction. Low stakes
+               either way: E 3.0 -> 1.2 GPa moves the hinge force ~2%, the response being
+               plasticity-dominated.
     eps_f0     1.784 -- MEASURED (2026-07-27, n=1), no longer a floor. First coupon taken to fracture:
                A0 = 9.170 mm^2 (18.34 x 0.50), tear section 8.56 x 0.18 = 1.5408 mm^2, so
                eps_f = ln(A0/A_f) = 1.784. The tear section had drawn well past the natural draw
@@ -57,7 +59,7 @@ PET_PLASTIC = [
     (123.3, 1.300), (143.2, 1.450), (166.4, 1.600), (200.0, 1.784),
 ]
 
-PET = dict(E=3000.0, nu=0.40, plastic=PET_PLASTIC)   # MPa; E is a literature placeholder
+PET = dict(E=2500.0, nu=0.40, plastic=PET_PLASTIC)   # MPa; nu still UNMEASURED
 
 
 class PETIsotropic(Material):
