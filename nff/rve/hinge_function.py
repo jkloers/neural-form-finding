@@ -48,6 +48,26 @@ from nff.rve.materials import coerce_material
 # ── validity regimes ────────────────────────────────────────────────────────────
 ELASTIC, PLASTIC, FAILED = 0, 1, 2
 REGIME_NAME = {ELASTIC: "elastic", PLASTIC: "plastic", FAILED: "failed"}
+
+# How the SOLVE ended, per row. Int-coded like `regime` so the dataset stays an all-numeric npz.
+# This matters downstream: a DIVERGED job stopped at the buckling bifurcation, and the increments it
+# retained sit on a branch the converged jobs never occupy -- on the PET campaign such rows were 4%
+# of the data and 50% of the surrogate's squared error, disagreeing with their nearest converged
+# neighbour by 178% at p90. `timeout` and `fractured` rows are fine: those solves converged, they
+# just stopped early. Only `diverged` (and `unknown`) is untrustworthy ground truth.
+STOP_COMPLETED, STOP_TIMEOUT, STOP_FRACTURED, STOP_DIVERGED, STOP_UNKNOWN = 0, 1, 2, 3, 4
+STOP_NAME = {STOP_COMPLETED: "completed", STOP_TIMEOUT: "timeout", STOP_FRACTURED: "fractured",
+             STOP_DIVERGED: "diverged", STOP_UNKNOWN: "unknown"}
+STOP_CODE = {v: k for k, v in STOP_NAME.items()}
+# The codes whose rows are NOT valid ground truth -- the quarantine set.
+STOP_UNCONVERGED = (STOP_DIVERGED, STOP_UNKNOWN)
+
+
+def stop_code(reason: str) -> int:
+    """``stop_reason`` string -> its int code; anything unrecognised is ``STOP_UNKNOWN``."""
+    return STOP_CODE.get(str(reason), STOP_UNKNOWN)
+
+
 _PLASTIC_TOL = 1e-6                                  # PEEQ above this => yielded
 
 
@@ -69,7 +89,10 @@ class HingeConstants:
     lc_min_floor: float = 0.06                        # never mesh finer than this [mm]
     imp_amp: float | None = None                      # out-of-plane buckle seed [mm]; None -> 0.3*t
     min_inc: float = 1e-3                             # min load increment (smaller babies through snaps)
-    stabilize: float | None = None                    # *STATIC,STABILIZE damping past buckling (uz-only)
+    stabilize: float | None = None                    # ⚠ UNSUPPORTED by CalculiX -- setting it raises
+    # ^ *STATIC, STABILIZE is an Abaqus keyword. ccx 2.23 ignores it silently, so a "stabilized" run
+    # is bit-identical to an undamped one (measured 2026-07-30). Kept as a field only so an old
+    # config setting it fails loudly in _write_deck instead of quietly producing undamped data.
     arcB_uz_free: bool = False                        # leave the driven arc free out of plane
     field_freq: int = 1000                            # *NODE/EL FILE FREQUENCY -> 1 frame per state
     el_fields: str | None = None                      # *EL FILE list; None -> the material's own

@@ -13,6 +13,9 @@ Pipeline:
      train / val (model selection) / test (reported once, never selected on).
   4. Standardize inputs AND target scales from TRAIN only; Adam + cosine LR; Sobolev loss.
   5. Best-checkpoint on the val loss; save params + stats + provenance + metrics.
+  6. The per-epoch train loss (total + the three Sobolev terms) and every val evaluation are
+     recorded into the sidecar `history` block, so the training curves are reconstructable from
+     the checkpoint alone rather than from a lost stdout log.
 """
 
 import argparse
@@ -33,7 +36,29 @@ import jax.numpy as jnp
 import optax
 
 from nff.models.hinge_surrogate import (init_hinge_surrogate, compute_norm_stats,
-    apply_hinge_energy, apply_hinge_force, apply_hinge_failure, sobolev_loss)
+    apply_hinge_energy, apply_hinge_force, apply_hinge_failure, sobolev_loss,
+    FEAT_KIND_DEFAULT, FEAT_KIND_ETA, FEAT_KIND_RAW)
+from nff.rve.hinge_function import STOP_UNCONVERGED, STOP_UNKNOWN, stop_code
+
+
+def _stop_codes(path, d, job_id):
+    """Per-row solver ``stop_code``, or None when the campaign did not record one.
+
+    Datasets written before the column existed carry the reason only in the sidecar manifest's
+    per-job list, so back-fill from there -- that makes every EXISTING campaign filterable with no
+    re-run. Returning None (rather than a column of ``unknown``) is deliberate: ``unknown`` is itself
+    a quarantined code, so guessing would silently drop the entire dataset.
+    """
+    if "stop_code" in d:
+        return d["stop_code"].astype(int)
+    try:
+        with open(path + ".json") as f:
+            jobs = json.load(f).get("jobs") or []
+        by_job = {int(r["job_id"]): stop_code(r.get("stop_reason", "unknown"))
+                  for r in jobs if "stop_reason" in r}
+    except (OSError, ValueError, KeyError):
+        return None
+    return np.array([by_job.get(int(j), STOP_UNKNOWN) for j in job_id], int) if by_job else None
 
 
 def load_dataset(path, w_lig_max=None):
@@ -84,7 +109,21 @@ def load_dataset(path, w_lig_max=None):
         margin=d["damage"].astype(float),
         job_id=d["job_id"],
     )
+    codes = _stop_codes(path, d, d["job_id"])
+    if codes is not None:
+        data["stop_code"] = codes
     return data, eps_f, const
+
+
+def converged_mask(data):
+    """Rows whose SOLVE is trustworthy ground truth, or all-True when the campaign did not say.
+
+    ``diverged``/``unknown`` rows come from a solve that failed at the buckling bifurcation; they are
+    not samples of the same equilibrium branch as the rest (see STOP_UNCONVERGED).
+    """
+    if "stop_code" not in data:
+        return np.ones(len(data["W"]), bool)
+    return ~np.isin(data["stop_code"], STOP_UNCONVERGED)
 
 
 def check_force_sign(data, n_probe=30):
@@ -176,9 +215,29 @@ def main():
     ap.add_argument("--w-lig-max", dest="w_lig_max", type=float, default=25.0,
                     help="drop rows above this ligament width [mm] (~r_win/4: above it the RVE "
                          "no longer isolates hinge compliance from the panels)")
+    ap.add_argument("--eval-every", dest="eval_every", type=int, default=10,
+                    help="epochs between val evaluations (= the val-curve sampling rate)")
+    ap.add_argument("--exclude-unconverged", dest="exclude_unconverged", default="both",
+                    choices=["none", "eval", "both"],
+                    help="quarantine rows from a DIVERGED solve: 'both' drops them everywhere, "
+                         "'eval' keeps them in train but never scores against them, 'none' is the "
+                         "pre-2026-07-30 behaviour. They were 4%% of the PET campaign and 50%% of "
+                         "its squared error")
+    ap.add_argument("--min-updates", dest="min_updates", type=int, default=0,
+                    help="floor on TOTAL gradient updates; raises --epochs to reach it. An epoch is "
+                         "n_train/batch steps, so the same --epochs buys 7.8x less training on the "
+                         "PET campaign (15.9k rows) than on the S235 one (115k) -- set this instead")
+    ap.add_argument("--feat-kind", dest="feat_kind", default=FEAT_KIND_DEFAULT,
+                    choices=[FEAT_KIND_RAW, FEAT_KIND_ETA],
+                    help="network input parameterization: 'eta' = dimensionless (a,s)/w_lig, "
+                         "'raw' = the legacy dimensional mm")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--hidden", default="64,64",
-                    help="comma-sep hidden widths (default compact 64,64; original was 128,128,128)")
+                    help="comma-sep hidden widths (default compact 64,64; original was 128,128,128). "
+                         "At these sizes cost is kernel-launch bound, so WIDENING is much cheaper "
+                         "than deepening: 2x128 is 3.2x the params for 2.2x the time, 3x128 3.9x for 5.7x")
+    ap.add_argument("--m-out", dest="m_out", type=int, default=32,
+                    help="width of the energy net's output vector h; W = W_scale*||h(u)-h(0)||^2")
     ap.add_argument("--force", action="store_true", help="overwrite an existing --out checkpoint")
     args = ap.parse_args()
 
@@ -195,6 +254,23 @@ def main():
 
     split = split_by_job(data, args.val_frac, args.seed, test_frac=args.test_frac)
     tr, va, te = split if len(split) == 3 else (split[0], split[1], np.zeros_like(split[0]))
+    # The quarantine is applied AFTER the split, never before: job membership then stays identical
+    # across the three policies, so their scores differ only by which rows were used -- which is what
+    # makes them comparable at all.
+    if args.exclude_unconverged != "none":
+        conv = converged_mask(data)
+        if "stop_code" not in data:
+            print("WARNING: this dataset records no solver stop_reason (no `stop_code` column and no "
+                  "usable sidecar manifest) -- cannot quarantine; proceeding as --exclude-unconverged none")
+        else:
+            drop_eval = int((~conv & (va | te)).sum())
+            va, te = va & conv, te & conv
+            msg = f"quarantine ({args.exclude_unconverged}): dropped {drop_eval} unconverged val/test rows"
+            if args.exclude_unconverged == "both":
+                msg += f", {int((~conv & tr).sum())} train rows"
+                tr = tr & conv
+            print(msg + f"  [{int((~conv).sum())} unconverged of {conv.size} total, "
+                        f"{len(np.unique(data['job_id'][~conv]))} jobs]")
     n_tr, n_va, n_te = int(tr.sum()), int(va.sum()), int(te.sum())
     njobs = lambda m: len(np.unique(data["job_id"][m]))
     print(f"samples: {len(data['W'])}  |  train {n_tr} ({njobs(tr)} jobs) / "
@@ -206,7 +282,8 @@ def main():
     # normalization (see there); without them it falls back to per-batch variance.
     stats = compute_norm_stats(data["u"][tr, 0], data["u"][tr, 1], data["u"][tr, 2],
                                data["g"][tr, 0], data["g"][tr, 1], data["W"][tr],
-                               fillet_ratio=_fillet, F=data["F"][tr], D=data["margin"][tr])
+                               fillet_ratio=_fillet, F=data["F"][tr], D=data["margin"][tr],
+                               feat_kind=args.feat_kind)
     # Data-driven trust region (the box the TRAIN split actually covers) for the OOD barrier. Stored
     # in stats -> the closed pipeline's domain AUTO-matches this surrogate. TWO-SIDED: the PET
     # campaign samples the measured deployment envelope, which is ~half compression, so a
@@ -227,9 +304,19 @@ def main():
 
     key = jax.random.PRNGKey(args.seed)
     hidden = tuple(int(x) for x in args.hidden.split(","))
-    params = init_hinge_surrogate(key, hidden=hidden, feat_dim=3 + data["g"].shape[-1])
+    params = init_hinge_surrogate(key, hidden=hidden, m_out=args.m_out,
+                                  feat_dim=3 + data["g"].shape[-1])
     steps = max(1, n_tr // args.batch)
-    sched = optax.cosine_decay_schedule(args.lr, args.epochs * steps)
+    # An "epoch" is a dataset-sized amount of training, so --epochs alone does not fix the amount of
+    # OPTIMIZATION: the same 300 epochs is 23.4k updates on the 115k-row S235 campaign and 3.0k on
+    # the 15.9k-row PET one. Report the real number, and let --min-updates pin it.
+    epochs = args.epochs
+    if args.min_updates and epochs * steps < args.min_updates:
+        epochs = -(-args.min_updates // steps)          # ceil
+        print(f"--min-updates {args.min_updates}: raising epochs {args.epochs} -> {epochs}")
+    print(f"schedule: {steps} steps/epoch x {epochs} epochs = {steps * epochs} updates  "
+          f"(batch {args.batch}, features '{args.feat_kind}', hidden {hidden}, m_out {args.m_out})")
+    sched = optax.cosine_decay_schedule(args.lr, epochs * steps)
     optimizer = optax.adam(sched)
     opt_state = optimizer.init(params)
 
@@ -240,25 +327,36 @@ def main():
             has_aux=True)(params)
         grads = jax.tree_util.tree_map(lambda x: jnp.nan_to_num(x), grads)  # NaN-safe
         updates, opt_state = optimizer.update(grads, opt_state, params)
-        return optax.apply_updates(params, updates), opt_state, loss
+        return optax.apply_updates(params, updates), opt_state, loss, aux
 
     # Selection on the SAME combination the loss optimizes. Selecting on energy alone lets a net
     # with a dead force head win -- and the force is what Stage-2 balances.
     score = lambda m: args.lam * m["energy_rel"] + (1.0 - args.lam) * m["force_rel"]
-    best, best_score, best_params = None, np.inf, params
+    best, best_score, best_params, best_epoch = None, np.inf, params, -1
+    # Curves: the train row is the mean over the epoch's minibatches (a single last-batch value is
+    # noise at batch 1024); the val rows are sparse by --eval-every, hence their own epoch column.
+    hist_train, hist_val = [], []
     rng = np.random.default_rng(args.seed)
-    for ep in range(args.epochs):
+    for ep in range(epochs):
         perm = rng.permutation(tr_idx)
+        ep_terms = np.zeros(4)
         for b in range(steps):
-            params, opt_state, loss = train_step(
+            params, opt_state, loss, aux = train_step(
                 params, opt_state, _batch(data, perm[b * args.batch:(b + 1) * args.batch]))
-        if ep % 10 == 0 or ep == args.epochs - 1:
+            ep_terms += [float(loss), float(aux["energy"]), float(aux["force"]), float(aux["damage"])]
+        ep_terms /= steps
+        hist_train.append(dict(epoch=ep, loss=ep_terms[0], energy=ep_terms[1],
+                               force=ep_terms[2], damage=ep_terms[3],
+                               lr=float(sched((ep + 1) * steps))))
+        if ep % args.eval_every == 0 or ep == epochs - 1:
             m = evaluate(params, val_batch, stats)
             tag = ""
             if score(m) < best_score:
                 best, best_score, tag = m, score(m), "  <- best"
                 best_params = jax.tree_util.tree_map(lambda x: x, params)
-            print(f"ep {ep:4d}  loss {float(loss):.4g}  val energy_rel {m['energy_rel']:.4f}  "
+                best_epoch = ep
+            hist_val.append(dict(epoch=ep, score=score(m), **m))
+            print(f"ep {ep:4d}  loss {ep_terms[0]:.4g}  val energy_rel {m['energy_rel']:.4f}  "
                   f"force_rel {m['force_rel']:.4f} (a {m['force_rel_a']:.3f} s {m['force_rel_s']:.3f} "
                   f"M {m['force_rel_m']:.3f})  damage_rel {m['damage_rel']:.4f}{tag}", flush=True)
 
@@ -275,7 +373,10 @@ def main():
             "n_rows": len(data["W"]), "n_jobs": int(len(np.unique(data["job_id"]))),
             "w_lig_max": args.w_lig_max,
             "w_lig_range": [float(data["g"][:, 0].min()), float(data["g"][:, 0].max())],
-            "hidden": hidden, "lam": args.lam, "w_damage": args.w_damage,
+            "hidden": hidden, "m_out": args.m_out, "lam": args.lam, "w_damage": args.w_damage,
+            "feat_kind": args.feat_kind, "exclude_unconverged": args.exclude_unconverged,
+            "epochs": epochs, "updates": steps * epochs, "lr": args.lr, "batch": args.batch,
+            "seed": args.seed, "best_epoch": best_epoch,
             "force_sign": sign, "git": _git_rev(), "trained_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ",
                                                                                time.gmtime())}
 
@@ -288,6 +389,7 @@ def main():
         json.dump({"val_metrics": best, "test_metrics": test_metrics,
                    "n_train": n_tr, "n_val": n_va, "n_test": n_te,
                    "domain": stats["domain"], "meta": meta,
+                   "history": {"train": hist_train, "val": hist_val},
                    "pkl_sha256": _sha256(args.out + ".pkl")}, f, indent=2)
 
     print(f"\nbest VAL : energy_rel {best['energy_rel']:.4f}  force_rel {best['force_rel']:.4f}  "

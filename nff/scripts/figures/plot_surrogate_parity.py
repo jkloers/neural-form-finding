@@ -30,7 +30,8 @@ import matplotlib.pyplot as plt
 
 from nff.models.hinge_surrogate import (load_hinge_surrogate, apply_hinge_energy,
     apply_hinge_force, apply_hinge_failure)
-from nff.scripts.train_hinge_surrogate import load_dataset, split_by_job, check_force_sign
+from nff.scripts.train_hinge_surrogate import (load_dataset, split_by_job, check_force_sign,
+                                               converged_mask)
 
 # ── project charter (Princeton palette) ─────────────────────────────────────────
 from nff.utils.figstyle import ORANGE, TEAL, RED, GREY, INK, TRAIN, apply_charter
@@ -91,6 +92,9 @@ def main():
     ap.add_argument("--val-frac", dest="val_frac", type=float, default=0.15)
     ap.add_argument("--w-lig-max", dest="w_lig_max", type=float, default=25.0,
                     help="must match the value the checkpoint was trained with")
+    ap.add_argument("--exclude-unconverged", dest="exclude_unconverged", default=None,
+                    choices=["none", "eval", "both"],
+                    help="default: follow the checkpoint's own `meta.exclude_unconverged`")
     args = ap.parse_args()
 
     params, stats, _ = load_hinge_surrogate(args.surrogate + ".pkl")
@@ -99,6 +103,23 @@ def main():
     sign, _ = check_force_sign(data)
     data["F"] *= sign
     tr, va = split_by_job(data, args.val_frac, args.seed)
+    # Score the checkpoint on the SAME rows it was trained against. Reading the policy off the
+    # checkpoint (rather than defaulting) stops the figure from quietly scoring a quarantined model
+    # on unconverged rows it was never shown -- which reads as a much worse fit than it is.
+    policy = args.exclude_unconverged
+    if policy is None:
+        try:
+            import pickle
+            with open(args.surrogate + ".pkl", "rb") as f:
+                policy = pickle.load(f).get("meta", {}).get("exclude_unconverged", "none")
+        except Exception:
+            policy = "none"
+    if policy != "none":
+        conv = converged_mask(data)
+        va = va & conv
+        if policy == "both":
+            tr = tr & conv
+        print(f"quarantine ({policy}): {int((~conv).sum())} unconverged rows excluded")
     print(f"loaded {args.surrogate} | train {int(tr.sum())} / held-out {int(va.sum())} "
           f"({len(np.unique(data['job_id'][va]))} unseen jobs)")
 

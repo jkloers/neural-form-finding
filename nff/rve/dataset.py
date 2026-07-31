@@ -26,6 +26,7 @@ import numpy as np
 from nff.rve.ccx_solver import prepare_job, solve_job, parse_job
 from nff.rve.materials import coerce_material
 from nff.rve.hinge_function import (HingeConstants, HingeGeometry, DeploymentRay, REGIME_NAME,
+                                    STOP_NAME, stop_code,
                                     to_rve_params, descriptor, solver_kwargs, assemble_response)
 
 
@@ -162,10 +163,14 @@ def responses_to_columns(responses, const, job_id_offset=0):
             meta.append(dict(job_id=job_id, ok=False,
                              stop_reason=getattr(r, "stop_reason", "parse_failed"))); continue
         desc = descriptor(r.geo, const)
-        keys = list(desc) + _KIN + _RESP + _AUX + ["job_id"]
+        keys = list(desc) + _KIN + _RESP + _AUX + ["stop_code", "job_id"]
         n = r.n_samples
+        # stop_code rides on every ROW, not just the manifest: a consumer that reads only the npz
+        # (the surrogate trainer, the parity figure) otherwise cannot tell a converged row from one
+        # a diverged solve left behind, and trains against it as if it were ground truth.
         row = {**{k: np.full(n, desc[k]) for k in desc},
                **{k: getattr(r, k) for k in _KIN + _RESP + _AUX},
+               "stop_code": np.full(n, stop_code(r.stop_reason)),
                "job_id": np.full(n, job_id)}
         for k in keys:
             cols.setdefault(k, []).append(np.asarray(row[k]))
@@ -205,7 +210,8 @@ def _write_checkpoint(out_path, acc, meta, const):
                    delta_tear_iqr=[float(np.percentile(tears, 25)), float(np.percentile(tears, 75))]
                                   if len(tears) else None,
                    n_tear_observations=int(len(tears)),
-                   columns=list(cols), regime_names=REGIME_NAME, const=const_json, jobs=meta)
+                   columns=list(cols), regime_names=REGIME_NAME, stop_reason_names=STOP_NAME,
+                   const=const_json, jobs=meta)
     with open(out_path + ".json", "w") as f:
         json.dump(summary, f, indent=2, default=float)
     return summary
