@@ -34,6 +34,10 @@ import optax
 
 from nff.models.hinge_surrogate import (init_hinge_surrogate, compute_norm_stats,
     apply_hinge_energy, apply_hinge_force, apply_hinge_failure, sobolev_loss)
+# Re-exported, not redefined: diagnostics that only need the split must not have to import JAX to
+# get it (see nff/utils/splits.py). Existing `from ...train_hinge_surrogate import split_by_job`
+# call sites -- nff/scripts/figures/plot_surrogate_parity.py -- keep working.
+from nff.utils.splits import split_by_job  # noqa: F401
 
 
 def load_dataset(path, w_lig_max=None):
@@ -105,24 +109,6 @@ def check_force_sign(data, n_probe=30):
             break
     r = float(np.median(ratios)) if ratios else 1.0
     return (1.0 if r >= 0 else -1.0), r
-
-
-def split_by_job(data, val_frac, seed, test_frac=0.0):
-    """Group split by job = unseen GEOMETRY. Returns (train, val), or (train, val, test).
-
-    ``test_frac > 0`` carves a third group that is scored exactly once at the end. Model selection
-    happens on ``val``, so reporting on ``val`` too is optimistic by the selection bias over every
-    evaluated epoch. The default 2-tuple keeps existing callers (plot_surrogate_parity) unchanged.
-    """
-    jobs = np.unique(data["job_id"])
-    rng = np.random.default_rng(seed); rng.shuffle(jobs)
-    n_val = int(val_frac * len(jobs))
-    val = np.isin(data["job_id"], jobs[:n_val].tolist())
-    if test_frac <= 0.0:
-        return ~val, val
-    n_test = int(test_frac * len(jobs))
-    test = np.isin(data["job_id"], jobs[n_val:n_val + n_test].tolist())
-    return ~(val | test), val, test
 
 
 def _batch(data, idx):
