@@ -117,7 +117,39 @@ def load_dataset(path, w_lig_max=None):
     codes = _stop_codes(path, d, d["job_id"])
     if codes is not None:
         data["stop_code"] = codes
+    if "peeq_lig" in d:                       # carried for the oracle-history feasibility probe only
+        data["peeq_lig"] = d["peeq_lig"].astype(float)
     return data, eps_f, const
+
+
+def oracle_history_column(data, kind):
+    """The TRUE per-row history variable -- a feasibility ceiling, never available at inference.
+
+    ``W`` is a path functional, so mixing route families makes it multi-valued in ``(u, g)``. An
+    internal variable ``z`` would restore single-valuedness. Before building the learned recurrence,
+    this answers the cheaper question: does ANY scalar history variable carry enough information?
+
+    ``damage``    accumulated plastic dissipation -- the classical internal variable, monotone.
+    ``peeq_lig``  the hottest ligament element's plastic strain.
+    ``path_len``  cumulative ``sum |du|`` along the job's own ordered path; the purest history
+                  summary, and the only one derivable without any oracle field.
+    """
+    if kind == "damage":
+        return data["margin"].astype(float)
+    if kind == "peeq_lig":
+        if "peeq_lig" not in data:
+            raise KeyError("peeq_lig not in this dataset")
+        return data["peeq_lig"]
+    if kind != "path_len":
+        raise ValueError(kind)
+    u, jid = data["u"], data["job_id"]
+    out = np.zeros(len(u))
+    for j in np.unique(jid):
+        m = np.where(jid == j)[0]
+        o = m[np.argsort(np.linalg.norm(u[m], axis=1))]     # order along the path
+        steps = np.linalg.norm(np.diff(u[o], axis=0), axis=1)
+        out[o] = np.concatenate([[0.0], np.cumsum(steps)])
+    return out
 
 
 def converged_mask(data):
@@ -132,23 +164,58 @@ def converged_mask(data):
 
 
 def check_force_sign(data, n_probe=30):
-    """On pure-rotation rays (a=s=0), FD dW/dtheta should equal M_theta. Return (+1 or -1, ratio)."""
-    jid = data["job_id"]
+    """Is the stored ``F`` the gradient ``+dW/du``? Return ``(sign, ratio, how)``.
+
+    Two probes, in order of directness:
+
+    ``spine``  pure-rotation rays (a = s = 0): FD ``dW/dtheta`` vs ``M_theta``.
+    ``work``   the general identity along ANY ordered path -- ``F.du`` integrated trapezoidally must
+               equal ``dW``. Works for a proportional fan and for a free-DOF curve alike.
+
+    The spine probe alone is a TRAP on modern campaigns. It requires a job whose (a, s) are
+    identically zero, and the PET campaign has **none** -- its spine is free-DOF (the solver picks
+    a, s) and its fan draws eta from a continuous envelope. ``ratios`` came back empty, the old code
+    fell back to ``r = 1.0``, and every PET run printed "match" WITHOUT HAVING CHECKED ANYTHING.
+    A flipped sign would have had the Sobolev loss fighting itself, silently. Hence ``how``, which
+    the caller must report, and the work probe, which actually runs on this data.
+    """
+    jid, u, W, F = data["job_id"], data["u"], data["W"], data["F"]
     ratios = []
     for j in np.unique(jid):
         m = jid == j
-        if m.sum() > 5 and np.abs(data["u"][m, 0]).max() < 1e-9 and np.abs(data["u"][m, 1]).max() < 1e-9:
-            th, W, M = data["u"][m, 2], data["W"][m], data["F"][m, 2]
-            o = np.argsort(th); th, W, M = th[o], W[o], M[o]
-            dWdth = np.diff(W) / (np.diff(th) + 1e-12)
+        if m.sum() > 5 and np.abs(u[m, 0]).max() < 1e-9 and np.abs(u[m, 1]).max() < 1e-9:
+            th, Wj, M = u[m, 2], W[m], F[m, 2]
+            o = np.argsort(th); th, Wj, M = th[o], Wj[o], M[o]
+            dWdth = np.diff(Wj) / (np.diff(th) + 1e-12)
             Mmid = 0.5 * (M[:-1] + M[1:])
             good = np.abs(Mmid) > 1e-6
             if good.any():
                 ratios.append(np.median(dWdth[good] / Mmid[good]))
         if len(ratios) >= n_probe:
             break
-    r = float(np.median(ratios)) if ratios else 1.0
-    return (1.0 if r >= 0 else -1.0), r
+    if ratios:
+        r = float(np.median(ratios))
+        return (1.0 if r >= 0 else -1.0), r, "spine"
+
+    # No pure-rotation job: fall back to the work identity along each job's own path.
+    for j in np.unique(jid):
+        m = np.where(jid == j)[0]
+        if len(m) < 4:
+            continue
+        o = m[np.argsort(np.linalg.norm(u[m], axis=1))]
+        du, dW = np.diff(u[o], axis=0), np.diff(W[o])
+        work = np.sum(0.5 * (F[o][:-1] + F[o][1:]) * du, axis=1)
+        good = np.abs(dW) > 1e-9
+        if good.any():
+            ratios.append(float(np.median(work[good] / dW[good])))
+        if len(ratios) >= n_probe:
+            break
+    if not ratios:
+        print("force-sign check: NO usable probe (no pure-rotation ray, no ordered path) "
+              "-- force sign UNVERIFIED, assuming F = +dW/du")
+        return 1.0, float("nan"), "unverified"
+    r = float(np.median(ratios))
+    return (1.0 if r >= 0 else -1.0), r, "work"
 
 
 def _batch(data, idx):
@@ -204,6 +271,12 @@ def main():
                          "no longer isolates hinge compliance from the panels)")
     ap.add_argument("--eval-every", dest="eval_every", type=int, default=10,
                     help="epochs between val evaluations (= the val-curve sampling rate)")
+    ap.add_argument("--oracle-history", dest="oracle_history", default=None,
+                    help="FEASIBILITY ONLY -- append the TRUE per-row history variable to the "
+                         "geometry input. It is not available at inference, so any score is a "
+                         "CEILING on an internal-variable model W(u,z;g), never a shippable number. "
+                         "Tests whether a scalar history variable carries the information that makes "
+                         "the mixed route families single-valued")
     ap.add_argument("--route-family", dest="route_family", default="all",
                     choices=["all", ORIGIN_RAY, FREE_PATH],
                     help="keep only jobs of one route family. `origin_ray` is the subset a STATE "
@@ -241,10 +314,22 @@ def main():
                          "different models.)")
 
     data, eps_f, const = load_dataset(args.data, w_lig_max=args.w_lig_max)
-    sign, ratio = check_force_sign(data)
-    print(f"force-sign check: FD dW/dtheta / M_theta ~ {ratio:+.3f} -> "
-          f"{'match (F = +dW/du)' if sign > 0 else 'FLIPPED (negating F)'}")
+    sign, ratio, how = check_force_sign(data)
+    # `how` is reported, not hidden: 'unverified' means the probe never ran, which is what the old
+    # code silently did on every PET campaign.
+    print(f"force-sign check [{how}]: ratio ~ {ratio:+.3f} -> "
+          f"{'match (F = +dW/du)' if sign > 0 else 'FLIPPED (negating F)'}"
+          f"{'   <-- NOT ACTUALLY CHECKED' if how == 'unverified' else ''}")
     data["F"] *= sign
+
+    if args.oracle_history:
+        # comma-separated -> a k-dimensional z, so k=1 vs k=2 can be compared directly
+        kinds = [k.strip() for k in args.oracle_history.split(",") if k.strip()]
+        cols = [oracle_history_column(data, k)[:, None] for k in kinds]
+        # Appended to g, so it flows through the SAME `_feature_cols` path a learned z would use.
+        data["g"] = np.concatenate([data["g"]] + cols, axis=-1)
+        print(f"ORACLE history {kinds} (k={len(kinds)}) appended to g -> {data['g'].shape[-1]} geom "
+              f"features. This is a CEILING, not a shippable model: z is unavailable at inference.")
 
     # Route filtering happens BEFORE the split: a family is a property of the campaign design, not
     # of this run's train/val partition, and dropping a whole family afterwards would leave the
@@ -283,7 +368,9 @@ def main():
           f"val {n_va} ({njobs(va)}) / test {n_te} ({njobs(te)})  -- split by unseen geometry")
 
     tr_idx = np.where(tr)[0]
-    _fillet = data["g"][tr, 2] if data["g"].shape[-1] >= 3 else None
+    # every g column beyond (w_lig, alpha): fillet_ratio and/or an oracle history variable
+    _fillet = ([data["g"][tr, 2 + i] for i in range(data["g"].shape[-1] - 2)]
+               if data["g"].shape[-1] >= 3 else None)
     # Target scales from TRAIN only -- passing F/D switches sobolev_loss to fixed, per-component
     # normalization (see there); without them it falls back to per-batch variance.
     stats = compute_norm_stats(data["u"][tr, 0], data["u"][tr, 1], data["u"][tr, 2],

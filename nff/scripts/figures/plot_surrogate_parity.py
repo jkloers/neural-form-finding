@@ -118,7 +118,7 @@ def main():
                 for k, v in data.items()}
         print(f"route family '{_fam}' (from checkpoint meta): {int(keep.sum())} rows kept")
     # reproduce the training force-sign convention so the force parity is apples-to-apples
-    sign, _ = check_force_sign(data)
+    sign, _, _ = check_force_sign(data)
     data["F"] *= sign
     tr, va = split_by_job(data, args.val_frac, args.seed)
     # Score the checkpoint on the SAME rows it was trained against. Reading the policy off the

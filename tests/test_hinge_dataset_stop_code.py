@@ -94,3 +94,47 @@ def test_stabilize_is_refused_not_silently_ignored():
     with pytest.raises(NotImplementedError, match="STABILIZE"):
         _write_deck("/tmp/unused.inp", np.zeros((1, 3)), [], [0], [0], (0.0, 0.0),
                     None, [(0.0, 0.0, 0.1)], False, 1, stabilize=2e-4)
+
+
+# ── force-sign probe ────────────────────────────────────────────────────────────
+
+def _ray_job(job_id, n=8, sign=+1.0, pure_rotation=False):
+    """One proportional ray with W = 0.5*k*|u|^2 and F = +dW/du (times `sign`)."""
+    lam = np.linspace(0.1, 1.0, n)
+    u1 = np.array([0.0, 0.0, 0.5]) if pure_rotation else np.array([0.3, -0.2, 0.5])
+    u = lam[:, None] * u1
+    W = 0.5 * np.sum(u ** 2, axis=1)
+    return dict(job_id=np.full(n, job_id), u=u, W=W, F=sign * u)
+
+
+def _merge(*jobs):
+    return {k: np.concatenate([j[k] for j in jobs]) for k in jobs[0]}
+
+
+def test_force_sign_uses_the_work_identity_when_no_pure_rotation_ray_exists():
+    """The PET failure mode: no job has a=s=0, so the spine probe finds nothing. It must NOT
+    silently return +1 -- the old code did, on every PET run."""
+    from nff.scripts.train_hinge_surrogate import check_force_sign
+    sign, ratio, how = check_force_sign(_merge(_ray_job(0), _ray_job(1)))
+    assert how == "work"
+    assert sign == 1.0 and abs(ratio - 1.0) < 0.05
+
+
+def test_force_sign_detects_a_flipped_convention():
+    """A check that cannot fail is not a check: a negated F must come back -1."""
+    from nff.scripts.train_hinge_surrogate import check_force_sign
+    sign, ratio, how = check_force_sign(_merge(_ray_job(0, sign=-1.0), _ray_job(1, sign=-1.0)))
+    assert sign == -1.0 and ratio < 0 and how == "work"
+
+
+def test_force_sign_prefers_the_direct_spine_probe_when_one_exists():
+    from nff.scripts.train_hinge_surrogate import check_force_sign
+    _, _, how = check_force_sign(_merge(_ray_job(0, pure_rotation=True), _ray_job(1)))
+    assert how == "spine"
+
+
+def test_force_sign_reports_unverified_rather_than_passing_silently():
+    from nff.scripts.train_hinge_surrogate import check_force_sign
+    sign, ratio, how = check_force_sign(
+        dict(job_id=np.zeros(2), u=np.zeros((2, 3)), W=np.zeros(2), F=np.zeros((2, 3))))
+    assert how == "unverified" and np.isnan(ratio) and sign == 1.0

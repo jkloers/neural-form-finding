@@ -130,28 +130,38 @@ def _robust_std(std):
     return np.where(std < 1e-6, 1.0, std)
 
 
-def _feature_cols(a, s, theta, w_lig, alpha, fillet, kind, xp):
+def _feature_cols(a, s, theta, w_lig, alpha, extra, kind, xp):
     """The raw (un-standardized) feature columns -- THE single definition of the input layout.
 
     Shared by :func:`compute_norm_stats` (numpy, at training time) and :func:`_features` (jnp, at
     inference) so the standardization stats and the features they standardize cannot drift apart.
     ``xp`` is the array module to compute in.
+
+    ``extra`` is any number of additional per-hinge scalars carried on ``g`` beyond
+    ``(w_lig, alpha)`` -- historically just ``fillet_ratio``, now also an internal/history variable
+    ``z``. It is a LIST, not one column: the single-slot version silently disagreed with
+    ``feat_dim = 3 + g.shape[-1]`` the moment a second scalar was added, which surfaces as a
+    `dot_general` shape error rather than as anything readable.
     """
     if kind == FEAT_KIND_ETA:
         a, s = a / w_lig, s / w_lig
     cols = [a, s, theta, xp.log(w_lig), alpha]
-    if fillet is not None:
-        cols.append(fillet)
-    return cols
+    if extra is None:
+        return cols
+    if not isinstance(extra, (list, tuple)):
+        extra = [extra]
+    return cols + list(extra)
 
 
 def compute_norm_stats(a, s, theta, w_lig, alpha_rad, W, fillet_ratio=None, F=None, D=None,
                        feat_kind: str = FEAT_KIND_DEFAULT) -> dict:
     """Standardization stats from the training arrays (static; closed over at inference).
 
-    ``fillet_ratio`` optional: when given, the geometry input ``g`` is 3-D (w_lig, alpha, fillet) and
-    the feature vector is 6-D; otherwise the legacy 2-D g / 5-D features. The chosen width is baked
-    into ``feat_mean``/``feat_std`` length, so inference reads it back from the checkpoint.
+    ``fillet_ratio`` optional: the extra per-hinge scalar(s) carried on ``g`` beyond
+    ``(w_lig, alpha)``. One array (the legacy swept fillet) or a LIST of them, e.g. fillet plus an
+    internal/history variable ``z``. ``None`` gives the legacy 2-D g / 5-D features. The chosen
+    width is baked into ``feat_mean``/``feat_std`` length, so inference reads it back from the
+    checkpoint -- see the ``n_extra`` computation in :func:`_features`.
 
     ``F`` (n, 3) and ``D`` (n,) optional: supply them to get FIXED target scales -- ``sigma_F``
     per force component and ``D_scale`` -- computed once from the train split. Their presence is
@@ -190,8 +200,10 @@ def _features(u: Float[Array, "... 3"], g: Float[Array, "... _"], stats: dict) -
     The parameterization comes from ``stats["feat_kind"]``; checkpoints predating the key are
     ``"raw"``, which is the legacy layout, so they keep evaluating bit-identically.
     """
-    fillet = g[..., 2] if stats["feat_mean"].shape[-1] >= 6 else None   # 3rd geometry DOF
-    cols = _feature_cols(u[..., 0], u[..., 1], u[..., 2], g[..., 0], g[..., 1], fillet,
+    # everything on g beyond (w_lig, alpha); width 5 => none, 6 => fillet, >6 => fillet + z...
+    n_extra = int(stats["feat_mean"].shape[-1]) - 5
+    extra = [g[..., 2 + i] for i in range(max(0, n_extra))]
+    cols = _feature_cols(u[..., 0], u[..., 1], u[..., 2], g[..., 0], g[..., 1], extra,
                          stats.get("feat_kind", FEAT_KIND_RAW), jnp)
     raw = jnp.stack(cols, axis=-1)
     return (raw - stats["feat_mean"]) / stats["feat_std"]
