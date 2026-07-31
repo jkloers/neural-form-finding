@@ -303,6 +303,10 @@ def main():
                     help="comma-sep hidden widths (default compact 64,64; original was 128,128,128). "
                          "At these sizes cost is kernel-launch bound, so WIDENING is much cheaper "
                          "than deepening: 2x128 is 3.2x the params for 2.2x the time, 3x128 3.9x for 5.7x")
+    ap.add_argument("--fail-hidden", dest="fail_hidden", default="64,64",
+                    help="hidden widths of the DAMAGE head -- a separate MLP, so --hidden does not "
+                         "reach it. It sat at this default through a capacity sweep that moved "
+                         "energy and force while damage stayed at an identical 12.03%%")
     ap.add_argument("--m-out", dest="m_out", type=int, default=32,
                     help="width of the energy net's output vector h; W = W_scale*||h(u)-h(0)||^2")
     ap.add_argument("--force", action="store_true", help="overwrite an existing --out checkpoint")
@@ -397,7 +401,11 @@ def main():
 
     key = jax.random.PRNGKey(args.seed)
     hidden = tuple(int(x) for x in args.hidden.split(","))
-    params = init_hinge_surrogate(key, hidden=hidden, m_out=args.m_out,
+    # fail_hidden is sized separately: it was pinned at the (64, 64) default while --hidden grew,
+    # which is why the damage head sat at an identical 12.03% across a capacity sweep that moved
+    # energy and force. The damage head is a SEPARATE MLP -- widening the energy net cannot help it.
+    fail_hidden = tuple(int(x) for x in args.fail_hidden.split(","))
+    params = init_hinge_surrogate(key, hidden=hidden, m_out=args.m_out, fail_hidden=fail_hidden,
                                   feat_dim=3 + data["g"].shape[-1])
     steps = max(1, n_tr // args.batch)
     # An "epoch" is a dataset-sized amount of training, so --epochs alone does not fix the amount of
@@ -466,7 +474,7 @@ def main():
             "n_rows": len(data["W"]), "n_jobs": int(len(np.unique(data["job_id"]))),
             "w_lig_max": args.w_lig_max,
             "w_lig_range": [float(data["g"][:, 0].min()), float(data["g"][:, 0].max())],
-            "hidden": hidden, "m_out": args.m_out, "lam": args.lam, "w_damage": args.w_damage,
+            "hidden": hidden, "fail_hidden": fail_hidden, "m_out": args.m_out, "lam": args.lam, "w_damage": args.w_damage,
             "feat_kind": args.feat_kind, "exclude_unconverged": args.exclude_unconverged,
             "route_family": args.route_family,
             "epochs": epochs, "updates": steps * epochs, "lr": args.lr, "batch": args.batch,
