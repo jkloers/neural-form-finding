@@ -32,6 +32,7 @@ from nff.models.hinge_surrogate import (load_hinge_surrogate, apply_hinge_energy
     apply_hinge_force, apply_hinge_failure)
 from nff.scripts.train_hinge_surrogate import (load_dataset, split_by_job, check_force_sign,
                                                converged_mask)
+from nff.utils.routes import route_family_mask
 
 # ── project charter (Princeton palette) ─────────────────────────────────────────
 from nff.utils.figstyle import ORANGE, TEAL, RED, GREY, INK, TRAIN, apply_charter
@@ -99,6 +100,23 @@ def main():
 
     params, stats, _ = load_hinge_surrogate(args.surrogate + ".pkl")
     data, _, _ = load_dataset(args.data, w_lig_max=args.w_lig_max)
+    # Score the checkpoint on the route family it was TRAINED on. A checkpoint fitted to origin rays
+    # scored across free-DOF paths is being asked about a different target -- W is a path functional,
+    # so the two families disagree at the same state by construction.
+    _meta = {}
+    try:
+        import pickle
+        with open(args.surrogate + ".pkl", "rb") as f:
+            _meta = pickle.load(f).get("meta", {}) or {}
+    except Exception:
+        pass
+    _fam = _meta.get("route_family", "all")
+    if _fam != "all":
+        keep = route_family_mask(data["u"][:, 0], data["u"][:, 1], data["u"][:, 2],
+                                 data["g"][:, 0], data["job_id"], _fam)
+        data = {k: (v[keep] if getattr(v, "shape", (0,))[:1] == keep.shape else v)
+                for k, v in data.items()}
+        print(f"route family '{_fam}' (from checkpoint meta): {int(keep.sum())} rows kept")
     # reproduce the training force-sign convention so the force parity is apples-to-apples
     sign, _ = check_force_sign(data)
     data["F"] *= sign

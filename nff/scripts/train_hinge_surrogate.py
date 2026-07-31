@@ -43,6 +43,7 @@ from nff.rve.hinge_function import STOP_UNCONVERGED, STOP_UNKNOWN, stop_code
 # get it (see nff/utils/splits.py). Existing `from ...train_hinge_surrogate import split_by_job`
 # call sites -- nff/scripts/figures/plot_surrogate_parity.py -- keep working.
 from nff.utils.splits import split_by_job  # noqa: F401
+from nff.utils.routes import FREE_PATH, ORIGIN_RAY, route_family_mask
 
 
 def _stop_codes(path, d, job_id):
@@ -203,6 +204,13 @@ def main():
                          "no longer isolates hinge compliance from the panels)")
     ap.add_argument("--eval-every", dest="eval_every", type=int, default=10,
                     help="epochs between val evaluations (= the val-curve sampling rate)")
+    ap.add_argument("--route-family", dest="route_family", default="all",
+                    choices=["all", ORIGIN_RAY, FREE_PATH],
+                    help="keep only jobs of one route family. `origin_ray` is the subset a STATE "
+                         "function can legitimately fit: origin rays foliate the state space, so "
+                         "history is recoverable from the state. Mixing in `free_path` (free-DOF) "
+                         "jobs, whose curves cross those rays, makes W multi-valued in the net's "
+                         "own input -- measured 2.50x cross-family sigma_pair on the PET campaign")
     ap.add_argument("--exclude-unconverged", dest="exclude_unconverged", default="both",
                     choices=["none", "eval", "both"],
                     help="quarantine rows from a DIVERGED solve: 'both' drops them everywhere, "
@@ -237,6 +245,18 @@ def main():
     print(f"force-sign check: FD dW/dtheta / M_theta ~ {ratio:+.3f} -> "
           f"{'match (F = +dW/du)' if sign > 0 else 'FLIPPED (negating F)'}")
     data["F"] *= sign
+
+    # Route filtering happens BEFORE the split: a family is a property of the campaign design, not
+    # of this run's train/val partition, and dropping a whole family afterwards would leave the
+    # split sized for a dataset that is no longer there.
+    if args.route_family != "all":
+        keep = route_family_mask(data["u"][:, 0], data["u"][:, 1], data["u"][:, 2],
+                                 data["g"][:, 0], data["job_id"], args.route_family)
+        n_jobs_before = len(np.unique(data["job_id"]))
+        data = {k: (v[keep] if getattr(v, "shape", (0,))[:1] == keep.shape else v)
+                for k, v in data.items()}
+        print(f"route family '{args.route_family}': kept {int(keep.sum())}/{keep.size} rows "
+              f"({len(np.unique(data['job_id']))}/{n_jobs_before} jobs)")
 
     split = split_by_job(data, args.val_frac, args.seed, test_frac=args.test_frac)
     tr, va, te = split if len(split) == 3 else (split[0], split[1], np.zeros_like(split[0]))
@@ -361,6 +381,7 @@ def main():
             "w_lig_range": [float(data["g"][:, 0].min()), float(data["g"][:, 0].max())],
             "hidden": hidden, "m_out": args.m_out, "lam": args.lam, "w_damage": args.w_damage,
             "feat_kind": args.feat_kind, "exclude_unconverged": args.exclude_unconverged,
+            "route_family": args.route_family,
             "epochs": epochs, "updates": steps * epochs, "lr": args.lr, "batch": args.batch,
             "seed": args.seed, "best_epoch": best_epoch,
             "force_sign": sign, "git": _git_rev(), "trained_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ",
