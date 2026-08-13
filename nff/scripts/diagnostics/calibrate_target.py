@@ -293,6 +293,11 @@ def main():
                         "the analytic lam(theta). ⚠ REQUIRED for a concentrated (single-tile) grip: "
                         "lam(theta) assumes the sheet opens uniformly, which such a grip "
                         "deliberately breaks, so the analytic rectangle is simply wrong there.")
+    p.add_argument("--center-on-clamp", action="store_true",
+                   help="centre the target in x on the CLAMPED faces instead of on the deployed "
+                        "bounding box. The clamp is fixed in all DOFs, so its centreline is the "
+                        "problem's main axis and does not drift as the sheet swings; the deployed "
+                        "bbox midpoint does.")
     p.add_argument("--derotate", action="store_true",
                    help="remove the rigid SWING before measuring the deployed bbox. A rotated "
                         "sheet's axis-aligned bbox is wider than the sheet, so a swinging grip "
@@ -423,11 +428,25 @@ def main():
         half_w, half_h = lam_x * w0 / 2.0, lam_y * h0 / 2.0
         sized_as = f"analytic lam at theta = {shape_angle:g} deg"
     if not args.target_from:
-        # Anchor: centred in x on the deployed sheet, and bottom edge ON the deployed bottom edge --
-        # the clamped tiles cannot move away from it, so a target that floats above/below it puts
-        # the clamp permanently outside and makes its chamfer error unfixable.
-        cx = 0.5 * (depl[:, 0].min() + depl[:, 0].max())
+        # Anchor: bottom edge ON the deployed bottom edge -- the clamped tiles cannot move away from
+        # it, so a target that floats above/below it puts the clamp permanently outside and makes
+        # its chamfer error unfixable.
+        # In x, the default is the deployed bbox midpoint. On a swinging grip that midpoint drifts
+        # with the swing, dragging the target off the axis the sheet is actually pulled along;
+        # --center-on-clamp anchors on the clamped faces instead, which are fixed by construction.
+        if args.center_on_clamp:
+            st, _ = build_closed_initial_state(config)
+            clamped = config.topology.get('bc_clamped')
+            if not isinstance(clamped, list) or not clamped:
+                raise SystemExit("--center-on-clamp needs boundary_conditions.clamped_faces to be "
+                                 "an explicit face list")
+            cx = float(np.mean(np.asarray(st.face_centroids)[[int(f) for f in clamped], 0]))
+            anchored = f"x on the CLAMPED faces {clamped} (fixed axis)"
+        else:
+            cx = 0.5 * (depl[:, 0].min() + depl[:, 0].max())
+            anchored = "x on the deployed bbox midpoint"
         cy = depl[:, 1].min() + half_h
+        print(f"    anchored: {anchored}, bottom edge on the deployed bottom")
     print(f"\n  TARGET RECTANGLE ({sized_as})  "
           f"half_w {half_w:.4f}  half_h {half_h:.4f}  center ({cx:.4f}, {cy:.4f})")
     print(f"    pull-in the design must supply: {100*(1 - 2*half_w/w1):+.1f}% in x, "
@@ -454,7 +473,8 @@ def main():
                   else f"      --from-deployed{' --derotate' if args.derotate else ''} "
                        f"--pull-in-x {args.pull_in_x:g} "
                        f"--pull-in-y {args.pull_in_y:g}" if args.from_deployed
-                  else "      (target sized from the analytic lam)")
+                  else "      (target sized from the analytic lam)") \
+            + (" --center-on-clamp" if args.center_on_clamp else "")
         bbox_line = (f"  deployed bbox {w1:.4f} x {h1:.4f} u"
                      + (f"  (DE-ROTATED by {-swing:+.2f} deg; the raw bbox is inflated "
                         f"by the swing)\n" if args.derotate else "\n"))
