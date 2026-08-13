@@ -175,7 +175,7 @@ def _overview_notes(ax, schedule, x, w, oy, dh, draw_scale, meta):
     for kind, label in [("cut", "cut  (knife, full depth)"),
                         ("line", "construction line  (do NOT cut)"),
                         ("point", "marking point  (POINTS table)"),
-                        ("hole", f"relief hole  Ø{sm['hole_dia_nominal']:.1f} mm")]:
+                        ("hole", f"relief hole  {sm['hole_drill_label']}")]:
         cy = y - 1.2
         if kind == "cut":
             ax.plot([swatch_x, swatch_x + 7], [cy, cy], color=_INK, lw=0.9)
@@ -261,7 +261,7 @@ def _title_block(ax, schedule, x, y, w, h, draw_scale, meta):
              ("SCALE", f"1:{draw_scale:g}"),
              ("PITCH", m.get("pitch", "")),
              ("CUTS / HOLES", f"{sm['n_cuts']} / {sm['n_holes']}"),
-             ("DRILL", f"Ø{sm['hole_dia_nominal']:.1f} mm"),
+             ("DRILL", sm["hole_drill_label"]),
              ("DESIGN", m.get("source", "")),
              ("DATE", m.get("date", ""))]
     cw = w / 4.0
@@ -320,7 +320,8 @@ def render_tables_a4(schedule, out_pdf, *, meta=None):
         ("RELIEF HOLES  —  drill before cutting",
          ["Each hole sits at a cut end. Drill it first, then cut into it:",
           "the drilled edge is the hinge's stress relief and must stay round.",
-          "dia is the nominal drill; w_lig is that hinge's ligament width."],
+          "dia is the drill for THAT hole; w_lig is that hinge's ligament width.",
+          "The hole tracks the ligament, so the sizes differ -- check each row."],
          hl_hdr, hl_rows),
     ]
 
@@ -371,6 +372,11 @@ def _footer(ax, meta):
 
 
 # ── A4 detail + 1:1 gauge ──────────────────────────────────────────────────────────
+
+def _nearest(values, x):
+    """The entry of ``values`` closest to ``x``."""
+    return min(values, key=lambda v: abs(v - x))
+
 
 def _fill_shapely(ax, g, **kw):
     """Fill a Shapely (Multi)Polygon, honouring interior rings."""
@@ -453,9 +459,9 @@ def render_detail_a4(schedule, geom, out_pdf, *, meta=None, detail_scale=3.0):
 
     lead = (cx + k * 0.85 * wl, cy - k * 1.15 * wl)
     ax.annotate("", (cx, cy), lead, arrowprops=dict(arrowstyle="-", color=_BLUE, lw=0.4))
-    ax.text(lead[0] + 1.5, lead[1], f"relief hole  Ø{sm['hole_dia_nominal']:.1f} mm  "
-            f"(exact Ø{2 * rho:.2f})", ha="left", va="center", fontsize=6.6, color=_BLUE,
-            bbox=dict(facecolor="white", edgecolor="none", pad=1.0))
+    ax.text(lead[0] + 1.5, lead[1], f"relief hole  Ø{_nearest(sm['hole_drills'], 2 * rho):.1f} mm  "
+            f"(exact Ø{2 * rho:.2f})   THIS hinge only", ha="left", va="center", fontsize=6.6,
+            color=_BLUE, bbox=dict(facecolor="white", edgecolor="none", pad=1.0))
 
     ax.text(_A4_W / 2, cy - k * half - 3.5,
             f"scale {detail_scale:g}:1 — the crossing cut runs SOLID through the junction; this cut "
@@ -478,9 +484,8 @@ def render_detail_a4(schedule, geom, out_pdf, *, meta=None, detail_scale=3.0):
     ax.annotate("", (lx, lig_y), (lx + wl, lig_y), arrowprops=dim)
     ax.text(lx + wl / 2, lig_y - 7.5, f"w_lig {wl:.1f}", ha="center", va="top", fontsize=5.6,
             color=_BLUE)
-    for i, d in enumerate(sorted({round(sm["hole_dia_min"], 2), round(sm["hole_dia_nominal"], 2),
-                                  round(sm["hole_dia_max"], 2)})):
-        cxi = gx + 78.0 + i * 22.0
+    for i, d in enumerate(sm["hole_drills"][:4]):
+        cxi = gx + 74.0 + i * 22.0
         ax.add_patch(Circle((cxi, lig_y), d / 2.0, facecolor="none", edgecolor=_INK, lw=0.6))
         ax.text(cxi, lig_y - 7.5, f"Ø{d:.1f}", ha="center", va="top", fontsize=5.6, color=_INK)
 
@@ -489,9 +494,12 @@ def render_detail_a4(schedule, geom, out_pdf, *, meta=None, detail_scale=3.0):
     for t in (f"Ligament widths on this sheet run {sm['w_lig_min']:.1f} to {sm['w_lig_max']:.1f} mm "
               f"(median {sm['w_lig_med']:.1f}). They are NOT all the same, and the width IS the "
               f"design:",
-              f"take each one from the CUTS table. Exact relief holes vary "
-              f"Ø{sm['hole_dia_min']:.2f}-{sm['hole_dia_max']:.2f} mm; one "
-              f"Ø{sm['hole_dia_nominal']:.1f} mm drill covers them all."):
+              f"take each one from the CUTS table. The relief hole tracks it "
+              f"(exact Ø{sm['hole_dia_min']:.2f}-{sm['hole_dia_max']:.2f} mm), so EACH HOLE HAS ITS "
+              f"OWN DRILL in the HOLES table -- do not drill them all the same."
+              if len(sm["hole_drills"]) > 1 else
+              f"take each one from the CUTS table. Relief holes are close enough that one "
+              f"Ø{sm['hole_drills'][0]:.1f} mm drill covers every one."):
         ax.text(12.0, ty, t, ha="left", va="top", fontsize=6.0, color=_INK)
         ty -= 4.2
     ty -= 4.0

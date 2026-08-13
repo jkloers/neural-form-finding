@@ -188,13 +188,20 @@ def build_layout_schedule(geom, *, tol_mm=0.05, line_tol_mm=0.5, hole_dia_mm=Non
     max_dev = _link_lines_through_points(cuts, points, pt_index, line_tol_mm)
 
     # ── hole table: one relief hole per ligament tip, drilled BEFORE the cut reaches it ──
+    # Each hole gets its OWN nearest drill. The fillet radius tracks that hinge's ligament width, so
+    # a design with a wide w_lig spread has a wide hole spread, and one drill sized to the median
+    # would over-cut the narrowest ligament -- exactly the hinge with the least material to spare.
+    # An explicit ``hole_dia_mm`` overrides that and forces a single size.
     exact = np.array([2.0 * float(hg["rho"]) for hg in geom["hinge_info"]])
-    nominal = float(hole_dia_mm) if hole_dia_mm is not None else _nearest_drill(float(np.median(exact)))
     holes = []
     for hg in geom["hinge_info"]:
         tip = to_datum(hg["tip"])
-        holes.append(dict(x=float(tip[0]), y=float(tip[1]), dia_exact=2.0 * float(hg["rho"]),
-                          dia_nominal=nominal, w_lig=float(hg["w_lig"])))
+        d_exact = 2.0 * float(hg["rho"])
+        holes.append(dict(x=float(tip[0]), y=float(tip[1]), dia_exact=d_exact,
+                          dia_nominal=(float(hole_dia_mm) if hole_dia_mm is not None
+                                       else _nearest_drill(d_exact)),
+                          w_lig=float(hg["w_lig"])))
+    drills = sorted({h["dia_nominal"] for h in holes})
     holes.sort(key=lambda hh: (round(hh["y"], 3), round(hh["x"], 3)))
     for n, hh in enumerate(holes, start=1):
         hh["id"] = f"H{n:02d}"
@@ -217,7 +224,11 @@ def build_layout_schedule(geom, *, tol_mm=0.05, line_tol_mm=0.5, hole_dia_mm=Non
         stock_w=float(w), stock_h=float(h), n_points=len(points), n_cuts=len(cuts),
         n_perimeter=sum(1 for r in raw if r["perimeter"]), n_holes=len(holes),
         w_lig_min=float(wl.min()), w_lig_max=float(wl.max()), w_lig_med=float(np.median(wl)),
-        hole_dia_nominal=nominal, hole_dia_min=float(exact.min()), hole_dia_max=float(exact.max()),
+        hole_drills=drills,
+        hole_drill_label=(f"Ø{drills[0]:.1f} mm" if len(drills) == 1 else
+                          f"Ø{drills[0]:.1f}-{drills[-1]:.1f} mm, {len(drills)} sizes"),
+        hole_dia_nominal=max(drills, key=lambda d: sum(h["dia_nominal"] == d for h in holes)),
+        hole_dia_min=float(exact.min()), hole_dia_max=float(exact.max()),
         cut_len_total=float(sum(c["cut_len"] for c in cuts)),
         max_collinearity_dev=float(max_dev))
     return dict(stock=(float(w), float(h)), origin=org, points=points, cuts=cuts,

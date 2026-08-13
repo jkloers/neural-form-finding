@@ -101,8 +101,13 @@ def _readme(path, *, schedule, meta, args, scale, design_size, length_scale, run
         f"- Panel pitch: **{meta['pitch']}**.",
         f"- {sm['n_cuts']} cuts, {sm['n_points']} marking points, {sm['n_holes']} relief holes.",
         f"- Total cut length {sm['cut_len_total'] / 1000.0:.2f} m.",
-        f"- Ligaments {sm['w_lig_min']:.1f}-{sm['w_lig_max']:.1f} mm; one "
-        f"Ø{sm['hole_dia_nominal']:.1f} mm drill covers every relief hole.",
+        f"- Ligaments {sm['w_lig_min']:.1f}-{sm['w_lig_max']:.1f} mm.",
+        (f"- Relief holes: **{len(sm['hole_drills'])} different drills** "
+         f"({', '.join(f'Ø{d:.1f}' for d in sm['hole_drills'])}). The hole tracks its own "
+         f"ligament, so a single drill sized to the average would over-cut the narrowest hinge "
+         f"-- the one with least material to spare. Take each size from `holes.csv`."
+         if len(sm['hole_drills']) > 1 else
+         f"- Relief holes: one Ø{sm['hole_drills'][0]:.1f} mm drill covers every one."),
         "",
     ]
     if abs(scale - 1.0) > 1e-9:
@@ -308,8 +313,9 @@ def main():
     print(f"  table check : reproduces geometry to {worst:.1e} mm; "
           f"marks lie on their lines to {sm['max_collinearity_dev']:.1e} mm")
     print(f"  activation  : HOLD tile {hold}, PULL tile {pull}")
-    print(f"  drill       : Ø{sm['hole_dia_nominal']:.1f} mm nominal "
-          f"(exact Ø{sm['hole_dia_min']:.2f}-{sm['hole_dia_max']:.2f})")
+    print(f"  drill       : {sm['hole_drill_label']} "
+          f"({', '.join(f'{d:.1f}' for d in sm['hole_drills'])}; "
+          f"exact Ø{sm['hole_dia_min']:.2f}-{sm['hole_dia_max']:.2f})")
     for p in [a3, tab, det, *csvs, dxf["path"], rdm]:
         print(f"    -> {p}")
 
