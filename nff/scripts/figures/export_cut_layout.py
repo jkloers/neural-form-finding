@@ -33,15 +33,24 @@ from nff.topology.cut_dxf import export_cut_geometry_dxf
 from nff.topology.cut_pattern import measure_cut_geometry
 
 
-def _centre_faces(config):
-    """(hold_face, pull_face): the middle tile of the bottom row and of the top row.
+def _design_grip(config):
+    """(hold_faces, pull_faces) as the CONFIG declares them, so the drawing marks the real BCs.
 
-    Face index is ``column * N + row``, so column ``c`` runs from ``c*N`` (bottom) to ``c*N + N-1``
-    (top). The middle column of an odd grid is ``M // 2``.
+    The sheet is gripped where it was simulated to be gripped; inventing a grip for the drawing is
+    how a distributed design ends up marked as a two-tile pinch. Falls back to the middle tile of
+    the bottom and top rows only when the config declares no explicit clamp, which is the
+    ``bc_clamped: "boundary"`` case. Face index is ``column * N + row``.
     """
+    clamped = config.topology.get('bc_clamped', None)
+    loaded = []
+    for s in config.topology.get('loads', []) or []:
+        f = s.get('face')
+        loaded += list(f) if isinstance(f, (list, tuple)) else [f]
+    if isinstance(clamped, list) and clamped and loaded:
+        return [int(c) for c in clamped], [int(f) for f in loaded]
     M, N = int(config.topology['M']), int(config.topology['N'])
     c = M // 2
-    return c * N, c * N + (N - 1)
+    return [c * N], [c * N + (N - 1)]
 
 
 def _grip_matches_design(config, hold, pull):
@@ -58,7 +67,8 @@ def _grip_matches_design(config, hold, pull):
     for s in config.topology.get('loads', []) or []:
         f = s.get('face')
         loaded.update(f if isinstance(f, (list, tuple)) else [f])
-    return set(int(c) for c in clamped) == {int(hold)} and loaded == {int(pull)}
+    return set(int(c) for c in clamped) == set(int(h) for h in hold) and \
+        loaded == set(int(p) for p in pull)
 
 
 def _resolve_scale(config, stock_mm):
@@ -89,7 +99,9 @@ def _resolve_scale(config, stock_mm):
 def _readme(path, *, schedule, meta, args, scale, design_size, length_scale, run_label):
     W, H = schedule["stock"]
     sm = schedule["summary"]
-    act = {a["role"]: a for a in schedule.get("activation", [])}
+    act = schedule.get("activation", [])
+    holds = [a for a in act if a["role"] == "HOLD"]
+    pulls = [a for a in act if a["role"] == "PULL"]
     lines = [
         f"# Cutting package — {run_label}",
         "",
@@ -133,20 +145,19 @@ def _readme(path, *, schedule, meta, args, scale, design_size, length_scale, run
         lines += [
             "## How to activate it",
             "",
-            "Two tiles only:",
+            f"**HOLD {len(holds)} tile{'s' if len(holds) != 1 else ''}, "
+            f"PULL {len(pulls)} tile{'s' if len(pulls) != 1 else ''}:**",
             "",
-            f"- **HOLD** tile {act['HOLD']['face']} at ({act['HOLD']['x']:.0f}, "
-            f"{act['HOLD']['y']:.0f}) -- middle tile of the bottom row."
-            if "HOLD" in act else "",
-            f"- **PULL** tile {act['PULL']['face']} at ({act['PULL']['x']:.0f}, "
-            f"{act['PULL']['y']:.0f}) -- middle tile of the top row."
-            if "PULL" in act else "",
+            "| role | tile | x | y |",
+            "|---|---|---|---|",
+            *[f"| {a['role']} | {a['face']} | {a['x']:.0f} | {a['y']:.0f} |"
+              for a in sorted(act, key=lambda a: (a["role"], a["face"]))],
             "",
             "Pull along the long axis of the sheet. Nothing else is gripped, and nothing else is "
             "restrained.",
             "",
             ("> This IS the boundary condition the design was optimised under: the config clamps "
-             "exactly this tile and pulls exactly that one, with no other restraint. The sheet "
+             "exactly these tiles and pulls exactly those, with no other restraint. The sheet "
              "you deploy by hand is the sheet that was simulated."
              if meta.get("grip_is_design") else
              "> This two-tile grip is the physical test protocol, not the boundary condition the "
@@ -211,8 +222,10 @@ def main():
                     help="N in 1:N for the A3 overview (default 8)")
     ap.add_argument("--hole-dia-mm", type=float, default=None,
                     help="single nominal relief-hole drill [mm] (default: nearest preferred size)")
-    ap.add_argument("--hold-face", type=int, default=None, help="tile to hold (default: middle of the bottom row)")
-    ap.add_argument("--pull-face", type=int, default=None, help="tile to pull (default: middle of the top row)")
+    ap.add_argument("--hold-face", type=int, nargs="*", default=None,
+                    help="tiles to hold (default: the config's own clamped faces)")
+    ap.add_argument("--pull-face", type=int, nargs="*", default=None,
+                    help="tiles to pull (default: the config's own loaded faces)")
     ap.add_argument("--kerf", type=float, default=0.2,
                     help="kerf [mm]; affects ONLY the companion DXF and the width of the slots "
                          "drawn on the detail sheet. No tabulated number depends on it, because a "
@@ -251,12 +264,13 @@ def main():
         assert abs(got_w - stock[0]) < 1e-6 and abs(got_h - stock[1]) < 1e-6, (
             f"built sheet {got_w:.4f} x {got_h:.4f} mm != stock {stock[0]} x {stock[1]}")
 
-    hold = _centre_faces(config)[0] if args.hold_face is None else args.hold_face
-    pull = _centre_faces(config)[1] if args.pull_face is None else args.pull_face
+    hold_d, pull_d = _design_grip(config)
+    hold = hold_d if args.hold_face is None else list(args.hold_face)
+    pull = pull_d if args.pull_face is None else list(args.pull_face)
     face_mm = np.asarray(state.face_centroids) * length_scale
 
     schedule = build_layout_schedule(geom, hole_dia_mm=args.hole_dia_mm, face_centroids_mm=face_mm,
-                                     hold_faces=[hold], pull_faces=[pull])
+                                     hold_faces=hold, pull_faces=pull)
     worst = verify_schedule(schedule, geom)
     sm = schedule["summary"]
 
@@ -312,7 +326,9 @@ def main():
           f"{sm['cut_len_total'] / 1000.0:.2f} m of cutting")
     print(f"  table check : reproduces geometry to {worst:.1e} mm; "
           f"marks lie on their lines to {sm['max_collinearity_dev']:.1e} mm")
-    print(f"  activation  : HOLD tile {hold}, PULL tile {pull}")
+    print(f"  activation  : HOLD tile(s) {', '.join(map(str, hold))}  "
+          f"PULL tile(s) {', '.join(map(str, pull))}"
+          + ("   (the config's own BCs)" if grip_is_design else "   (OVERRIDDEN, not the design's BCs)"))
     print(f"  drill       : {sm['hole_drill_label']} "
           f"({', '.join(f'{d:.1f}' for d in sm['hole_drills'])}; "
           f"exact Ø{sm['hole_dia_min']:.2f}-{sm['hole_dia_max']:.2f})")

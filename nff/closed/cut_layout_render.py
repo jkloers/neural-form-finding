@@ -224,8 +224,10 @@ def _overview_notes(ax, schedule, x, w, oy, dh, draw_scale, meta):
         for a in act:
             y = line(f"{a['role']:<5s} tile {a['face']:<3d} at ({a['x']:.0f}, {a['y']:.0f})", y,
                      mono=True, size=5.0, color=_INK if a["role"] == "HOLD" else _RED)
-        y = line("Two tiles only. Pull along the long", y, color=_GREY, size=4.6)
-        y = line("axis. Nothing else gripped or held.", y, color=_GREY, size=4.6)
+        n_hold = sum(1 for a in act if a["role"] == "HOLD")
+        n_pull = len(act) - n_hold
+        y = line(f"{n_hold} held, {n_pull} pulled. Pull along the", y, color=_GREY, size=4.6)
+        y = line("long axis. Nothing else restrained.", y, color=_GREY, size=4.6)
         for t in ((meta or {}).get("grip_note") or []):
             y = line(t, y, color=_GREY, size=4.6)
 
