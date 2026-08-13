@@ -175,17 +175,22 @@ def _readme(path, *, schedule, meta, args, scale, design_size, length_scale, run
         "2. **Mark the datum** at the lower-left corner with the short edge horizontal. "
         "The datum is fixed and cannot be moved to another corner: the pattern is chiral, and a "
         "mirrored layout deploys to the mirrored shape.",
-        "3. **Mark every point** from `points.csv` / the POINTS table. Use the x/y ordinates, then "
-        "confirm each with the `from A` and `from B` tape distances. Points flagged `on edge` sit "
-        "on the factory edge at the given distance and need only one measurement.",
-        "4. **Check the layout** against the PRE-CUT CHECKS panel before any blade touches the "
-        "sheet.",
-        "5. **Scribe the construction lines** point to point. Most lines also run through further "
-        "marks, listed in the `through` column: the line has to hit every one of them. A line that "
-        "misses a mark indicts the mark, not the line, so fix it before cutting.",
-        "6. **Drill the relief holes** at the coordinates in `holes.csv`.",
-        "7. **Cut hole to hole.** Never cut past a hole: the uncut ligament between two holes is "
-        "the hinge, and cutting through one is not recoverable.",
+        "3. **Mark only the ANCHOR points** — the two endpoints of each line, listed as `from`/`to` "
+        "in `cuts.csv`. Use the x/y ordinates from `points.csv`, then confirm each with the "
+        "`from A` and `from B` tape distances. Points flagged `on edge` sit on the factory edge at "
+        "the given distance and need only one measurement.",
+        "4. **Scribe each line** through its two anchors.",
+        "5. **Step along the line** for every remaining point on it, using the `station` column of "
+        "the LINES table (`stations` in `cuts.csv`, as `POINT@distance`). Station is measured from "
+        "the line's first point. This is the whole reason to work line-first: those points need no "
+        "ordinate, no second tape arc and no squaring off, and they inherit the line's accuracy "
+        "instead of adding their own.",
+        "6. **Check the layout** against the PRE-CUT CHECKS panel before any blade touches the "
+        "sheet. A line that misses one of its marks indicts the mark, not the line.",
+        "7. **Drill the relief holes** at the coordinates in `holes.csv`.",
+        "8. **Cut hole to hole**, between the two stations given under each line. Never cut past a "
+        "hole: the uncut ligament between two holes is the hinge, and cutting through one is not "
+        "recoverable.",
         "",
         "## Files",
         "",

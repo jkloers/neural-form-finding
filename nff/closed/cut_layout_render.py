@@ -192,15 +192,17 @@ def _overview_notes(ax, schedule, x, w, oy, dh, draw_scale, meta):
     y -= 1.5
 
     y = head("SEQUENCE", y)
-    for i, step in enumerate([
-            "Square the stock; mark the datum corner.",
-            "Measure the stock diagonal (CHECKS below).",
-            "Mark every point from the POINTS table.",
-            "Verify the layout checks before cutting.",
-            "Scribe each construction line P->P.",
-            "Drill every relief hole.",
-            "Cut hole-to-hole. Never cut past a hole."], start=1):
-        y = line(f"{i}. {step}", y)
+    for tag, step in [("1.", "Square the stock; mark the datum corner."),
+                      ("2.", "Measure the stock diagonal (CHECKS below)."),
+                      ("3.", "Mark the ANCHOR points of each line only"),
+                      ("", "(POINTS table: x/y, then both tape arcs)."),
+                      ("4.", "Scribe the line through its two anchors."),
+                      ("5.", "Step ALONG the line for its other points"),
+                      ("", "(LINES table, station column). No ordinates."),
+                      ("6.", "Verify the layout checks before cutting."),
+                      ("7.", "Drill every relief hole."),
+                      ("8.", "Cut hole-to-hole. Never cut past a hole.")]:
+        y = line(f"{tag:<3s}{step}", y)
     y -= 2.0
 
     y = head("PRE-CUT CHECKS", y)
@@ -211,6 +213,7 @@ def _overview_notes(ax, schedule, x, w, oy, dh, draw_scale, meta):
 
     y = head("QUANTITIES", y)
     for k, v in [("marking points", f"{sm['n_points']}"),
+                 ("of those, MEASURED", f"{sm['n_measured']}"),
                  ("cuts", f"{sm['n_cuts']}"),
                  ("relief holes", f"{sm['n_holes']}"),
                  ("total cut length", f"{sm['cut_len_total'] / 1000.0:.2f} m"),
@@ -281,13 +284,35 @@ def render_tables_a4(schedule, out_pdf, *, meta=None):
     from matplotlib.backends.backend_pdf import PdfPages
 
     W, H = schedule["stock"]
-    pt_hdr = (f"{'ID':<5s}{'x':>9s}{'y':>9s}{'from A':>10s}{'from B':>10s}  {'on edge':<12s}"
-              f"{'lines':>6s}  []")
+    pt_hdr = (f"{'ID':<5s}{'origin':<10s}{'x':>9s}{'y':>9s}{'from A':>10s}{'from B':>10s}  "
+              f"{'on edge':<12s}{'lines':>6s}  []")
     pt_rows = [
-        f"{p['id']:<5s}{p['x']:>9.1f}{p['y']:>9.1f}{p['d_from_A']:>10.1f}{p['d_from_B']:>10.1f}  "
+        f"{p['id']:<5s}{p['origin']:<10s}{p['x']:>9.1f}{p['y']:>9.1f}"
+        f"{p['d_from_A']:>10.1f}{p['d_from_B']:>10.1f}  "
         f"{(p['edge'] + ' ' + format(p['along'], '.1f')) if p['edge'] else '-':<12s}"
         f"{p['n_lines']:>6d}  []"
         for p in schedule["points"]]
+
+    # LINES: one block per cut. Set out the two ANCHOR points, scribe, then every remaining point on
+    # that line is one measurement ALONG it.
+    ln_hdr = (f"{'LINE':<6s}{'pt':>5s}{'station':>10s}{'step':>9s}  {'how to place it':<34s}[]")
+    ln_rows = []
+    for c in schedule["cuts"]:
+        st = c["stations"]
+        prev = 0.0
+        origin = {p["id"]: p["origin"] for p in schedule["points"]}
+        for k, (pid, s) in enumerate(st):
+            og = origin.get(pid, "")
+            how = ("MEASURE it (POINTS table)" if og == "MEASURE"
+                   else f"already set on {og}" if og and not og.startswith(c["id"])
+                   else f"step along from {st[0][0]}")
+            ln_rows.append(f"{(c['id'] if k == 0 else ''):<6s}{pid:>5s}{s:>10.1f}"
+                           f"{(s - prev if k else 0.0):>9.1f}  {how:<34s}[]")
+            prev = s
+        ln_rows.append(f"{'':<6s}{'':>5s}{'':>10s}{'':>9s}  "
+                       f"CUT {c['cut_from_station']:.1f} -> {c['cut_to_station']:.1f} "
+                       f"({c['cut_len']:.1f} mm)   []")
+        ln_rows.append("")
 
     ct_hdr = (f"{'ID':<5s}{'from':>6s}{'to':>6s}  {'through':<16s}{'line':>9s}{'set.a':>8s}"
               f"{'set.b':>8s}{'CUT':>9s}{'ang':>7s}  []")
@@ -309,11 +334,23 @@ def render_tables_a4(schedule, out_pdf, *, meta=None):
           f"A = (0, 0) and B = ({W:.1f}, 0). Strike two arcs to place a point",
           "without squaring off a long edge. Use them to check every mark.",
           "'on edge' means the point lies on the factory edge at that distance.",
-          "'lines' is how many construction lines must pass through the mark."],
+          "'lines' is how many construction lines must pass through the mark.",
+          "You do NOT have to set every point out this way -- see the LINES table.",
+          "Only the anchor points need ordinates; the rest come off the lines."],
          pt_hdr, pt_rows),
-        ("CUTS  —  scribe the full line, cut only the middle",
-         ["line = full length between the two marking points (scribe this).",
-          "through = other marks this line must also pass through. If it misses",
+        ("LINES  —  work line by line, not point by point",
+         ["Every point on a cut is COLLINEAR with the rest, to better than a",
+          "thousandth of a millimetre. So set out the two ANCHOR points of a line",
+          "from the POINTS table, scribe it, and then place every other point on",
+          "that line with ONE measurement along it -- no second ordinate, no",
+          "squaring off, and no error of its own.",
+          "station = distance along the line from its first point. step = gap",
+          "from the point above. The CUT line under each block gives the two",
+          "stations to cut between; outside them is ligament, do not cut."],
+         ln_hdr, ln_rows),
+        ("CUTS  —  the same lines, summarised",
+         ["line = full length between the two anchor points (scribe this).",
+          "through = the marks this line must also pass through. If it misses",
           "one, a mark is wrong: fix it before cutting.",
           "set.a / set.b = ligament setback at each end: do NOT cut there.",
           "CUT = the length actually cut, hole centre to hole centre.",

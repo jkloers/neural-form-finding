@@ -206,6 +206,8 @@ def build_layout_schedule(geom, *, tol_mm=0.05, line_tol_mm=0.5, hole_dia_mm=Non
     for n, hh in enumerate(holes, start=1):
         hh["id"] = f"H{n:02d}"
 
+    _resolve_origins(cuts, points)
+
     # ── tiles and the hand-grip activation marks ──
     tiles, activation = [], []
     if face_centroids_mm is not None:
@@ -230,7 +232,8 @@ def build_layout_schedule(geom, *, tol_mm=0.05, line_tol_mm=0.5, hole_dia_mm=Non
         hole_dia_nominal=max(drills, key=lambda d: sum(h["dia_nominal"] == d for h in holes)),
         hole_dia_min=float(exact.min()), hole_dia_max=float(exact.max()),
         cut_len_total=float(sum(c["cut_len"] for c in cuts)),
-        max_collinearity_dev=float(max_dev))
+        max_collinearity_dev=float(max_dev),
+        n_measured=sum(1 for p in points if p["origin"] == "MEASURE"))
     return dict(stock=(float(w), float(h)), origin=org, points=points, cuts=cuts,
                 holes=holes, checks=checks, tiles=tiles, activation=activation,
                 summary=summary, tol_mm=float(tol_mm))
@@ -253,14 +256,48 @@ def _link_lines_through_points(cuts, points, pt_index, line_tol_mm):
         t = (xy - a) @ u
         perp = np.abs((xy - a) @ np.array([-u[1], u[0]]))
         on = (perp <= line_tol_mm) & (t >= -line_tol_mm) & (t <= L + line_tol_mm)
-        idx = np.argsort(t[on])
-        ids = [points[i]["id"] for i in np.flatnonzero(on)[idx]]
+        order = np.flatnonzero(on)[np.argsort(t[on])]
+        ids = [points[i]["id"] for i in order]
         if on.any():
             max_dev = max(max_dev, float(perp[on].max()))
-        for i in np.flatnonzero(on):
+        for i in order:
             points[i]["n_lines"] += 1
         c["through"] = [i for i in ids if i not in (c["from_id"], c["to_id"])]
+        # Stations: distance along the scribed line from its first point. Once two points fix the
+        # line, every other point on it is a single measurement ALONG it -- no second ordinate, no
+        # squaring off, and the marks that follow inherit the line's accuracy instead of adding
+        # their own. This is why the line, not the point, is the unit of work.
+        c["stations"] = [(points[i]["id"], float(t[i])) for i in order]
+        c["cut_from_station"] = float(c["setback_from"])
+        c["cut_to_station"] = float(L - c["setback_to"])
     return max_dev
+
+
+def _resolve_origins(cuts, points):
+    """Decide, per point, whether it must be MEASURED or can be stepped off a line already scribed.
+
+    A line needs two known points before it can be scribed; every other point on it then follows
+    from a single distance along it. Walking the lines in order and only measuring what is not yet
+    known gives a small set of measured points and leaves the rest inheriting a scribed line's
+    accuracy. Each measured point is an independent chance to be wrong, so fewer is better.
+    """
+    by_id = {p["id"]: p for p in points}
+    for p in points:
+        p["origin"] = ""
+    known, order = set(), []
+    for c in cuts:                                   # in table order: up the sheet
+        for pid in (c["from_id"], c["to_id"]):       # the two anchors must exist to scribe
+            if pid not in known:
+                by_id[pid]["origin"] = "MEASURE"
+                known.add(pid)
+                order.append(pid)
+        for pid, s in c["stations"]:
+            if pid not in known:
+                by_id[pid]["origin"] = f"{c['id']}@{s:.1f}"
+                known.add(pid)
+                order.append(pid)
+        c["anchors"] = [c["from_id"], c["to_id"]]
+    return sum(1 for p in points if p["origin"] == "MEASURE")
 
 
 def _build_checks(points, w, h):
@@ -294,13 +331,16 @@ def write_layout_csv(schedule, out_dir):
     os.makedirs(out_dir, exist_ok=True)
     specs = [
         ("points.csv", schedule["points"],
-         ["id", "x", "y", "d_from_A", "d_from_B", "edge", "along", "n_lines"]),
+         ["id", "origin", "x", "y", "d_from_A", "d_from_B", "edge", "along", "n_lines"]),
         ("cuts.csv", schedule["cuts"],
-         ["id", "from_id", "to_id", "through", "x_from", "y_from", "x_to", "y_to", "line_len",
-          "angle_deg", "setback_from", "setback_to", "cut_len",
+         ["id", "from_id", "to_id", "through", "stations_str", "x_from", "y_from", "x_to", "y_to",
+          "line_len", "angle_deg", "setback_from", "setback_to", "cut_len",
+          "cut_from_station", "cut_to_station",
           "x_cut_from", "y_cut_from", "x_cut_to", "y_cut_to"]),
         ("holes.csv", schedule["holes"], ["id", "x", "y", "dia_nominal", "dia_exact", "w_lig"]),
     ]
+    for c in schedule["cuts"]:                       # flatten the station list for the CSV
+        c["stations_str"] = " ".join(f"{pid}@{s:.1f}" for pid, s in c["stations"])
     written = []
     for name, rows, cols in specs:
         path = os.path.join(out_dir, name)
