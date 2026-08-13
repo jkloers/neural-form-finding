@@ -152,13 +152,19 @@ def _annotate(fig, page_w, page_h, scale, sheet_w, sheet_h, title):
 
 # ── run glue (state/config -> the two files) ───────────────────────────────────────
 
-def _per_hinge_lookup(initial_state, hinge_w_lig, w_lig_mm, fillet_ratio, length_scale):
-    """(H, 4) per-hinge ``[x_mm, y_mm, w_lig_mm, rho_mm]`` keyed by pivot position [mm]."""
+def _per_hinge_lookup(initial_state, hinge_w_lig, w_lig_mm, fillet_ratio, length_scale,
+                      w_lig_scale=1.0):
+    """(H, 4) per-hinge ``[x_mm, y_mm, w_lig_mm, rho_mm]`` keyed by pivot position [mm].
+
+    ``w_lig_scale`` scales the LEARNED per-hinge widths the same way ``length_scale`` already scales
+    the pivot positions; ``w_lig_mm`` is expected to arrive already scaled.
+    """
     from nff.stages.geometry import hinge_vertex_positions
     pivots = np.asarray(hinge_vertex_positions(
         initial_state.face_centroids, initial_state.centroid_node_vectors,
         initial_state.hinge_node_pairs)[0]) * length_scale
-    w_lig = np.asarray(hinge_w_lig) if hinge_w_lig is not None else np.full(len(pivots), w_lig_mm)
+    w_lig = (w_lig_scale * np.asarray(hinge_w_lig) if hinge_w_lig is not None
+             else np.full(len(pivots), w_lig_mm))
     return np.column_stack([pivots, w_lig, fillet_ratio * w_lig]), w_lig
 
 
@@ -176,7 +182,7 @@ def _bc_marks(initial_state, config, load_specs, length_scale):
 
 
 def build_run_cut_geometry(initial_state, cut_coords, struct, config, hinge_model, hinge_w_lig=None,
-                           w_c_mm=None):
+                           w_c_mm=None, geom_scale=1.0):
     """Per-hinge flat cut geometry (mm) for a run: learned ``w_lig`` + fillet at the physical scale.
 
     Single source of truth for the kerf / ligament / fillet / ``length_scale`` a run cuts at, shared
@@ -185,27 +191,82 @@ def build_run_cut_geometry(initial_state, cut_coords, struct, config, hinge_mode
     Args:
         w_c_mm: kerf (slot) width [mm]; ``None`` -> the simulation-faithful ``_W_C_MM``. Pass a larger
             value for the laser DXF to widen every cut so closely-spaced lines separate cleanly.
+        geom_scale: uniform in-plane scale on the whole pattern — lattice, ligaments and fillets
+            together — for cutting the design into stock of a different size. The geometry is REBUILT
+            at the scaled parameters rather than affine-scaled after the fact, so
+            :func:`measure_cut_geometry` stays a genuine round-trip check on what will be cut.
+            ⚠ The kerf is NOT scaled: it is a property of the tool, not of the design. Nor is the
+            sheet thickness, so a ``geom_scale != 1`` is not a similarity scaling and the run's
+            forces and damage margins do not carry over.
 
     Returns:
         (geom, w_lig, length_scale): the :func:`build_cut_geometry` dict, the (H,) per-hinge ligament
         widths [mm], and the mm-per-sheet-unit physical scale.
     """
-    w_lig_mm = float(getattr(hinge_model, 'w_lig_mm', 5.0))
+    s = float(geom_scale)
+    w_lig_design = float(getattr(hinge_model, 'w_lig_mm', 5.0))
     spacing = float(config.topology.get('spacing', 1.0))
     fillet_ratio = float(getattr(hinge_model, 'fillet_ratio', 0.16) or 0.16)   # may be unset/None
     # Physical scale: an explicit stock size wins (a real sheet is cut to a real width), otherwise
     # fall back to the w_lig ~ 1/10 tile convention.
     sheet_w_mm = float(config.topology.get('sheet_width_mm', 0.0) or 0.0)
-    length_scale = (sheet_w_mm / (int(config.topology['M']) * spacing) if sheet_w_mm > 0.0
-                    else _PHYS_TILE * w_lig_mm / spacing)
+    length_scale = s * (sheet_w_mm / (int(config.topology['M']) * spacing) if sheet_w_mm > 0.0
+                        else _PHYS_TILE * w_lig_design / spacing)
+    w_lig_mm = s * w_lig_design
     w_c = float(w_c_mm) if w_c_mm is not None else _W_C_MM
     T, cols = np.asarray(struct['T']), struct['cols']
     hinge_lookup, w_lig = _per_hinge_lookup(initial_state, hinge_w_lig, w_lig_mm,
-                                            fillet_ratio, length_scale)
+                                            fillet_ratio, length_scale, w_lig_scale=s)
     geom = build_cut_geometry(cut_coords, T, cols, w_c=w_c, w_lig=w_lig_mm,
                               rho=fillet_ratio * w_lig_mm, length_scale=length_scale,
                               hinge_lookup=hinge_lookup)
     return geom, w_lig, length_scale
+
+
+def reconstruct_run_geometry(config, params_override=None, w_c_mm=None, geom_scale=1.0):
+    """Rebuild a run's flat cut geometry from its config + trained params, without re-training.
+
+    Shared by the DXF and the workshop-layout exporters, so both cut the same pattern.
+
+    Args:
+        config: parsed experiment config (a run's own ``config.yaml`` for the trained design).
+        params_override: contents of ``best_params.pkl``; ``None`` -> the untrained initial design.
+        w_c_mm: kerf width [mm] (see :func:`build_run_cut_geometry`).
+        geom_scale: uniform in-plane scale (see :func:`build_run_cut_geometry`).
+
+    Returns:
+        (geom, w_lig, length_scale, initial_state) -- the first three as from
+        :func:`build_run_cut_geometry`; the state carries the tile centroids (sheet units) needed to
+        place grip marks.
+    """
+    # jax is imported here and not at module scope: the render-only entry points into this module
+    # (``write_cut_patterns`` from a finished run) must stay importable without paying for it.
+    import jax
+    import jax.numpy as jnp
+    from nff.closed.setup import (build_closed_initial_state, init_closed_les_params,
+                                  build_surrogate_energy)
+    from nff.topology.closed_builder_jax import solve_cut_vertices_jax, boundary_flat_from_logits
+
+    initial_state, _ = build_closed_initial_state(config)
+    params, static_features = init_closed_les_params(config)
+    _, _, geometry_fn, _, w_lig_logit0 = build_surrogate_energy(
+        config, static_features, initial_state, params)
+    if w_lig_logit0 is not None:
+        params = {**params, 'w_lig_logit': w_lig_logit0}
+    if params_override is not None:                     # trained design from best_params.pkl
+        params = {**params, **{k: jnp.asarray(v) for k, v in params_override.items()}}
+
+    geom_hinge = geometry_fn(params) if geometry_fn is not None else None
+    hinge_w_lig = geom_hinge.w_lig if geom_hinge is not None else None
+
+    struct, sliders = static_features['struct'], static_features['sliders']
+    cut_coords = np.asarray(solve_cut_vertices_jax(
+        struct, boundary_flat_from_logits(sliders, params['bnd_logits']),
+        jax.nn.sigmoid(params['z'])))
+    geom, w_lig, length_scale = build_run_cut_geometry(
+        initial_state, cut_coords, struct, config, config.hinge_model, hinge_w_lig,
+        w_c_mm=w_c_mm, geom_scale=geom_scale)
+    return geom, w_lig, length_scale, initial_state
 
 
 def write_cut_patterns(run_dir, *, initial_state, cut_coords, struct, config, hinge_model,
