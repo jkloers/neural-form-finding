@@ -304,7 +304,7 @@ def _fill_shapely(ax, geom, **kw):
 def plot_hinge_strips(coords, hstruct, w_lig, kerf, r_win_factor=2.0,
                       ax=None, filepath=None, sheet_color="#F58025",
                       strip_color=_HINGE_TEAL, mm_per_unit=None, scale_mm=200.0, title=None,
-                      fillet=0.0):
+                      fillet=0.0, fs=10.0):
     """Full sheet with every hinge strip (the meshable RVE domains) coloured.
 
     No sheet outline; cuts drawn as white removed-material gaps; each hinge's strip
@@ -344,7 +344,7 @@ def plot_hinge_strips(coords, hstruct, w_lig, kerf, r_win_factor=2.0,
         x0 = hull[:, 0].min(); y0 = hull[:, 1].min() - 0.06 * np.ptp(hull[:, 1])
         ax.plot([x0, x0 + L], [y0, y0], color="#1A1A1A", lw=3, zorder=20)
         ax.annotate(f"{scale_mm:.0f} mm", (x0 + L/2, y0 - 0.015 * np.ptp(hull[:, 1])),
-                    ha="center", va="top", fontsize=10, zorder=20)     # number BELOW the bar (match detail panel)
+                    ha="center", va="top", fontsize=fs, zorder=20)     # number BELOW the bar (match detail panel)
 
     ax.set_aspect("equal")
     ax.axis("off")
@@ -482,7 +482,7 @@ def _rve_real_mesh(ax, region, *, w_lig, lc_min, lc_max, color="#728079", lw=0.4
 
 def plot_hinge_dimensions(w_lig=10.0, w_c=3.0, alpha_deg=62.0, fillet=2.0, thickness=1.0,
                           ax=None, filepath=None, steel_color="#D9DCE1",
-                          lig_color=_HINGE_TEAL, title=None):
+                          lig_color=_HINGE_TEAL, title=None, fs=12.0, scale_bar=True):
     """Dimensioned engineering drawing of one hinge (parametric schematic).
 
     The hinge is the residual ligament left where the main cut stops ``w_lig`` short
@@ -492,6 +492,8 @@ def plot_hinge_dimensions(w_lig=10.0, w_c=3.0, alpha_deg=62.0, fillet=2.0, thick
     Args:
         w_lig: ligament gap (main-cut tip -> secondary cut).
         w_c: cut width (kerf).
+        fs: base annotation size in points; every label scales from it.
+        scale_bar: draw the millimetre scale bar.
         alpha_deg: angle between the two cuts [deg].
         fillet: cut-tip fillet radius (rho).
         thickness: sheet thickness (drawn in a side view).
@@ -522,8 +524,10 @@ def plot_hinge_dimensions(w_lig=10.0, w_c=3.0, alpha_deg=62.0, fillet=2.0, thick
     grey = "#D3D6DB"                                    # all context faces one colour
     _fill_shapely(ax, below, facecolor=grey, edgecolor="none", zorder=0)
     ax.add_patch(Polygon([(-Xw, wc), (Xw, wc), (Xw, Yw), (-Xw, Yw)], facecolor=grey, edgecolor="none", zorder=0))
-    ax.annotate("adjacent face", (-2.6*wl, -2.7*wl), fontsize=9, color=dim, ha="center")
-    ax.annotate("adjacent face", (2.6*wl, -2.7*wl), fontsize=9, color=dim, ha="center")
+    # These were 0.75*fs and printed at 5.25 pt. A fraction of the caller's size is not a size:
+    # it drifts below the legibility floor as soon as the caller sizes for the page.
+    ax.annotate("adjacent face", (-2.6*wl, -2.7*wl), fontsize=fs, color=dim, ha="center")
+    ax.annotate("adjacent face", (2.6*wl, -2.7*wl), fontsize=fs, color=dim, ha="center")
     # voids are just voids — no outlines
     ax.add_patch(Polygon([(-Xw, 0), (Xw, 0), (Xw, wc), (-Xw, wc)], facecolor="white", edgecolor="none", zorder=1))
     _fill_shapely(ax, main_void.intersection(_sbox(-Xw, -Yw, Xw, wc)), facecolor="white", edgecolor="none", zorder=1)
@@ -545,12 +549,12 @@ def plot_hinge_dimensions(w_lig=10.0, w_c=3.0, alpha_deg=62.0, fillet=2.0, thick
         ax.plot([p2[0], a2[0]+n[0]*1.2], [p2[1], a2[1]+n[1]*1.2], color=dim, lw=0.7, zorder=6)
         ax.add_patch(FancyArrowPatch(a1, a2, arrowstyle="<|-|>", mutation_scale=10,
                                      color=dim, lw=1.0, zorder=6, shrinkA=0, shrinkB=0))
-        ax.annotate(label, (a1+a2)/2 + n*pad, color=ink, fontsize=12, ha="center", va="center", zorder=7)
+        ax.annotate(label, (a1+a2)/2 + n*pad, color=ink, fontsize=fs, ha="center", va="center", zorder=7)
 
     def _leader(p_from, p_to, label):
         ax.add_patch(FancyArrowPatch(p_to, p_from, arrowstyle="-|>", mutation_scale=11,
                                      color=dim, lw=1.0, zorder=6))
-        ax.annotate(label, p_to, color=ink, fontsize=12, ha="left", va="center", zorder=7)
+        ax.annotate(label, p_to, color=ink, fontsize=fs, ha="left", va="center", zorder=7)
 
     # w_lig: the ligament gap (main-cut tip -> secondary cut), on the right
     _dim_linear((wc/2+0.3*wl, -wl), (wc/2+0.3*wl, 0.0), off=0.9*wl, label=r"$w_{lig}$", side=1)
@@ -559,7 +563,7 @@ def plot_hinge_dimensions(w_lig=10.0, w_c=3.0, alpha_deg=62.0, fillet=2.0, thick
     _lab_pt = _cut_pt + np.array([0.62*wl, -0.10*wl])                   # label just off the cut
     ax.add_patch(FancyArrowPatch(_lab_pt, _cut_pt, arrowstyle="-|>", mutation_scale=11,
                                  color=dim, lw=1.0, zorder=7, shrinkA=3, shrinkB=0))
-    ax.annotate(r"$w_c$", _lab_pt + np.array([0.05*wl, 0.0]), color=ink, fontsize=12,
+    ax.annotate(r"$w_c$", _lab_pt + np.array([0.05*wl, 0.0]), color=ink, fontsize=fs,
                 ha="left", va="center", zorder=7)
     # green-region width (the meshed RVE width) as a parameter, along the secondary cut
     _dim_linear((-Rw, 0.0), (Rw, 0.0), off=1.3*wl, label=r"$w_{mesh}$", side=1)
@@ -575,25 +579,28 @@ def plot_hinge_dimensions(w_lig=10.0, w_c=3.0, alpha_deg=62.0, fillet=2.0, thick
     ax.add_patch(_Arc(tip, 0.75*wl, 0.75*wl, theta1=am, theta2=0.0, color=ink, lw=1.0, zorder=8))
     amid = np.radians(am / 2.0)
     ax.annotate(r"$\alpha$", tip + 0.52*wl*np.array([np.cos(amid), np.sin(amid)]),
-                color=ink, fontsize=12, ha="center", va="center", zorder=9)
+                color=ink, fontsize=fs, ha="center", va="center", zorder=9)
     # fillet radius rho — radius arrow from the tip-fillet centre; label kept CLOSE to the centre
     u_r = np.array([np.cos(np.radians(212)), np.sin(np.radians(212))])
     ax.annotate("", tip + fillet*u_r, tip, zorder=9,
                 arrowprops=dict(arrowstyle="-|>", color=ink, lw=1.0, shrinkA=0, shrinkB=0))
-    ax.annotate(r"$R=\rho$", tip + (fillet + 0.12*wl)*u_r, color=ink, fontsize=10,
+    ax.annotate(r"$R=\rho$", tip + (fillet + 0.62*wl)*u_r, color=ink, fontsize=fs,
                 ha="right", va="center", zorder=9)
     # cut-length labels — plain text, next to their voids (they mark the cuts, not dimensions)
-    ax.annotate(r"$L_{main}$", (wc/2 + 0.35*wl, -2.5*wl), color=dim, fontsize=11, ha="left", va="center")
-    ax.annotate(r"$L_{sec}$", (Rw + 0.45*wl, wc/2), color=dim, fontsize=11, ha="left", va="center")
+    ax.annotate(r"$L_{main}$", (wc/2 + 0.35*wl, -2.5*wl), color=dim, fontsize=0.92*fs, ha="left", va="center")
+    ax.annotate(r"$L_{sec}$", (Rw + 0.15*wl, wc/2), color=dim, fontsize=0.92*fs, ha="left", va="center")
 
     # scale bar (all lengths are in millimetres)
-    sb = 10.0
-    xb, yb = -Xw, -Yw - 1.0*wl
-    ax.plot([xb, xb + sb], [yb, yb], color=ink, lw=3, zorder=8)
-    # text gap below the bar ~1.5% of panel height, matching the strips-panel scale bar
-    ax.annotate(f"{sb:.0f} mm", (xb + sb/2, yb - 0.14*wl), ha="center", va="top", fontsize=10, zorder=8)
+    if scale_bar:
+        sb = 10.0
+        xb, yb = -Xw, -Yw - 1.0*wl
+        ax.plot([xb, xb + sb], [yb, yb], color=ink, lw=3, zorder=8)
+        # text gap below the bar ~1.5% of panel height, matching the strips-panel scale bar
+        ax.annotate(f"{sb:.0f} mm", (xb + sb/2, yb - 0.14*wl), ha="center", va="top",
+                    fontsize=0.84*fs, zorder=8)
 
-    ax.set_xlim(-Xw - 0.3*wl, Xw + 0.3*wl); ax.set_ylim(-Yw - 2.0*wl, Yw + 0.5*wl)
+    _ylo = -Yw - (2.0 if scale_bar else 1.0)*wl      # reclaim the bar's strip when it is off
+    ax.set_xlim(-Xw - 0.3*wl, Xw + 0.9*wl); ax.set_ylim(_ylo, Yw + 0.5*wl)
     if title:
         ax.set_title(title)
     if own and filepath:
@@ -623,8 +630,484 @@ def write_deformed_into(tessellation, node_positions):
     return deformed
 
 
+# ── Boundary-condition glyphs ─────────────────────────────────────────────────────────────────
+# One symbol, one function. Both the tessellation loading diagram and the plain-rectangle schematic
+# draw from here, so the two can never disagree about what a support looks like.
+
+SUPPORT_GREY = "#6C757D"
+# Applied actions are drawn in INK, not in the charter's RED. Red is the loudest thing on the page
+# and it was being spent on the least informative mark: the reader already knows where the load is
+# from the support layout, and five rows of red arrows drowned the data panels they sit beside.
+LOAD_INK = "#1A1A1A"
+LOAD_RED = LOAD_INK          # retained name, kept in step so no caller diverges from the charter
+
+
+def _draw_fixed_support(ax, *, base, lo, hi, axis, side, span, zorder=2, slider=False,
+                        weight_scale=1.0):
+    """Hatched wall clamping a run of the boundary.
+
+    Args:
+        base: coordinate along ``axis`` of the wall's inner face (the face touching the structure).
+        lo, hi: extent of the clamped run along the perpendicular axis.
+        axis: translation the clamp fixes -- 0 (side wall) or 1 (floor/ceiling).
+        side: +1/-1, outward direction along ``axis``.
+        span: sheet span, the length every glyph dimension is taken from.
+        slider: the wall restrains only the direction NORMAL to it, leaving the structure free to
+            slide along it -- drawn as a line of rollers between wall and structure. A one-DOF
+            restraint drawn as a solid clamp claims the boundary is held in two directions when it
+            is held in one, which for a sheet that must expand along that wall is the difference
+            between a mechanism that opens and one that jams.
+    """
+    pad = 0.022 * span
+    t = 0.030 * span
+    # A clamp on a single tile of a 150-tile sheet has a near-zero extent, which would draw a stub
+    # barely wider than the hatch itself. Give every wall at least a readable minimum.
+    # ⚠ KEEP THIS TIGHT. At 0.08*span the wall was wider than the tile it clamps, so on a 5x5 sheet
+    # it read as a support under SEVERAL tiles and the problem statement became ambiguous: which
+    # tile is held is the whole difference between one boundary-value problem and another.
+    if hi - lo < 0.045 * span:
+        mid = 0.5 * (lo + hi)
+        lo, hi = mid - 0.0225 * span, mid + 0.0225 * span
+
+    if slider:
+        r = 0.013 * span
+        n = max(2, min(14, int((hi - lo) / (3.4 * r))))
+        for c in np.linspace(lo + r, hi - r, n):
+            xy = (base + side * r, c) if axis == 0 else (c, base + side * r)
+            ax.add_patch(Circle(xy, r, facecolor="white", edgecolor=SUPPORT_GREY,
+                                lw=1.3 * weight_scale, zorder=zorder + 2))
+        base = base + side * 2 * r                       # the wall backs off behind the rollers
+    if axis == 0:
+        xy = (base, lo - pad) if side > 0 else (base - t, lo - pad)
+        w, h = t, (hi - lo) + 2 * pad
+    else:
+        xy = (lo - pad, base) if side > 0 else (lo - pad, base - t)
+        w, h = (hi - lo) + 2 * pad, t
+    ax.add_patch(Rectangle(xy, w, h, facecolor=SUPPORT_GREY, edgecolor=SUPPORT_GREY,
+                           hatch="////", lw=0, alpha=0.55, zorder=zorder))
+
+
+def _draw_point_support(ax, *, anchor, axis, side, span, rollers=True, zorder=3,
+                        weight_scale=1.0):
+    """Point support: a triangle whose apex sits ON the structure, on a hatched ground.
+
+    With ``rollers=True`` the triangle rests on two circles -- the standard ROLLER, holding the
+    structure along ``axis`` and letting it slide along the ground bar. With ``rollers=False`` the
+    triangle sits directly on the ground -- the standard PIN, holding both translations while
+    leaving the rotation free.
+
+    That distinction is load-bearing here rather than decorative. A pin drawn as a hatched wall
+    claims the tile's rotation is held too, and on a sheet whose deployment IS a tile rotation that
+    is the difference between a mechanism with one free DOF and one with none.
+
+    Every dimension is taken from the sheet ``span``, never from the support tile. Sizing off the
+    tile is what made the previous three-circle glyph collapse into overlapping blobs on a
+    150-tile sheet, where one tile is a few percent of the span.
+
+    Args:
+        anchor: (x, y) point on the structure the apex touches.
+        axis: translation the ground bar is normal to -- 0 (bar vertical) or 1 (bar horizontal).
+        side: +1/-1, outward direction along ``axis``.
+    """
+    u = np.zeros(2); u[axis] = side                      # outward, normal to the ground bar
+    v = np.array([-u[1], u[0]])                          # along the ground bar
+    a = np.asarray(anchor, dtype=float)
+
+    h = 0.055 * span                                     # triangle height
+    half_b = 0.042 * span                                # triangle half-base
+    r = 0.016 * span                                     # roller radius
+
+    ax.add_patch(Polygon([a, a + u * h - v * half_b, a + u * h + v * half_b], closed=True,
+                         facecolor="white", edgecolor=SUPPORT_GREY, lw=1.8 * weight_scale,
+                         zorder=zorder + 1))
+    if rollers:
+        for s in (-0.5, 0.5):
+            ax.add_patch(Circle(a + u * (h + r) + v * (s * half_b), r, facecolor="white",
+                                edgecolor=SUPPORT_GREY, lw=1.6 * weight_scale,
+                                zorder=zorder + 2))
+
+    ground = a + u * (h + (2 * r if rollers else 0.0))   # inner face of the ground bar
+    half_g = 1.35 * half_b
+    _draw_fixed_support(ax, base=float(ground[axis]),
+                        lo=float(a[1 - axis] - half_g), hi=float(a[1 - axis] + half_g),
+                        axis=axis, side=side, span=span * 0.7, zorder=zorder,
+                        weight_scale=weight_scale)
+
+
+def _clamp_style(trans_dofs, clamped_dofs, n_faces):
+    """How a clamp should be drawn: ``'built_in'``, ``'pin'``, ``'slider_wall'`` or ``'roller'``.
+
+    A support symbol states WHICH degrees of freedom are held. Reading that off the config rather
+    than always drawing the same wall is the only way the diagram and the run can agree.
+    """
+    if len(trans_dofs) == 1:
+        return 'slider_wall' if n_faces > 1 else 'roller'
+    if 2 in clamped_dofs:
+        return 'built_in'                                # x, y AND rotation: a true fixed end
+    return 'built_in' if n_faces > 1 else 'pin'          # x, y with rotation free
+
+
+def _draw_force_arrow(ax, tail, head, *, lw=1.7, scale=13, zorder=31):
+    """One applied-force arrow, in INK. Short and thin by default: see :data:`LOAD_INK`."""
+    ax.annotate('', xy=tuple(head), xytext=tuple(tail),
+                arrowprops=dict(arrowstyle='-|>', color=LOAD_INK, lw=lw, mutation_scale=scale,
+                                shrinkA=0, shrinkB=0),
+                zorder=zorder)
+
+
+def _draw_moment_arc(ax, centre, radius, sign, *, lw=1.7, zorder=30, dot=True, weight_scale=1.0):
+    """Couple applied at ``centre``; ``sign`` > 0 is counter-clockwise.
+
+    ONE open circular arc carrying a single head, plus a dot at the point of application. The
+    previous glyph plotted a 260 deg ring of points and bolted an arrowhead on with a second call,
+    then drew the whole thing three times behind a bracket to suggest a distributed moment; at
+    figure scale that read as a knot of circles rather than as a couple.
+    """
+    a0, a1 = (55.0, 340.0) if sign > 0 else (340.0, 55.0)
+    arc = np.deg2rad(np.linspace(a0, a1, 160))
+    xs = centre[0] + radius * np.cos(arc)
+    ys = centre[1] + radius * np.sin(arc)
+    ax.plot(xs, ys, color=LOAD_INK, lw=lw, zorder=zorder, solid_capstyle='round')
+
+    # The head must sit on the TANGENT at the arc's end, not on a chord back to an earlier sample.
+    # Taking the direction from a few samples back makes it a secant -- at this radius that is about
+    # 14 degrees of arc -- and the triangle then lands visibly skewed off the line it terminates.
+    end = arc[-1]
+    tangent = np.array([-np.sin(end), np.cos(end)]) * np.sign(a1 - a0)
+    tip = np.array([xs[-1], ys[-1]])
+    ax.annotate('', xy=tuple(tip), xytext=tuple(tip - tangent * 0.18 * radius),
+                arrowprops=dict(arrowstyle='-|>', color=LOAD_INK, lw=lw,
+                                mutation_scale=11 * weight_scale, shrinkA=0, shrinkB=0),
+                zorder=zorder + 1)
+    if dot:
+        ax.plot([centre[0]], [centre[1]], marker='o', ms=3.0 * weight_scale, color=LOAD_INK,
+                zorder=zorder + 1, linestyle='none')
+
+
+def _place_arrow(point, normal, f_hat, length, *, gap):
+    """Where one force arrow goes, given the loaded tile and the boundary it sits on.
+
+    ``point`` is the application point projected onto the nearest sheet edge and ``normal`` is that
+    edge's OUTWARD normal. The arrow is always drawn clear of the material:
+
+    * pulling away from the edge (``f . n > 0``): TAIL on the edge, head outward.
+    * pushing into it (``f . n < 0``): HEAD on the edge, tail further out.
+    * parallel to it (``f . n ~ 0``): offset outward, arrow centred on the application point.
+
+    ``normal`` of ``None`` marks an INTERIOR load, which has no edge to sit against: the head
+    terminates at the point itself.
+
+    This rule exists because the two panels of the matrix figure disagreed without it. The schematic
+    anchored a downward load at the sheet's BOTTOM edge whatever tile carried it, so a cantilever
+    load applied to the top-right tile was drawn underneath the sheet, contradicting the load-path
+    panel next to it, which anchored on the tile.
+    """
+    p = np.asarray(point, dtype=float)
+    d = np.asarray(f_hat, dtype=float)
+    if normal is None:
+        return p - d * length, p
+    n = np.asarray(normal, dtype=float)
+    dot = float(np.dot(d, n))
+    if dot > 1e-9:                                       # pull
+        tail = p + n * gap
+        return tail, tail + d * length
+    if dot < -1e-9:                                      # push
+        head = p + n * gap
+        return head - d * length, head
+    off = p + n * (gap + 0.5 * length)                   # parallel: sit beside the edge
+    return off - d * length / 2.0, off + d * length / 2.0
+
+
+def _expand_load_specs(load_specs):
+    """One spec per face, so a distributed load draws an arrow on every tile it acts on."""
+    specs = []
+    for s in (load_specs or []):
+        f = s['face']
+        for fi in (f if isinstance(f, (list, tuple, np.ndarray)) else [f]):
+            specs.append({**s, 'face': int(fi)})
+    return specs
+
+
+def _draw_loads(ax, specs, *, centre_of, span, arrow_len, bbox, edge_tol=None, weight_scale=1.0):
+    """Draw every applied force and couple for ``specs``, by ONE placement rule.
+
+    Both the plain-rectangle schematic and the tessellation diagram call this, so the two panels of
+    a figure cannot state different boundary conditions for the same run. Each loaded tile is
+    projected onto its NEAREST sheet edge and the arrow is placed by :func:`_place_arrow`; a tile
+    further than ``edge_tol`` from every edge is treated as an INTERIOR load and the arrow
+    terminates on the tile itself.
+
+    Args:
+        centre_of: face index -> (2,) application point.
+        arrow_len: arrow length in data units.
+        bbox: (x0, y0, x1, y1) of the sheet.
+        edge_tol: distance within which a tile counts as sitting ON an edge. Defaults to one tile
+            pitch, inferred from the sheet span.
+    """
+    x0, y0, x1, y1 = bbox
+    tol = edge_tol if edge_tol is not None else 0.09 * span
+    gap = 0.018 * span
+
+    NORMALS = np.array([[-1.0, 0.0], [1.0, 0.0], [0.0, -1.0], [0.0, 1.0]])
+
+    def _edge_index(p, f_hat):
+        """Which sheet edge a load at ``p`` belongs to, or ``None`` if the tile is interior.
+
+        Distance alone is not enough at a CORNER, where two edges are equidistant to within the
+        tessellation's own irregularity. Measured on this sheet: the top-right tile sits 0.5134 from
+        the right edge and 0.4662 from the top, so a 0.047 wobble in tile shape threw an axial pull
+        onto the top edge and drew it above the sheet. The edge whose outward normal lines up with
+        the force is therefore worth half a tolerance of distance, which settles every corner
+        deterministically and in the direction the physics implies.
+        """
+        d = np.array([p[0] - x0, x1 - p[0], p[1] - y0, y1 - p[1]])
+        k = int(np.argmin(d - 0.5 * tol * np.abs(NORMALS @ f_hat)))
+        return None if d[k] > tol else k
+
+    def edge_of(k, p):
+        """(point projected onto edge ``k``, its outward normal); ``k`` of None means interior."""
+        if k is None:
+            return np.asarray(p, dtype=float), None
+        q = np.array(p, dtype=float)
+        n = NORMALS[k].copy()
+        if k < 2:
+            q[0] = x0 if k == 0 else x1
+        else:
+            q[1] = y0 if k == 2 else y1
+        return q, n
+
+    forces = [s for s in specs
+              if int(s.get('dof', -1)) in (0, 1) and float(s.get('value', 0.0)) != 0.0]
+
+    # Arrows drawn side by side must not be longer than the gap between the tiles carrying them, or
+    # a distributed traction fuses into one stroke and stops reading as a set of discrete actions.
+    # Measured off the loaded tiles, so it adapts to any grip.
+    length = arrow_len
+    if len(forces) > 1:
+        pts = np.array([centre_of(s['face']) for s in forces], dtype=float)
+        d = np.linalg.norm(pts[:, None, :] - pts[None, :, :], axis=-1)
+        d[np.diag_indices_from(d)] = np.inf
+        length = min(arrow_len, max(0.85 * float(d.min()), 0.35 * arrow_len))
+
+    moment_faces = {int(s['face']) for s in specs
+                    if int(s.get('dof', -1)) == 2 and float(s.get('value', 0.0)) != 0.0}
+    m_radius = 0.46 * arrow_len
+
+    # Loads sharing a direction and a sign are ONE action, so they take ONE edge -- decided by
+    # majority vote over the tiles. Letting each tile pick its own edge put nine arrows off the
+    # right edge and the tenth off the top, which reads as two different tractions.
+    def _key(s):
+        return int(s['dof']), float(np.sign(s['value']))
+
+    groups = {}
+    for s in forces:
+        groups.setdefault(_key(s), []).append(s)
+
+    for (dof, sgn), grp in groups.items():
+        f_hat = np.zeros(2)
+        f_hat[dof] = sgn
+        votes = [_edge_index(np.asarray(centre_of(s['face']), dtype=float), f_hat) for s in grp]
+        edge = max(set(votes), key=votes.count)
+        for s in grp:
+            p = np.asarray(centre_of(s['face']), dtype=float)
+            q, n = edge_of(edge, p)
+            # The arrow reaches the point of application even when the same tile carries a couple:
+            # the force acts THERE, and stopping it short of the arc read as though it acted on the
+            # arc instead. The arc is small enough that the two glyphs coexist.
+            tail, head = _place_arrow(q, n, f_hat, length, gap=gap)
+            _draw_force_arrow(ax, tail, head, lw=1.7 * weight_scale, scale=13 * weight_scale)
+            if n is None:                   # interior: mark where the load actually acts
+                ax.plot([p[0]], [p[1]], marker='o', ms=2.6 * weight_scale, color=LOAD_INK,
+                        zorder=32, linestyle='none')
+
+    # Couples (dof 2). Drawn AT the loaded tile: a moment acts on the tile, not on the boundary, and
+    # the tile carrying one is exactly where the reader should look.
+    for s in specs:
+        if int(s.get('dof', -1)) != 2 or float(s.get('value', 0.0)) == 0.0:
+            continue
+        _draw_moment_arc(ax, np.asarray(centre_of(s['face']), dtype=float),
+                         m_radius, float(s['value']), lw=1.7 * weight_scale,
+                         weight_scale=weight_scale, dot=int(s['face']) not in
+                         {int(t['face']) for t in forces})
+
+
+def faces_as_tessellation(face_nodes):
+    """Duck-typed tessellation whose faces carry their OWN corners.
+
+    Enough for :func:`draw_supports_and_loads`, which reads only ``vertices`` and
+    ``faces[i].vertex_indices``. Every face owns its corners because
+    :func:`write_deformed_into` welds shared vertices, and in a deployed kirigami one shared vertex
+    belongs to up to four panels that have pulled apart by a void width, so last-write-wins puts
+    three of them in the wrong place.
+
+    Args:
+        face_nodes: (n_faces, n_corners, 2) panel corners.
+    """
+    from types import SimpleNamespace
+
+    nodes = np.asarray(face_nodes, dtype=float)
+    n_faces, n_corners, _ = nodes.shape
+    return SimpleNamespace(
+        vertices=nodes.reshape(-1, 2),
+        faces=[SimpleNamespace(vertex_indices=np.arange(k * n_corners, (k + 1) * n_corners))
+               for k in range(n_faces)])
+
+
+def _support_axis(offset, extent, trans_dofs):
+    """Which axis a support's wall takes its normal from, or ``None`` for a rotation-only clamp."""
+    if len(trans_dofs) == 1:
+        return trans_dofs[0]
+    if trans_dofs:
+        return int(np.argmax(np.abs(offset / np.maximum(extent, 1e-9))))
+    return None
+
+
+def draw_supports_and_loads(ax, tessellation, clamped_faces, load_specs, *,
+                            clamped_dofs=None, y_roller_faces=None, x_roller_faces=None,
+                            weight_scale=1.0):
+    """Draw the boundary conditions of a run onto an existing Axes.
+
+    Extracted from :func:`plot_loading_diagram` so the load-path figure draws its supports and loads
+    with the SAME code rather than a second implementation. The placement rules here are hard-won --
+    the wall takes its normal from which translation the clamp fixes, arrows sit outside the tile on
+    the side the force points, and rollers are drawn because a diagram showing only the clamp
+    misstates a two-support problem -- and none of that should be re-derived per figure.
+
+    Returns ``(x0, y0, x1, y1, span)`` of the drawn geometry, for the caller's axis limits.
+    """
+    clamped = {int(f) for f in (clamped_faces or [])}
+    y_roll = {int(f) for f in (y_roller_faces or [])}
+    x_roll = {int(f) for f in (x_roller_faces or [])}
+
+    allv = np.asarray(tessellation.vertices, dtype=float)
+    x0, y0 = allv.min(axis=0)
+    x1, y1 = allv.max(axis=0)
+    span = float(max(x1 - x0, y1 - y0))
+    centre_all = np.array([(x0 + x1) / 2.0, (y0 + y1) / 2.0])
+
+    def fv(fi):
+        return np.asarray(tessellation.vertices[tessellation.faces[int(fi)].vertex_indices], dtype=float)
+
+    _draw_loads(ax, _expand_load_specs(load_specs),
+                centre_of=lambda fi: fv(fi).mean(axis=0), span=span, arrow_len=0.125 * span,
+                bbox=(x0, y0, x1, y1), weight_scale=weight_scale)
+
+    # Fixed-support wall behind the clamped faces. Orientation comes from WHICH translation the
+    # clamp fixes: fixing y is a floor/ceiling, fixing x is a side wall. When it fixes both, the
+    # wall is put on whichever axis the clamped tiles sit furthest out along, since that is the
+    # edge a physical clamp would grip.
+    if clamped:
+        cd = [int(d) for d in (clamped_dofs if clamped_dofs is not None else (0, 1, 2))]
+        trans = [d for d in cd if d in (0, 1)]
+        pts = np.concatenate([fv(i) for i in clamped], axis=0)
+        axis = _support_axis(pts.mean(axis=0) - centre_all, np.array([x1 - x0, y1 - y0]), trans)
+        if axis is not None:
+            side = 1.0 if (pts.mean(axis=0) - centre_all)[axis] >= 0 else -1.0
+            a = pts[:, axis].max() if side > 0 else pts[:, axis].min()
+            perp = 1 - axis
+            style = _clamp_style(trans, cd, len(clamped))
+            if style in ('pin', 'roller'):
+                anchor = np.empty(2)
+                anchor[axis], anchor[perp] = a, pts[:, perp].mean()
+                _draw_point_support(ax, anchor=anchor, axis=axis, side=side, span=span,
+                                    rollers=style == 'roller', weight_scale=weight_scale)
+            else:
+                _draw_fixed_support(ax, base=a + side * 0.01 * span,
+                                    lo=pts[:, perp].min(), hi=pts[:, perp].max(), axis=axis,
+                                    side=side, span=span, slider=style == 'slider_wall',
+                                    weight_scale=weight_scale)
+
+    # Roller supports -- the standard pin-on-rollers symbol, so they read as distinct from the
+    # clamp's hatched fixed wall while sharing its ground.
+    for faces, axis in ((y_roll, 1), (x_roll, 0)):
+        for fi in sorted(faces):
+            p = fv(fi)
+            side = 1.0 if (p.mean(axis=0) - centre_all)[axis] >= 0 else -1.0
+            a = p[:, axis].max() if side > 0 else p[:, axis].min()
+            anchor = np.empty(2)
+            anchor[axis] = a
+            anchor[1 - axis] = p[:, 1 - axis].mean()
+            _draw_point_support(ax, anchor=anchor, axis=axis, side=side, span=span,
+                                weight_scale=weight_scale)
+
+    return x0, y0, x1, y1, span
+
+
+def draw_loading_schematic(ax, bbox, face_xy, *, clamped_faces=(), clamped_dofs=None,
+                           y_roller_faces=(), x_roller_faces=(), load_specs=(),
+                           face_color="#FDF1E6", edge_color="#1A1A1A", edge_width=1.0,
+                           weight_scale=1.0):
+    """The boundary-value problem alone: a plain rectangle, its supports and its loads.
+
+    The tessellation is deliberately absent. In a figure whose other columns already show the cut
+    pattern twice, redrawing 150 tiles here says nothing about the PROBLEM being posed and makes the
+    supports hard to find. The sheet becomes one rectangle and the glyphs carry the whole content.
+
+    Supports and loads are attached to the rectangle's EDGE at the position of the tiles they act
+    on, not at those tiles' centroids, so every glyph sits outside the structure and the diagram
+    stays readable at any tile count.
+
+    Args:
+        bbox: (x0, y0, x1, y1) of the flat sheet.
+        face_xy: (n_faces, 2) face centroids, used only to place glyphs along the edge.
+        clamped_faces, clamped_dofs, y_roller_faces, x_roller_faces, load_specs: as in
+            :func:`draw_supports_and_loads`.
+
+    Returns:
+        ``(x0, y0, x1, y1, span)`` of the drawn geometry.
+    """
+    x0, y0, x1, y1 = (float(v) for v in bbox)
+    span = float(max(x1 - x0, y1 - y0))
+    centre_all = np.array([(x0 + x1) / 2.0, (y0 + y1) / 2.0])
+    lim = np.array([[x0, y0], [x1, y1]])
+    face_xy = np.asarray(face_xy, dtype=float)
+
+    ax.add_patch(Rectangle((x0, y0), x1 - x0, y1 - y0, facecolor=face_color,
+                           edgecolor=edge_color, lw=edge_width * weight_scale, zorder=10))
+
+    def snap(fi, axis, side):
+        """Face ``fi`` projected onto the rectangle edge normal to ``axis``."""
+        p = np.array(face_xy[int(fi)], dtype=float)
+        p[axis] = lim[1 if side > 0 else 0, axis]
+        return p
+
+    _draw_loads(ax, _expand_load_specs(load_specs),
+                centre_of=lambda fi: face_xy[int(fi)], span=span, arrow_len=0.125 * span,
+                bbox=(x0, y0, x1, y1), weight_scale=weight_scale)
+
+    clamped = [int(f) for f in (clamped_faces or [])]
+    if clamped:
+        cd = [int(d) for d in (clamped_dofs if clamped_dofs is not None else (0, 1, 2))]
+        trans = [d for d in cd if d in (0, 1)]
+        c = face_xy[clamped]
+        axis = _support_axis(c.mean(axis=0) - centre_all, np.array([x1 - x0, y1 - y0]), trans)
+        if axis is not None:
+            side = 1.0 if (c.mean(axis=0) - centre_all)[axis] >= 0 else -1.0
+            perp = 1 - axis
+            base = (x1 if side > 0 else x0) if axis == 0 else (y1 if side > 0 else y0)
+            style = _clamp_style(trans, cd, len(clamped))
+            if style in ('pin', 'roller'):
+                anchor = np.empty(2)
+                anchor[axis], anchor[perp] = base, c[:, perp].mean()
+                _draw_point_support(ax, anchor=anchor, axis=axis, side=side, span=span,
+                                    rollers=style == 'roller', weight_scale=weight_scale)
+            else:
+                _draw_fixed_support(ax, base=base, lo=c[:, perp].min(), hi=c[:, perp].max(),
+                                    axis=axis, side=side, span=span,
+                                    slider=style == 'slider_wall', weight_scale=weight_scale)
+
+    for faces, axis in ((y_roller_faces or (), 1), (x_roller_faces or (), 0)):
+        for fi in sorted(int(f) for f in faces):
+            side = 1.0 if (face_xy[fi] - centre_all)[axis] >= 0 else -1.0
+            _draw_point_support(ax, anchor=snap(fi, axis, side), axis=axis, side=side, span=span,
+                                weight_scale=weight_scale)
+
+    return x0, y0, x1, y1, span
+
+
 def plot_loading_diagram(tessellation, clamped_faces, load_specs, filepath,
-                         title="Loading", clamped_dofs=None):
+                         title="Loading", clamped_dofs=None,
+                         y_roller_faces=None, x_roller_faces=None):
     """One clean schematic of the boundary conditions and applied loads.
 
     Clamped faces are greyed and backed by a hatched fixed-support wall; loads are single bold
@@ -651,106 +1134,34 @@ def plot_loading_diagram(tessellation, clamped_faces, load_specs, filepath,
         title: figure title.
         clamped_dofs: DOF indices the clamp fixes (0=x, 1=y, 2=theta). ``None`` -> all three.
             Only the translational ones orient the wall.
+        y_roller_faces: faces pinned in y ONLY (free to slide in x).
+        x_roller_faces: faces pinned in x ONLY (free to slide in y).
+            ⚠ Rollers MUST be drawn. A single-tile grip needs a roller on a second tile to stop the
+            assembly swinging about the clamp, and a diagram that shows only the clamp claims the
+            sheet is held at one point when it is held at two -- it misstates the boundary
+            conditions of the run it illustrates. They are drawn as the standard roller symbol
+            (support line + circles) so they read as distinct from the clamp's hatched fixed wall.
     """
     clamped = {int(f) for f in (clamped_faces or [])}
-    colors = ["#9AA3AB" if i in clamped else "#F7C59F" for i in range(len(tessellation.faces))]
+    y_roll = {int(f) for f in (y_roller_faces or [])}
+    x_roll = {int(f) for f in (x_roller_faces or [])}
+    rollers = y_roll | x_roll
+
+    def _face_color(i):
+        if i in clamped:
+            return "#9AA3AB"                       # fully held: same grey as the fixed wall
+        if i in rollers:
+            return "#C7CED4"                       # partially held: lighter, visibly not a clamp
+        return "#F7C59F"
+    colors = [_face_color(i) for i in range(len(tessellation.faces))]
     fig, ax = plt.subplots(figsize=(11, 8.5), facecolor="white")
     plot_tessellation(tessellation, ax=ax, show_target=False, show_hinges=False,
                       show_face_indices=False, show_hinge_indices=False,
                       show_external_forces=False, color_faces=colors)
 
-    allv = np.asarray(tessellation.vertices, dtype=float)
-    x0, y0 = allv.min(axis=0)
-    x1, y1 = allv.max(axis=0)
-    span = float(max(x1 - x0, y1 - y0))
-    L = 0.11 * span
-    RED = "#D62828"
-
-    def fv(fi):
-        return np.asarray(tessellation.vertices[tessellation.faces[int(fi)].vertex_indices], dtype=float)
-
-    # Expand list-valued load faces (distributed loads) into one spec per face, so each
-    # loaded tile draws its own arrow and the single-face logic below stays unchanged.
-    specs = []
-    for s in (load_specs or []):
-        f = s['face']
-        for fi in (f if isinstance(f, (list, tuple, np.ndarray)) else [f]):
-            specs.append({**s, 'face': int(fi)})
-
-    # In-plane loads (dof 0 = x, dof 1 = y) — one bold arrow per loaded tile, drawn OUTSIDE the
-    # tile on the side the force points, tail on the tile edge and head away from it. A tail
-    # bracket joins them when several tiles share the same load (a distributed edge pull).
-    for dof in (0, 1):
-        pulled = [s for s in specs
-                  if int(s.get('dof', -1)) == dof and float(s.get('value', 0.0)) != 0.0]
-        if not pulled:
-            continue
-        sign = 1.0 if float(pulled[0]['value']) > 0 else -1.0
-        # Anchor on the extreme edge of the loaded set along the load axis, on the side it points
-        # to, so the arrows leave the structure instead of crossing it.
-        edges = [fv(s['face'])[:, dof] for s in pulled]
-        a0 = (max(e.max() for e in edges) + 0.02 * span if sign > 0
-              else min(e.min() for e in edges) - 0.02 * span)
-        perp = 1 - dof
-        cs = [fv(s['face'])[:, perp].mean() for s in pulled]
-        for c in cs:
-            tail = (a0, c) if dof == 0 else (c, a0)
-            head = (a0 + sign * 1.7 * L, c) if dof == 0 else (c, a0 + sign * 1.7 * L)
-            ax.annotate('', xy=head, xytext=tail,
-                        arrowprops=dict(arrowstyle='-|>', color=RED, lw=3.2, mutation_scale=22),
-                        zorder=31)
-        if len(cs) > 1:                          # bracket tying a distributed pull together
-            if dof == 0:
-                ax.plot([a0, a0], [min(cs), max(cs)], color=RED, lw=2.5, zorder=29)
-            else:
-                ax.plot([min(cs), max(cs)], [a0, a0], color=RED, lw=2.5, zorder=29)
-
-    # Moments (dof 2) — curved arrow at the loaded tile (CCW = +, CW = -).
-    for s in specs:
-        if int(s.get('dof', -1)) == 2 and float(s.get('value', 0.0)) != 0.0:
-            p = fv(s['face'])
-            cx, cy = p[:, 0].mean(), p[:, 1].mean()
-            r = 0.18 * span
-            arc = np.deg2rad(np.linspace(40, 300, 60))
-            if float(s['value']) < 0:           # clockwise
-                arc = arc[::-1]
-            xs, ys = cx + r * np.cos(arc), cy + r * np.sin(arc)
-            ax.plot(xs, ys, color=RED, lw=2.2, zorder=30)
-            ax.annotate('', xy=(xs[-1], ys[-1]), xytext=(xs[-3], ys[-3]),
-                        arrowprops=dict(arrowstyle='-|>', color=RED, lw=2.2, mutation_scale=16), zorder=31)
-
-    # Fixed-support wall behind the clamped faces. Orientation comes from WHICH translation the
-    # clamp fixes: fixing y is a floor/ceiling, fixing x is a side wall. When it fixes both, the
-    # wall is put on whichever axis the clamped tiles sit furthest out along, since that is the
-    # edge a physical clamp would grip.
-    if clamped:
-        cd = [int(d) for d in (clamped_dofs if clamped_dofs is not None else (0, 1, 2))]
-        trans = [d for d in cd if d in (0, 1)]
-        pts = np.concatenate([fv(i) for i in clamped], axis=0)
-        centre_all = np.array([(x0 + x1) / 2.0, (y0 + y1) / 2.0])
-        offset = pts.mean(axis=0) - centre_all           # which way the clamped tiles lie
-        if len(trans) == 1:
-            axis = trans[0]
-        elif trans:
-            axis = int(np.argmax(np.abs(offset / np.maximum([x1 - x0, y1 - y0], 1e-9))))
-        else:
-            axis = None                                   # rotation-only clamp: no wall to draw
-        if axis is not None:
-            side = 1.0 if offset[axis] >= 0 else -1.0     # outward direction along that axis
-            a = pts[:, axis].max() if side > 0 else pts[:, axis].min()
-            perp = 1 - axis
-            lo, hi = pts[:, perp].min(), pts[:, perp].max()
-            pad = 0.04 * span
-            t = 0.05 * span                               # wall thickness
-            base = a + side * 0.01 * span                 # inner face of the wall
-            if axis == 0:                                 # vertical wall (clamp fixes x)
-                xy = (base, lo - pad) if side > 0 else (base - t, lo - pad)
-                w, h = t, (hi - lo) + 2 * pad
-            else:                                         # horizontal wall (clamp fixes y)
-                xy = (lo - pad, base) if side > 0 else (lo - pad, base - t)
-                w, h = (hi - lo) + 2 * pad, t
-            ax.add_patch(Rectangle(xy, w, h, facecolor="#6C757D", edgecolor="#6C757D",
-                                   hatch="////", lw=0, alpha=0.55, zorder=2))
+    x0, y0, x1, y1, span = draw_supports_and_loads(
+        ax, tessellation, clamped_faces, load_specs, clamped_dofs=clamped_dofs,
+        y_roller_faces=y_roller_faces, x_roller_faces=x_roller_faces)
 
     ax.set_xlim(x0 - 0.14 * span, x1 + 0.28 * span)
     ax.set_ylim(y0 - 0.16 * span, y1 + 0.22 * span)
@@ -869,9 +1280,20 @@ def plot_tessellation(tessellation, ax=None,
                       color_faces='#F58025',
                       mapping_fn=None,
                       map_params=None,
-                      original_vertices=None):
+                      original_vertices=None,
+                      edge_color='#1A1A1A',
+                      edge_width=1.2,
+                      face_alpha=0.85,
+                      target_color="#009900",
+                      target_width=2.5,
+                      target_style='--'):
     """
     Plots the tessellation with configurable visibility for topological elements.
+
+    The trailing style arguments default to this module's long-standing appearance, so callers that
+    do not pass them get byte-identical output. A composite figure overrides them to drop the heavy
+    black tile outline and the thick green target, which read as noise once several panels sit side
+    by side.
     """
     if ax is None:
         plt.style.use('default')
@@ -924,10 +1346,10 @@ def plot_tessellation(tessellation, ax=None,
             polygon = Polygon(
                 vertices, 
                 closed=True, 
-                facecolor=current_color, 
-                edgecolor='#1A1A1A',
-                linewidth=1.2,
-                alpha=0.85,
+                facecolor=current_color,
+                edgecolor=edge_color,
+                linewidth=edge_width,
+                alpha=face_alpha,
                 zorder=10
             )
             ax.add_patch(polygon)
@@ -1031,7 +1453,8 @@ def plot_tessellation(tessellation, ax=None,
         target_pts = get_target_points(target_params, n_points=200)
         if len(target_pts) > 0:
             plot_pts = np.vstack([target_pts, target_pts[0]])
-            ax.plot(plot_pts[:, 0], plot_pts[:, 1], color="#009900", linestyle='--', linewidth=2.5, zorder=5)
+            ax.plot(plot_pts[:, 0], plot_pts[:, 1], color=target_color, linestyle=target_style,
+                    linewidth=target_width, zorder=5)
 
     if title:
         ax.set_title(title, fontsize=16, weight='bold', color='black', pad=20)

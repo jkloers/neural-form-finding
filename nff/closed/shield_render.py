@@ -227,13 +227,20 @@ def default_strip_labels(n_steps: int, reference: bool):
 def render_deployment_strip(plan, flat_tiles, deployed, rgb, extent, target_unit, scale,
                             shift, outline_offset, psi, *, n_steps=4, panel_w=5.7,
                             panel_h=6.4, reference=False, ref_rgb=None, ref_extent=None,
-                            labels=None, label_size=None, label_colour="#1A1A1A"):
+                            labels=None, label_size=None, label_colour="#1A1A1A",
+                            rasterize=False):
     """Closed to open in ``n_steps`` equal increments, all panels at one common scale.
 
     With ``reference``, the undeformed target is placed first, separated from the
     deployment sequence by a hairline. No titles or annotation: the panels share
     xlim/ylim spans, so the growth across the strip is the true areal expansion rather
     than the artefact of fitting each state to its own crop.
+
+    Args:
+        panel_w, panel_h: one panel's size in inches. Author these at the size the strip PRINTS,
+            so ``label_size`` is a printed point size.
+        rasterize: flatten each panel's per-tile rasters into one image, keeping the labels vector.
+            This is what makes a PDF of this figure viable.
     """
     import matplotlib.pyplot as plt
 
@@ -276,16 +283,26 @@ def render_deployment_strip(plan, flat_tiles, deployed, rgb, extent, target_unit
     if labels is True:
         labels = default_strip_labels(n_steps, reference)
 
-    bottom = 0.004 if not labels else 0.085
+    size = label_size if label_size is not None else 0.055 * panel_h * 72.0
+    # The band under the strip is sized from the type that goes in it, not from a fixed fraction of
+    # the panel: as a fraction it held whatever the canvas happened to make it, which on a canvas
+    # authored at printed size is less than one line.
+    bottom = 0.004 if not labels else (1.7 * size + 4.0) / (panel_h * 72.0)
     fig.subplots_adjust(left=0.004, right=0.996, top=0.996, bottom=bottom, wspace=0.012)
 
     if labels:
-        # The strip is rendered several times wider than the column it is printed in,
-        # so the source point size has to be scaled up by that ratio to survive.
-        size = label_size if label_size is not None else 0.055 * panel_h * 72.0
         for ax, text in zip(axes, labels):
             ax.text(0.5, -0.012, text, transform=ax.transAxes, ha="center", va="top",
-                    fontsize=size, color=label_colour)
+                    fontsize=size, color=label_colour, zorder=5)
+
+    if rasterize:
+        # Each panel is one clipped raster PER TILE -- several hundred of them -- and a PDF holding
+        # them separately came out at 109 MB, which is why this figure has always shipped as a PNG.
+        # The fix is not to abandon vector output but to flatten JUST the tile layer: below this
+        # zorder everything collapses into ONE image per panel at save resolution, while the labels
+        # above it stay real text.
+        for ax in axes:
+            ax.set_rasterization_zorder(2.5)
 
     if reference:
         _divider(fig, axes[0], axes[1])

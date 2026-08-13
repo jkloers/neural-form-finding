@@ -236,7 +236,10 @@ def write_config(src_path: str, dst_path: str, *, target, load_scale: float, hea
     with open(src_path) as fh:
         lines = fh.read().split("\n")
 
-    for key, val in zip(("target_cx", "target_cy", "target_half_w", "target_half_h"), target):
+    # 4 values = axis-aligned (leave any existing rotation alone); 5 = the oriented fit, which owns
+    # target_rot_deg as much as it owns the extents.
+    keys = ("target_cx", "target_cy", "target_half_w", "target_half_h", "target_rot_deg")
+    for key, val in zip(keys, target):
         _set_in_block(lines, "tessellation", key, f"{val:.4f}")
 
     load_pat = re.compile(rf"^(\s*-\s*\{{face:\s*\d+,\s*dof:\s*\d+,\s*value:\s*)({_SCALAR})(\}}.*)$")
@@ -293,6 +296,12 @@ def main():
                         "the analytic lam(theta). ⚠ REQUIRED for a concentrated (single-tile) grip: "
                         "lam(theta) assumes the sheet opens uniformly, which such a grip "
                         "deliberately breaks, so the analytic rectangle is simply wrong there.")
+    p.add_argument("--oriented", action="store_true",
+                   help="size AND orient the target from the deployed shape's MINIMUM-AREA rotated "
+                        "rectangle, writing target_rot_deg alongside the four target_* keys. For a "
+                        "grip that swings, the axis-aligned bbox is far wider than the shape, and "
+                        "narrowing it without rotating just makes the sheet deploy less -- the two "
+                        "have to move together. Implies --from-deployed.")
     p.add_argument("--center-on-clamp", action="store_true",
                    help="centre the target in x on the CLAMPED faces instead of on the deployed "
                         "bounding box. The clamp is fixed in all DOFs, so its centreline is the "
@@ -416,6 +425,31 @@ def main():
         # quietly become five different problems AND five different targets.
         cx, cy, half_w, half_h = read_target(args.target_from)
         sized_as = f"COPIED verbatim from {args.target_from}"
+    elif args.oriented:
+        # The MINIMUM-AREA rotated rectangle of the deployed shape. An axis-aligned bbox around a
+        # tilted sheet is much wider than the sheet, so it reads as a target that "does not fit";
+        # narrowing it alone makes the design deploy LESS, because a narrow axis-aligned box is a
+        # shape the mechanism cannot make either. Size and angle have to come from the same fit.
+        from shapely.geometry import MultiPoint
+        rect = MultiPoint([tuple(p) for p in depl]).convex_hull.minimum_rotated_rectangle
+        rc = np.asarray(rect.exterior.coords)[:4]
+        e0, e1 = rc[1] - rc[0], rc[2] - rc[1]
+        L0, L1 = float(np.linalg.norm(e0)), float(np.linalg.norm(e1))
+        # The sheet is tall: the LONGER edge is the height, and the angle is measured off +y for it.
+        long_e, short_L, long_L = (e0, L1, L0) if L0 >= L1 else (e1, L0, L1)
+        # NEGATED: `get_target_points` rotates the cloud COUNTER-clockwise, so reproducing a long
+        # axis that sits at atan2(dx, dy) off vertical needs rot_deg = -that. Verified by measuring
+        # both signs against the deployed cloud (+15.4 deg -> 254 mm, -15.4 deg -> 46 mm).
+        target_rot = -float(np.degrees(np.arctan2(long_e[0], long_e[1])))
+        target_rot = (target_rot + 90.0) % 180.0 - 90.0        # fold into (-90, 90]
+        half_w, half_h = args.pull_in_x * short_L / 2.0, args.pull_in_y * long_L / 2.0
+        obb_cx, obb_cy = rc.mean(0)
+        sized_as = (f"from the deployed MIN-AREA ORIENTED rect ({short_L:.4f} x {long_L:.4f} u, "
+                    f"rot {target_rot:+.2f} deg) x pull-in "
+                    f"{args.pull_in_x:.3f} / {args.pull_in_y:.3f}")
+        print(f"\n  ORIENTED FIT: {short_L:.4f} x {long_L:.4f} u at {target_rot:+.2f} deg  "
+              f"vs axis-aligned bbox {w1:.4f} x {h1:.4f} u")
+        print(f"    the axis-aligned box is {100*(w1/short_L-1):+.1f}% wider than the shape itself")
     elif args.from_deployed:
         # A concentrated grip does NOT open the sheet uniformly -- lam(theta) is derived for a
         # uniform mechanism and mis-sizes the rectangle badly here (hinge-angle spread ~12 deg
@@ -427,7 +461,13 @@ def main():
     else:
         half_w, half_h = lam_x * w0 / 2.0, lam_y * h0 / 2.0
         sized_as = f"analytic lam at theta = {shape_angle:g} deg"
-    if not args.target_from:
+    if args.oriented:
+        # The oriented fit already carries its own centre; overriding it would slide the rectangle
+        # off the shape it was fitted to, which is the whole point of fitting it.
+        cx, cy = float(obb_cx), float(obb_cy)
+        anchored = "on the oriented fit's own centre"
+        print(f"    anchored: {anchored}")
+    elif not args.target_from:
         # Anchor: bottom edge ON the deployed bottom edge -- the clamped tiles cannot move away from
         # it, so a target that floats above/below it puts the clamp permanently outside and makes
         # its chamfer error unfixable.
@@ -458,7 +498,8 @@ def main():
 
     print("\n  ── paste into the config ──────────────────────────────────────────")
     print(f"  target_cx: {cx:.4f}\n  target_cy: {cy:.4f}\n"
-          f"  target_half_w: {half_w:.4f}\n  target_half_h: {half_h:.4f}")
+          f"  target_half_w: {half_w:.4f}\n  target_half_h: {half_h:.4f}"
+          + (f"\n  target_rot_deg: {target_rot:.4f}" if args.oriented else ""))
     for l in topo.get('loads', []):
         print(f"  - {{face: {l['face']}, dof: {l['dof']}, value: {float(l['value'])*scale:.2f}}}")
     print()
@@ -498,7 +539,8 @@ def main():
             f"{100*(1 - 2*half_h/h1):+.1f}% in y\n")
         overrides = {("tessellation", "init_noise"): f"{noise_eff:g}",
                      ("tessellation", "init_seed"): f"{seed_eff}"}
-        n = write_config(args.config, args.write_config, target=(cx, cy, half_w, half_h),
+        tgt = (cx, cy, half_w, half_h) + ((target_rot,) if args.oriented else ())
+        n = write_config(args.config, args.write_config, target=tgt,
                          load_scale=scale, header=header, overrides=overrides)
         print(f"  wrote {args.write_config}  ({n} load line(s) rescaled)\n")
 

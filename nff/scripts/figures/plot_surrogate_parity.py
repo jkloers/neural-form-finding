@@ -91,6 +91,8 @@ def main():
     ap.add_argument("--out", default="data/surrogates/parity.png")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--val-frac", dest="val_frac", type=float, default=0.15)
+    ap.add_argument("--test-frac", dest="test_frac", type=float, default=0.15,
+                    help="must match the trainer, or the scored group is not the untouched one")
     ap.add_argument("--w-lig-max", dest="w_lig_max", type=float, default=25.0,
                     help="must match the value the checkpoint was trained with")
     ap.add_argument("--exclude-unconverged", dest="exclude_unconverged", default=None,
@@ -120,7 +122,10 @@ def main():
     # reproduce the training force-sign convention so the force parity is apples-to-apples
     sign, _, _ = check_force_sign(data)
     data["F"] *= sign
-    tr, va = split_by_job(data, args.val_frac, args.seed)
+    # THREE-way, as the trainer split. A two-way split would score the VALIDATION group, which
+    # model selection already ranked every eval_every epochs, and would draw the untouched test
+    # rows as part of the faint "train" cloud. `va` below is therefore the TEST mask.
+    tr, _val, va = split_by_job(data, args.val_frac, args.seed, test_frac=args.test_frac)
     # Score the checkpoint on the SAME rows it was trained against. Reading the policy off the
     # checkpoint (rather than defaulting) stops the figure from quietly scoring a quarantined model
     # on unconverged rows it was never shown -- which reads as a much worse fit than it is.
@@ -171,7 +176,9 @@ def main():
     axes[1].set_xlim(lims); axes[1].set_ylim(lims); axes[1].set_aspect("equal", "box")
     axes[1].set_xlabel(r"true force / component RMS")
     axes[1].set_ylabel(r"predicted force / component RMS")
-    rr = _rel_rmse(F_true[va].ravel(), F_pred[va].ravel())
+    # Both pooled statistics on the SAME normalization; a raw-unit relRMSE beside an RMS-normalized
+    # R^2 describes two different quantities and is dominated by the moment.
+    rr = _rel_rmse(Ft.ravel(), Fp.ravel())
     axes[1].text(0.045, 0.955, f"$R^2 = {_r2(Ft.ravel(), Fp.ravel()):.4f}$\nrel. RMSE $= {rr*100:.2f}\\%$",
                  transform=axes[1].transAxes, va="top", ha="left", fontsize=9.5, color=INK,
                  bbox=dict(boxstyle="round,pad=0.4", fc="white", ec="#D3D6DB", lw=0.9, alpha=0.92))
@@ -190,8 +197,11 @@ def main():
     fig.savefig(args.out, dpi=300, bbox_inches="tight")
     print(f"saved -> {args.out}")
     print(f"  energy  R2={_r2(W_true[va],W_pred[va]):.4f}  relRMSE={_rel_rmse(W_true[va],W_pred[va])*100:.2f}%")
-    print(f"  force   R2={_r2(F_true[va].ravel(),F_pred[va].ravel()):.4f}  "
-          f"relRMSE={_rel_rmse(F_true[va].ravel(),F_pred[va].ravel())*100:.2f}%")
+    # Ft/Fp, not the raw components: a raw pooled force metric is dominated by M_theta, whose RMS is
+    # an order of magnitude above the two forces, so it reports the moment and calls it the force.
+    print(f"  force   R2={_r2(Ft.ravel(),Fp.ravel()):.4f}  "
+          f"relRMSE={_rel_rmse(Ft.ravel(),Fp.ravel())*100:.2f}%  "
+          f"(per component {' / '.join(f'{_rel_rmse(F_true[va][:,j],F_pred[va][:,j])*100:.1f}%' for j in range(3))})")
     dm = _finite(D_true[va], D_pred[va])
     print(f"  damage  R2={_r2(D_true[va][dm],D_pred[va][dm]):.4f}  "
           f"relRMSE={_rel_rmse(D_true[va][dm],D_pred[va][dm])*100:.2f}%  (n={int(dm.sum()):,})")

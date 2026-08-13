@@ -99,10 +99,18 @@ def setup_static_solver(
             SolutionData: Equilibrium solution.
         """
         initial_free = initial_displacements.reshape(-1)[free_DOF_ids]
-        # backward_reg > 0: Tikhonov-regularize the IMPLICIT-DIFF (adjoint) linear solve so the
-        # near-singular / indefinite tangent stiffness (plastic softening -> negative eigenvalues)
-        # is lifted to PD before inversion. Forward equilibrium is untouched; only the gradient path.
-        _ids = (functools.partial(solve_cg, ridge=backward_reg) if backward_reg > 0 else None)
+        # The IMPLICIT-DIFF (adjoint) linear solve is ALWAYS solve_cg, so `backward_reg` is a pure
+        # Tikhonov ridge on the tangent stiffness and nothing else: it lifts a near-singular or
+        # indefinite H (plastic softening -> negative eigenvalues) to PD before inversion, and
+        # backward_reg = 0 simply means no ridge. Forward equilibrium is untouched either way.
+        #
+        # Selecting solve_cg unconditionally is load-bearing. Passing implicit_diff_solve=None falls
+        # back to jaxopt's default solve_normal_cg, which solves the NORMAL equations and therefore
+        # squares the condition number: measured cond(H) = 4.25e4 on the 15x10 closed sheet becomes
+        # ~1.8e9, CG does not converge, and the adjoint comes back silently wrong -- d(compression)
+        # /d(design) was off by 124x and sign-flipped. H is positive definite here (lam_min = +17.9),
+        # so plain CG is valid; `tests/test_design_gradient.py` pins this at backward_reg = 0.
+        _ids = functools.partial(solve_cg, ridge=backward_reg)
         solver = LBFGS(fun=total_potential_energy, maxiter=solver_maxiter, tol=solver_tol,
                        implicit_diff_solve=_ids)
         t_array = jnp.linspace(1.0 / num_steps, 1.0, num_steps) if incremental else jnp.array([1.0])

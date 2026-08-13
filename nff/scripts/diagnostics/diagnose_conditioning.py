@@ -48,8 +48,13 @@ from nff.stages.physics.force_types import (
 )
 
 
-def _build_energy_over_free_dofs(valid_state, physics_cfg, load_specs, use_contact):
+def _build_energy_over_free_dofs(valid_state, physics_cfg, load_specs, use_contact,
+                                 bond_energy_fn=None, hinge_geometry=None):
     """Reconstruct E(free_DOFs) exactly as setup_static_solver does, at t=1.
+
+    ``bond_energy_fn`` and ``hinge_geometry`` must be threaded through for a surrogate run.
+    Omitting them silently rebuilds the LINEAR-SPRING energy, so the reported spectrum would
+    be the spring Hessian rather than the one the solver actually inverts.
 
     Returns (energy_free_fn, free_DOF_ids, force_ext_vector).
     The returned energy_free_fn is a pure function of the free-DOF vector.
@@ -60,6 +65,7 @@ def _build_energy_over_free_dofs(valid_state, physics_cfg, load_specs, use_conta
         bond_connectivity=geometry.bond_connectivity,
         linearized_strains=physics_cfg.linearized_strains,
         use_contact=use_contact,
+        bond_energy_fn=bond_energy_fn,
     )
 
     if has_geometry_dependent_loads(load_specs):
@@ -81,6 +87,7 @@ def _build_energy_over_free_dofs(valid_state, physics_cfg, load_specs, use_conta
         min_angle=physics_cfg.min_angle,
         cutoff_angle=physics_cfg.cutoff_angle,
         use_contact=use_contact,
+        hinge_geometry=hinge_geometry,
     )
 
     constrained_pairs = valid_state.constrained_face_DOF_pairs
@@ -129,12 +136,22 @@ def diagnose_problem(label, merged_cfg_path, ckpt_path):
 
     load_specs = config.topology.get("loads", []) or []
 
+    # A surrogate run must be reconstructed WITH its learned bond energy: rebuilding the
+    # default (linear-spring) energy would report a spectrum the solver never inverted.
+    bond_energy_fn = hinge_geometry = None
+    if getattr(getattr(config, 'hinge_model', None), 'type', 'rom') == 'surrogate':
+        from nff.closed.setup import build_surrogate_energy
+        bond_energy_fn, _, geometry_fn, _, _ = build_surrogate_energy(
+            config, static_features, initial_state, map_params)
+        hinge_geometry = geometry_fn(map_params) if geometry_fn is not None else None
+
     results = forward_pipeline(
         initial_state, config.target, config.validity, config.physics,
         map_type=config.mapping.type, map_params=map_params,
         use_shirley_chiu=config.mapping.use_shirley_chiu,
         strict_boundary_fit=config.mapping.strict_boundary_fit,
         static_features=static_features, load_specs=load_specs,
+        bond_energy_fn=bond_energy_fn, hinge_geometry=hinge_geometry,
     )
     valid_state = results["valid_state"]
     final_disp = results["solution"].fields[-1]                  # (n_faces, 3)
@@ -142,7 +159,8 @@ def diagnose_problem(label, merged_cfg_path, ckpt_path):
     phys = config.physics
     # Full energy (matches the solver: strain + contact if enabled)
     E_full, free_ids, F_ext = _build_energy_over_free_dofs(
-        valid_state, phys, load_specs, use_contact=phys.use_contact)
+        valid_state, phys, load_specs, use_contact=phys.use_contact,
+        bond_energy_fn=bond_energy_fn, hinge_geometry=hinge_geometry)
     final_free = final_disp.reshape(-1)[free_ids]
 
     grad = jax.grad(E_full)(final_free)
@@ -153,7 +171,8 @@ def diagnose_problem(label, merged_cfg_path, ckpt_path):
 
     # Strain-only Hessian to attribute the contact contribution
     E_strain, _, _ = _build_energy_over_free_dofs(
-        valid_state, phys, load_specs, use_contact=False)
+        valid_state, phys, load_specs, use_contact=False,
+        bond_energy_fn=bond_energy_fn, hinge_geometry=hinge_geometry)
     H_strain = jax.hessian(E_strain)(final_free)
     sp_strain = _spectrum(H_strain)
 
@@ -203,9 +222,14 @@ def main():
                     help="A data/outputs/runs/run_* directory with per-problem subdirs.")
     ap.add_argument("--problem-ids", default=None,
                     help="Comma-separated substrings to filter problem labels.")
+    ap.add_argument("--out", default=None,
+                    help="Optional JSON path for the per-problem rows.")
     args = ap.parse_args()
 
+    # train.py writes <run>/<problem>/best_params.pkl; run_closed.py writes it at the run ROOT.
     ckpts = sorted(glob.glob(os.path.join(args.run_dir, "*", "best_params.pkl")))
+    if not ckpts and os.path.exists(os.path.join(args.run_dir, "best_params.pkl")):
+        ckpts = [os.path.join(args.run_dir, "best_params.pkl")]
     if args.problem_ids:
         keys = args.problem_ids.split(",")
         ckpts = [c for c in ckpts if any(k in c for k in keys)]
@@ -244,6 +268,12 @@ def main():
         print("  cond(H) huge       → backward IFT solve amplifies gradients; regularize the backward (Fix 1)")
         print("  #0 / #neg > 0      → mechanism soft modes / saddle; grounding stiffness or LM damping (Fix 2/3)")
         print("  cond≈cond(str)     → contact not the driver; anisotropy/mechanism is")
+
+    if args.out and rows:
+        import json
+        with open(args.out, "w") as fh:
+            json.dump(rows, fh, indent=2, default=float)
+        print(f"\n  wrote {args.out}")
 
 
 if __name__ == "__main__":

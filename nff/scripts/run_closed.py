@@ -23,6 +23,7 @@ Run:
 import os
 import json
 import math
+import pickle
 import shutil
 import datetime
 import argparse
@@ -63,6 +64,113 @@ def _overlap(tess):
     return twisted, sum(p.area for p in polys) - unary_union(polys).area
 
 
+
+def _cut_axis_or_none(config, state, static_features, map_params):
+    """The per-hinge cut axis for this design, or None if it cannot be built."""
+    try:
+        from nff.closed.setup import hinge_cut_axis
+        return hinge_cut_axis(config, state, static_features, map_params)
+    except Exception:
+        return None
+
+
+def _emit_load_path(result, config, deployed_tess, run_dir, bond_energy, hinge_geometry,
+                    cut_axis=None):
+    """Extract the load path of the deployed state and draw it.
+
+    Best-effort: a load path is a diagnostic, and a run that has already produced its shape outputs
+    should not fail because this could not be extracted. `updated_lagrangian` runs are skipped by
+    `extract_force_field` itself, which raises rather than returning a wrong answer.
+    """
+    import traceback
+
+    from nff.closed.load_path_viz import plot_load_path
+    from nff.closed.load_paths import extract_force_field, save_field
+
+    try:
+        field = extract_force_field(result, config.physics, bond_energy_fn=bond_energy,
+                                    hinge_geometry=hinge_geometry, cut_axis=cut_axis)
+        if not field.checks.get('converged', False):
+            print("  load path SKIPPED: Stage 2 did not converge to tolerance, so the per-hinge "
+                  "forces are not trustworthy. Raise physics.solver_maxiter (use 20000).")
+            return
+        # Point the sidecar at the run's OWN config copy, so an offline replot can
+        # recover the boundary conditions and still draw how the sheet was held.
+        save_field(field, os.path.join(run_dir, "load_path"),
+                   meta={"config": os.path.join(run_dir, "config.yaml")})
+        _, stats = plot_load_path(field, deployed_tess,
+                                  os.path.join(run_dir, "load_path.png"), config=config)
+        print(f"  Saved load path to {os.path.join(run_dir, 'load_path.png')}  "
+              f"({stats['tension_routes']} tension routes, {stats['shaded_tiles']} shaded tiles)")
+    except NotImplementedError as exc:
+        print(f"  load path SKIPPED: {exc}")
+    except Exception:                                    # diagnostics must not sink a finished run
+        print("  load path FAILED (run outputs are unaffected):")
+        traceback.print_exc(limit=3)
+
+
+# Below this many hinges the endpoint view has too few points to fill a hex grid and degenerates
+# into one hinge per cell; the whole-path view still reads. Measured: 275 hinges fill it, 12 do not.
+_ENDPOINT_MIN_HINGES = 60
+_SMALL_SHEET_GRIDSIZE = 40   # path view on a small sheet; the 84 default is for ~275 hinges
+
+
+def _emit_compression_shift(config, static_features, initial_state, params_untrained,
+                            params_trained, res_untrained, res_trained, run_dir):
+    """Where training moved the hinge paths, in the ligament-strain plane.
+
+    Compares this run's OWN untrained design against its trained one, so every run produces the
+    figure with no second run required. Each hexagon holds the signed change in how many hinges
+    reach that ``(eta_a, eta_s)`` state; orange lost them, green gained them.
+
+    The VIEW is chosen from the hinge count, because the two have opposite failure modes.
+
+    ENDPOINT mode puts one point per hinge on the plane. Path count is conserved but cells-crossed
+    is not, so under the path view a design that deploys less draws shorter paths, touches fewer
+    cells and tilts the field orange without rerouting anything; endpoints are conserved exactly and
+    the panel becomes a redistribution map. That is the better view -- but only when there are
+    enough hinges to fill cells. On a 12-hinge sheet it degenerates into one hinge per cell and
+    reads as scattered dots, while the 275-hinge sheet it was designed on fills the grid.
+
+    So: endpoints above ``_ENDPOINT_MIN_HINGES``, the whole-path view below it, where 40-odd load
+    steps per hinge still make a legible field. ⚠ The path view cannot claim exact conservation, and
+    the endpoint view cannot show TRANSIENT compression -- which is what the path-min penalty
+    actually acts on. Neither is strictly better; ``plot_compression_shift.py`` renders either.
+
+    Costs no extra solve: both deployments are already in hand, and ``extract_hinge_paths`` replays a
+    solved ``SolutionData`` rather than re-running the pipeline.
+
+    Diagnostics must never sink a finished run, so every failure here is reported and swallowed.
+    """
+    import traceback
+
+    from nff.closed.compression_shift_viz import build_figure
+    from nff.closed.hinge_paths import build_hinge_geometry, extract_hinge_paths
+
+    if res_untrained is None:
+        print("  compression shift SKIPPED: no untrained deploy was computed (circle_fit target).")
+        return
+    try:
+        ls = resolve_length_scale(config)
+        pair = []
+        for design, res in ((params_untrained, res_untrained), (params_trained, res_trained)):
+            geom = build_hinge_geometry(config, static_features, initial_state, design)
+            pair.append(extract_hinge_paths(res['solution'], res['valid_state'], geom, ls,
+                                            reference_bond_vectors=res.get('reference_bond_vectors')))
+        from nff.closed.compression_shift_viz import GRIDSIZE, GRIDSIZE_ENDPOINTS
+        use_ep = int(pair[0].n_hinges) >= _ENDPOINT_MIN_HINGES
+        out, stats = build_figure([tuple(pair)], os.path.join(run_dir, "compression_shift.png"),
+                                  use_endpoints=use_ep,
+                                  gridsize=GRIDSIZE_ENDPOINTS if use_ep else _SMALL_SHEET_GRIDSIZE)
+        cb, ca = stats['compressive_pct_before'][0], stats['compressive_pct_after'][0]
+        tb, ta = stats['max_theta_deg_before'][0], stats['max_theta_deg_after'][0]
+        print(f"  Saved compression shift to {out}  [{'endpoint' if use_ep else 'path'} view]  "
+              f"(compressive path points {cb:.1f}% -> {ca:.1f}%, theta max {tb:.1f} -> {ta:.1f} deg)")
+    except Exception:                                    # diagnostics must not sink a finished run
+        print("  compression shift FAILED (run outputs are unaffected):")
+        traceback.print_exc(limit=3)
+
+
 def _write_loss_history(run_dir, history):
     """Dump the per-epoch metrics to JSON alongside the plot.
 
@@ -89,10 +197,28 @@ def main():
     ap.add_argument("--config-dir", default="closed")
     ap.add_argument("--config-name", default="circle_chamfer_10x10_best")
     ap.add_argument("--every", type=int, default=6)
+    ap.add_argument("--init-noise", type=float, default=None,
+                    help="Gaussian sigma (LOGIT units) on the starting design; overrides the "
+                         "config. Perturbs z and bnd_logits, i.e. the Stage-0 DESIGN -- the "
+                         "topology, stiffnesses and bond permutation are always built at the "
+                         "uniform r_init, so this is a random design on a FIXED topology. Valid by "
+                         "construction (r = sigmoid(z) stays in (0,1)). ⚠ Above ~0.7 the cut "
+                         "vertices approach their neighbours and the hinge frame degenerates to "
+                         "arctan2(0,0) -- finite garbage, not an error.")
+    ap.add_argument("--init-seed", type=int, default=None,
+                    help="seed for --init-noise (NumPy default_rng)")
     args = ap.parse_args()
 
     cfg_path = f"data/configs/{args.config_dir}/{args.config_name}.yaml"
     config = load_and_parse_config(cfg_path)
+    # Before any state is built: both keys are read inside init_closed_les_params.
+    if args.init_noise is not None:
+        config.topology['init_noise'] = float(args.init_noise)
+    if args.init_seed is not None:
+        config.topology['init_seed'] = int(args.init_seed)
+    _noise = float(config.topology.get('init_noise', 0.0))
+    print(f"  starting design: init_noise={_noise:g} init_seed={int(config.topology.get('init_seed', 0))}"
+          + ("  (uniform r_init)" if _noise == 0.0 else "  (seeded random start)"))
     circle_fit = config.training.geometric_loss_type == "circle_fit"
     load_specs = config.topology.get('loads', [])
 
@@ -128,6 +254,7 @@ def main():
     rect_mode = config.target.type == 'rectangle'
     target_cloud_override = None
     rect_geom = None
+    res0 = None                 # untrained deploy; stays None under circle_fit, which skips it
     if circle_fit:
         target_eff = config.target
     else:
@@ -162,14 +289,18 @@ def main():
                 else:
                     cen0 = C
                 hw, hh = (mx[0] - mn[0]) / 2.0 * scx, (mx[1] - mn[1]) / 2.0 * scy
-            rect_geom = (cen0, hw, hh)
+            # Optional orientation: a swinging deployment is a ROTATED shape, and an axis-aligned
+            # box cannot hug one. 0.0 (the default) reproduces every pre-existing config exactly.
+            rot = float(config.topology.get('target_rot_deg', 0.0) or 0.0)
+            rect_geom = (cen0, hw, hh, rot)
             target_cloud_override = get_target_points(
                 {'type': 'rectangle', 'center': cen0, 'radius': max(hw, hh),
-                 'half_w': hw, 'half_h': hh}, n_points=400)
+                 'half_w': hw, 'half_h': hh, 'rot_deg': rot}, n_points=400)
             target_eff = TargetConfig(type='circle',
                                       center=(float(cen0[0]), float(cen0[1])), radius=float(max(hw, hh)))
             print(f"  fixed target RECTANGLE: center=({cen0[0]:.2f}, {cen0[1]:.2f})  "
-                  f"half_w={hw:.2f} half_h={hh:.2f}")
+                  f"half_w={hw:.2f} half_h={hh:.2f}"
+                  + (f"  rot={rot:+.2f}deg" if rot else ""))
         else:
             cen0, rad0 = _fit_circle(cl0)
             rad0 *= sc
@@ -186,7 +317,7 @@ def main():
         hinge_probe_fn=hinge_probe_fn, hinge_geometry_fn=geometry_fn)
     state = TrainState(params=params, opt_state=optimizer.init(params), rng=jax.random.PRNGKey(0))
 
-    history, snaps = [], [(0, state.params)]
+    history, snaps = [], [(0, {k: np.asarray(v) for k, v in state.params.items()})]
     # Selection is on the TOTAL loss, not chamfer alone: with damage/compression switched on, a
     # chamfer-only rule would happily return the shape-best design that tore or buckled its hinges.
     # The consequence to keep in mind is that the ranking moves whenever a weight is retuned, so
@@ -194,14 +325,27 @@ def main():
     best = (math.inf, state.params, math.inf)
     for epoch in range(config.training.num_epochs):
         state, loss, aux = step(state)
+        # ONE device->host transfer per epoch, not one per metric read. `grad_norms` is dropped
+        # here rather than at write time: it is a whole PyTree per epoch, and keeping it for the
+        # length of the run was the run's largest retained allocation for a value nothing reads.
+        tot, aux = jax.device_get((loss, {k: v for k, v in aux.items() if k != 'grad_norms'}))
         history.append(aux)
         ch = float(aux.get('chamfer_total', math.inf))
-        tot = float(loss)
+        tot = float(tot)
         if math.isfinite(tot) and tot < best[0]:
             best = (tot, state.params, ch)
         if (epoch + 1) % args.every == 0 or epoch == config.training.num_epochs - 1:
-            snaps.append((epoch + 1, state.params))
+            # numpy, so the snapshot list does not pin one device copy of the design per snapshot
+            snaps.append((epoch + 1, {k: np.asarray(v) for k, v in state.params.items()}))
         if epoch % 25 == 0 or epoch == config.training.num_epochs - 1:
+            # Checkpoint the running best. A closed run is hours long, and until this existed a kill
+            # at any point -- an OS memory kill, a sleep, a stray Ctrl-C -- discarded the whole run,
+            # because the only write was after the loop. Written atomically so a kill DURING the
+            # dump cannot leave a truncated pickle where a valid one used to be.
+            _ck = os.path.join(run_dir, "best_params.pkl")
+            with open(_ck + ".tmp", "wb") as _pf:
+                pickle.dump({k: np.asarray(v) for k, v in best[1].items()}, _pf)
+            os.replace(_ck + ".tmp", _ck)
             msg = f"  epoch {epoch:3d}  loss={tot:.4e}  chamfer={ch:.4e}"
             if aux.get('hinge_max_D') is not None:    # surrogate damage metrics, when tracked
                 msg += (f"  maxD={float(aux['hinge_max_D']):.3g} meanD={float(aux['hinge_mean_D']):.3g}"
@@ -209,11 +353,13 @@ def main():
             if aux.get('min_eta_a') is not None:      # compression metrics, when tracked
                 msg += (f"  minEtaA={float(aux['min_eta_a']):.3f}"
                         f" nComp={int(aux['n_hinges_compressive'])}")
+            if aux.get('mean_abs_eta_s') is not None:  # shear-path metrics, when tracked
+                msg += (f"  meanEtaS={float(aux['mean_abs_eta_s']):.4f}"
+                        f" maxEtaS={float(aux['max_abs_eta_s']):.3f}")
             print(msg)
     best_params = best[1]
     print(f"  best loss={best[0]:.4e}  (chamfer there={best[2]:.4e})")
     _write_loss_history(run_dir, history)
-    import pickle
     with open(os.path.join(run_dir, "best_params.pkl"), "wb") as _pf:
         pickle.dump({k: np.asarray(v) for k, v in best_params.items()}, _pf)  # trained design, for analysis
     geom_best = _geom_at(best_params)                         # final design's HingeGeometry
@@ -242,9 +388,10 @@ def main():
         cc, rr = _fit_circle(_boundary_cloud(vs, disp))
         target_params = {'type': 'circle', 'center': [float(cc[0]), float(cc[1])], 'radius': rr}
     elif rect_mode:
-        cen0, hw, hh = rect_geom
+        cen0, hw, hh, rot = rect_geom
         target_params = {'type': 'rectangle', 'center': [float(cen0[0]), float(cen0[1])],
-                         'radius': float(max(hw, hh)), 'half_w': float(hw), 'half_h': float(hh)}
+                         'radius': float(max(hw, hh)), 'half_w': float(hw), 'half_h': float(hh),
+                         'rot_deg': float(rot)}
     else:
         target_params = {'type': 'circle', 'center': target_eff.center, 'radius': target_eff.radius}
 
@@ -272,8 +419,15 @@ def main():
     # distance from each boundary vertex to the target perimeter, in millimetres.
     _cloud = _boundary_cloud(vs, disp)
     if rect_mode:
-        _cen, _hw, _hh = rect_geom
-        _d = np.abs(_cloud - np.asarray(_cen)) - np.array([_hw, _hh])
+        _cen, _hw, _hh, _rot = rect_geom
+        # ⚠ This SDF is analytic and axis-aligned, so it must be evaluated in the RECTANGLE's own
+        # frame. Skipping the rotation here would report the distance to a box the run never
+        # trained against -- silently, since the number looks perfectly reasonable either way.
+        _rel = _cloud - np.asarray(_cen)
+        if _rot:
+            _a = np.radians(-_rot)
+            _rel = _rel @ np.array([[np.cos(_a), -np.sin(_a)], [np.sin(_a), np.cos(_a)]]).T
+        _d = np.abs(_rel) - np.array([_hw, _hh])
         _err = np.abs(np.linalg.norm(np.maximum(_d, 0.0), axis=-1)
                       + np.minimum(np.max(_d, axis=-1), 0.0))     # outside + inside distance
         _ls = resolve_length_scale(config)
@@ -307,7 +461,18 @@ def main():
     plot_loading_diagram(s2, config.topology.get('bc_clamped', []), bc_specs,
                          os.path.join(run_dir, "loading_diagram.png"),
                          title="Prescribed displacement" if disp_specs and not load_specs else "Loading",
-                         clamped_dofs=config.topology.get('clamped_dofs'))
+                         clamped_dofs=config.topology.get('clamped_dofs'),
+                         y_roller_faces=config.topology.get('y_roller_faces'),
+                         x_roller_faces=config.topology.get('x_roller_faces'))
+
+    # One clean load-path figure, from the SAME deployed state and the same BC drawing as the
+    # loading diagram above, so the two cannot disagree about how the sheet is held.
+    _emit_load_path(result, config, s2, run_dir, bond_energy, geom_best,
+                    cut_axis=_cut_axis_or_none(config, initial_state, static_features, best_params))
+
+    # Where training moved the hinge paths, in the (eta_a, eta_s) ligament-strain plane.
+    _emit_compression_shift(config, static_features, initial_state, params, best_params,
+                            res0, result, run_dir)
 
     # ── Training-evolution animation. ──
     frames = []
@@ -335,8 +500,9 @@ def main():
             c, r = _fit_circle(cloud)
             ax.add_patch(Circle(c, r, fill=False, edgecolor="#D62828", lw=2.0, ls="--"))
         elif rect_mode:
-            cen0, hw, hh = rect_geom
+            cen0, hw, hh, rot = rect_geom
             ax.add_patch(Rectangle((cen0[0] - hw, cen0[1] - hh), 2 * hw, 2 * hh,
+                                   angle=rot, rotation_point='center',
                                    fill=False, edgecolor="#D62828", lw=2.0, ls="--"))
         else:
             ax.add_patch(Circle(target_eff.center, target_eff.radius,

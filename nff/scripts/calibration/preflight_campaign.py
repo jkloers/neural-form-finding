@@ -5,7 +5,8 @@ completely useless dataset that only reveals itself at training time:
 
   material    ``--material`` used to default to "steel"; omitting it yielded a valid STEEL dataset
               with no warning. eps_f also has to come from the material, not a campaign constant.
-  modulus     PET E was 3000 MPa in code while the compliance-free ladder read ~2300-2500.
+  modulus     PET E has moved between 2500 and the nominal 3000 MPa; a campaign solved on the
+              wrong card is valid and unusable, so the expected value is asserted, not assumed.
   envelope    the harvest stores eta at w_lig 5 mm while the standard is 18, so an envelope taken
               in eta rather than mm is silently rescaled by 3.6x; and its WIDTH depends on a
               grip-ceiling calibration that has already moved 4.9x once.
@@ -48,7 +49,7 @@ def main() -> None:
     ap.add_argument("--w-lig-max", dest="w_lig_max", type=float, default=50.0)
     ap.add_argument("--thickness", type=float, default=0.5)
     ap.add_argument("--r-win", dest="r_win", type=float, default=100.0)
-    ap.add_argument("--expect-E", dest="expect_E", type=float, default=2500.0)
+    ap.add_argument("--expect-E", dest="expect_E", type=float, default=3000.0)
     ap.add_argument("--expect-eps-f", dest="expect_eps_f", type=float, default=1.784)
     ap.add_argument("--smoke", type=int, default=3, help="jobs to actually solve (0 to skip)")
     ap.add_argument("--parallel", type=int, default=3)

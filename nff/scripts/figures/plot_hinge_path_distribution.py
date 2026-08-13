@@ -145,16 +145,43 @@ def build_distribution_figure(ens, out_png: str, label: str = "") -> str:
     return out_png
 
 
+def ensemble_from_deployment(paths_dir: str):
+    """Wrap ONE deployment as a one-sample ensemble, so a single run can be hexbinned.
+
+    ``extract_hinge_paths.py`` and ``sample_hinge_paths.py`` write two different layouts, and this
+    figure only ever read the ensemble one -- so the paths of a single trained design, the thing an
+    experiment actually produces, had no route to the hexbin panels at all.
+
+    A large tessellation is its own population: 275 hinges x 40 load steps is 11 000 path points,
+    more than enough for a density. The row-3 panels that compare designs (endpoint clusters, the
+    ICC) are degenerate with one sample and should be read as blank rather than as a measurement.
+    """
+    from nff.closed.hinge_paths import load_paths
+    from nff.closed.hinge_path_ensemble import PathEnsemble, EnsembleSample
+    paths = load_paths(os.path.join(paths_dir, "hinge_paths"))
+    return PathEnsemble(samples=[EnsembleSample(seed=0, noise=0.0, paths=paths)],
+                        config_path=paths_dir, length_scale=float(paths.length_scale),
+                        n_load_steps=paths.n_steps)
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--ensemble", required=True, help="dir written by sample_hinge_paths.py")
+    src = p.add_mutually_exclusive_group(required=True)
+    src.add_argument("--ensemble", help="dir written by sample_hinge_paths.py")
+    src.add_argument("--paths", help="dir written by extract_hinge_paths.py (a single deployment)")
     p.add_argument("--out", default=None)
+    p.add_argument("--label", default=None)
     args = p.parse_args()
 
-    from nff.closed.hinge_path_ensemble import load_ensemble
-    ens = load_ensemble(args.ensemble)
-    out = args.out or os.path.join(args.ensemble, "distribution.png")
-    print(f"  wrote {build_distribution_figure(ens, out, label=os.path.basename(args.ensemble))}")
+    src_dir = args.ensemble or args.paths
+    if args.ensemble:
+        from nff.closed.hinge_path_ensemble import load_ensemble
+        ens = load_ensemble(args.ensemble)
+    else:
+        ens = ensemble_from_deployment(args.paths)
+    out = args.out or os.path.join(src_dir, "distribution.png")
+    label = args.label or os.path.basename(os.path.normpath(src_dir))
+    print(f"  wrote {build_distribution_figure(ens, out, label=label)}")
 
 
 if __name__ == "__main__":

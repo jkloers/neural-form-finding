@@ -166,23 +166,23 @@ def _execute_stage0_mapping(
 
 
 def _execute_stage1_validity(mapped_state, target_cfg, validity_cfg):
-    target_params = {
-        'type': target_cfg.type,
-        'center': target_cfg.center,
-        'radius': target_cfg.radius
-    }
-    target_cloud = jnp.array(get_target_points(target_params, n_points=200))
-    
     if validity_cfg.validity_method == 'none':
         valid_state = mapped_state
     elif validity_cfg.validity_method == 'alternating_projection':
         from nff.stages.projection import solve_alternating_projections
         valid_state = solve_alternating_projections(
             mapped_state, n_iters=validity_cfg.n_proj_iters)
-    else:  # 'lbfgs' (default)
+    else:  # 'lbfgs' (default) -- the ONLY branch that reads the cloud, so it is built here and not
+           # above: the closed pipeline runs 'none' and was generating then discarding 200 points
+           # on every trace.
+        target_cloud = jnp.array(get_target_points({
+            'type': target_cfg.type,
+            'center': target_cfg.center,
+            'radius': target_cfg.radius,
+        }, n_points=200))
         valid_state = solve_geometric_validity(
             mapped_state, target_cloud, validity_cfg=validity_cfg)
-        
+
     return valid_state
 
 

@@ -57,6 +57,11 @@ class ShieldDesignConfig:
     tau_frac: float = 0.04            # soft-max temperature, as a fraction of the target radius
     outside_tol_frac: float = 0.30    # corners may reach out this fraction of a tile pitch
     w_centroid_outside: float = 4.0   # centroids are held hard: no tile may sit outside
+    # A target fixed a priori. Setting either drops the corresponding free variable from the
+    # design vector entirely, rather than leaving a frozen parameter in it -- a dead parameter
+    # would still enter a design-space distance or a Hessian spectrum as a spurious direction.
+    fixed_scale: float | None = None   # mm; target height, so 2 * radius for a circle
+    fixed_shift: tuple | None = None   # mm; target offset from the outline centroid
     schedule: tuple = field(default_factory=lambda: (
         # (steps, learning_rate, barrier_fraction)
         (800, 3e-2, 0.0), (1500, 3e-2, 1.0), (700, 5e-3, 1.0)))
@@ -74,16 +79,34 @@ class ShieldDesignConfig:
 # Forward map
 # ══════════════════════════════════════════════════════════════════════════════
 
-def init_params(cfg: ShieldDesignConfig, n_logits: int, seed: int = 0) -> dict:
-    """Uniform-ish start: r ~ 0.79, uniform sliders, a partly opened mechanism."""
+def init_params(cfg: ShieldDesignConfig, n_logits: int, seed: int = 0,
+                z_sigma: float = 0.02, bnd_sigma: float = 0.0,
+                psi_sigma: float = 0.0, z_mean: float = 0.8) -> dict:
+    """Uniform-ish start: r ~ 0.79, uniform sliders, a partly opened mechanism.
+
+    The sigmas widen that start into a genuinely random one. Every draw stays valid by
+    construction -- ``r`` is squashed into ``(r_lo, r_hi)`` and the sliders are ordered by
+    softmax -- so no draw needs rejecting.
+
+    Args:
+        z_sigma: spread of the per-cut latents about ``z_mean``.
+        bnd_sigma: spread of the boundary-slider logits about 0.
+        psi_sigma: spread of the opening-angle latent about its default.
+        z_mean: centre of the per-cut latents. ``z = 0`` is ``r = 0.5``, the point-hinge
+            rotating-squares design, which expands furthest; the 0.8 default is the
+            shield's own start and is kept so existing runs reproduce.
+    """
     rng = np.random.default_rng(seed)
-    return {
-        "z": jnp.asarray(0.8 + 0.02 * rng.normal(size=(cfg.M + 1, cfg.N + 1))),
-        "bnd_logits": jnp.zeros(n_logits),
-        "psi_raw": jnp.asarray(-0.4055),               # sigmoid -> psi ~ -0.30 at psi_max 0.45
-        "log_scale": jnp.asarray(np.log(1.55 * cfg.sheet_h)),
-        "target_shift": jnp.zeros(2),
+    params = {
+        "z": jnp.asarray(z_mean + z_sigma * rng.normal(size=(cfg.M + 1, cfg.N + 1))),
+        "bnd_logits": jnp.asarray(bnd_sigma * rng.normal(size=n_logits)),
+        "psi_raw": jnp.asarray(-0.4055 + psi_sigma * rng.normal()),
     }
+    if cfg.fixed_scale is None:
+        params["log_scale"] = jnp.asarray(np.log(1.55 * cfg.sheet_h))
+    if cfg.fixed_shift is None:
+        params["target_shift"] = jnp.zeros(2)
+    return params
 
 
 def build_forward(struct, bnd, plan, cfg: ShieldDesignConfig):
@@ -195,9 +218,12 @@ def build_loss(forward_fn, target_unit, plan, cfg: ShieldDesignConfig, interior_
         outline = out["outline"]
         centred = outline - jnp.mean(outline, axis=0)
 
-        scale = jnp.exp(params["log_scale"])
+        scale = (jnp.asarray(cfg.fixed_scale) if cfg.fixed_scale is not None
+                 else jnp.exp(params["log_scale"]))
+        shift = (jnp.asarray(cfg.fixed_shift, dtype=float) if cfg.fixed_shift is not None
+                 else params["target_shift"])
         target = target_unit * scale
-        target = target - jnp.mean(target, axis=0) + params["target_shift"]
+        target = target - jnp.mean(target, axis=0) + shift
         D = rms_unit * scale
 
         prec_d2, rec_d2 = _chamfer_sq(centred, target)
@@ -243,7 +269,7 @@ def build_loss(forward_fn, target_unit, plan, cfg: ShieldDesignConfig, interior_
             offset = jnp.mean(outline, axis=0)
 
             def depth_of(p):
-                unit = (p - offset - params["target_shift"]) / scale + mean_tu
+                unit = (p - offset - shift) / scale + mean_tu
                 return _bilinear_sample(sdf_j, sdf_extent, unit) * scale
 
             # Corners get a tolerance of a fraction of a tile: without it the outline can
@@ -290,8 +316,15 @@ def build_loss(forward_fn, target_unit, plan, cfg: ShieldDesignConfig, interior_
 
 def optimize_shield(cfg: ShieldDesignConfig, target_unit, seed: int = 0,
                     verbose: bool = True, log_every: int = 100,
-                    sdf=None, sdf_extent=None):
+                    sdf=None, sdf_extent=None, params0=None, snapshot_every=None):
     """Run the staged Adam schedule, then an L-BFGS-B polish.
+
+    Args:
+        params0: a starting design, overriding the seeded default. Multi-start studies own
+            their own draw, so the start is recorded alongside the result rather than being
+            recoverable only by replaying a seed.
+        snapshot_every: record the design and its score every this many steps, for plotting
+            the path an optimisation takes through design space. ``None`` records nothing.
 
     Returns a dict with the optimised parameters, the forward output, the metric
     history, and the static structures needed to render the result.
@@ -307,8 +340,24 @@ def optimize_shield(cfg: ShieldDesignConfig, target_unit, seed: int = 0,
     value_and_grad_fn = jax.jit(jax.value_and_grad(loss_fn, has_aux=True),
                                 static_argnums=())
 
-    params = init_params(cfg, bnd["n_logits"], seed)
+    params = init_params(cfg, bnd["n_logits"], seed) if params0 is None else dict(params0)
     history = []
+    snapshots = []
+
+    def _snapshot(step_index, params_now, metrics_now):
+        """Record where the design is and how it scores, as a flat vector.
+
+        The metrics handed back by ``train_step_fn`` are evaluated at the params BEFORE that
+        step's update, so the step index is stored with them rather than pairing them with
+        the design that comes out of the step.
+        """
+        flat, _ = jax.flatten_util.ravel_pytree(params_now)
+        snapshots.append({
+            "step": int(step_index),
+            "params": np.asarray(flat),
+            "precision_mm": float(metrics_now["precision_mm"]),
+            "recall_mm": float(metrics_now["recall_mm"]),
+        })
 
     step = 0
     for stage, (n_steps, lr, barrier_frac) in enumerate(cfg.schedule):
@@ -324,7 +373,10 @@ def optimize_shield(cfg: ShieldDesignConfig, target_unit, seed: int = 0,
             return optax.apply_updates(params, updates), opt_state, metrics
 
         for _ in range(n_steps):
+            params_before = params
             params, opt_state, metrics = train_step_fn(params, opt_state, barrier_frac)
+            if snapshot_every and step % snapshot_every == 0:
+                _snapshot(step, params_before, metrics)
             if step % log_every == 0:
                 rec = {k: float(v) for k, v in metrics.items()}
                 rec["step"] = step
@@ -346,6 +398,8 @@ def optimize_shield(cfg: ShieldDesignConfig, target_unit, seed: int = 0,
     rec = {k: float(v) for k, v in metrics.items()}
     rec["step"] = step
     history.append(rec)
+    if snapshot_every:
+        _snapshot(step, params, metrics)          # the polished design, evaluated at itself
     if verbose:
         print(f"  final       rel_rms {rec['rel_rms']:.4f}  prec {rec['precision_mm']:.2f} mm"
               f"  rec {rec['recall_mm']:.2f} mm  outside {100 * rec['frac_pts_outside']:.2f}%"
@@ -353,8 +407,8 @@ def optimize_shield(cfg: ShieldDesignConfig, target_unit, seed: int = 0,
               f"  psi {rec['psi']:+.3f}", flush=True)
 
     return {"params": params, "forward": forward_fn(params), "metrics": rec,
-            "history": history, "struct": struct, "bnd": bnd, "plan": plan,
-            "cfg": cfg, "forward_fn": forward_fn, "loss_fn": loss_fn}
+            "history": history, "snapshots": snapshots, "struct": struct, "bnd": bnd,
+            "plan": plan, "cfg": cfg, "forward_fn": forward_fn, "loss_fn": loss_fn}
 
 
 def _lbfgs_polish(params, loss_fn, maxiter: int = 300):

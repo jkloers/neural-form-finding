@@ -255,7 +255,14 @@ def _save_publication(fig, out_dir, stem, dpi, paper_dir, paper_stem):
 
 def _plot_pipeline_steps(plan, flat_tiles, deployed, rgb, extent, target_unit, scale,
                          shift, offset, psi, out_dir, dpi, paper_dir, n_steps):
-    """Deployment strip from closed to open at publication resolution."""
+    """Deployment strip from closed to open at publication resolution.
+
+    ⚠ This writes a PNG, and the manuscript's Figure 4 is the VECTOR PDF written by
+    ``render_shield_strip.py`` -- authored at ``\\textwidth`` with the tile layer flattened to one
+    image per panel. A full run of this script therefore leaves a ``shield_pipeline.png`` beside a
+    ``shield_pipeline.pdf`` that the paper does not use; re-run the strip script to update the
+    figure itself.
+    """
     fig = render_deployment_strip(plan, flat_tiles, deployed, rgb, extent, target_unit,
                                   scale, shift, offset, psi, n_steps=n_steps)
     written = _save_publication(fig, out_dir, "pipeline_steps", dpi, paper_dir,

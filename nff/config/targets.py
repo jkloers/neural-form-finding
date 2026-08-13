@@ -23,8 +23,13 @@ def get_target_points(target_params=None, n_points=200):
         return np.column_stack([cx + scale*np.cos(t), cy + scale*np.sin(t)])
 
     elif shape_type == 'rectangle':
-        # Axis-aligned rectangle perimeter; half-extents half_w / half_h
-        # (fall back to radius if not provided).
+        # Rectangle perimeter; half-extents half_w / half_h (fall back to radius if not provided),
+        # optionally rotated by `rot_deg` about `center`.
+        #
+        # ★ The rotation exists because a deployment that SWINGS is a rotated shape, and no
+        # axis-aligned box hugs one: tightening an unrotated target around a rotated sheet asks for
+        # a shape the mechanism cannot make, and the optimizer answers by deploying less. Giving the
+        # target an orientation lets it describe the deployment instead of fighting it.
         hw = target_params.get('half_w', scale)
         hh = target_params.get('half_h', scale)
         n = max(2, n_points // 4)
@@ -32,7 +37,14 @@ def get_target_points(target_params=None, n_points=200):
         right  = np.column_stack([np.full(n, cx + hw), np.linspace(cy + hh, cy - hh, n)])
         bottom = np.column_stack([np.linspace(cx + hw, cx - hw, n), np.full(n, cy - hh)])
         left   = np.column_stack([np.full(n, cx - hw), np.linspace(cy - hh, cy + hh, n)])
-        return np.vstack([top, right, bottom, left])
+        pts = np.vstack([top, right, bottom, left])
+        rot = float(target_params.get('rot_deg', 0.0) or 0.0)
+        if rot != 0.0:
+            a = np.radians(rot)
+            R = np.array([[np.cos(a), -np.sin(a)], [np.sin(a), np.cos(a)]])
+            c = np.array([cx, cy])
+            pts = (pts - c) @ R.T + c
+        return pts
 
     elif shape_type == 'heart':
         # Parametric equation of the heart

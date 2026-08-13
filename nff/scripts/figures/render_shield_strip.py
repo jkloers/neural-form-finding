@@ -4,10 +4,18 @@
 reloads it and re-renders the strip at any panel count or resolution without
 repeating the optimisation, which is the expensive part.
 
-Run:
+The strip is authored at ``\textwidth`` and written as a VECTOR PDF. Each panel is one clipped
+raster per tile -- several hundred of them -- which is why this figure used to ship as a PNG; the
+tile layer is now flattened to ONE image per panel at save resolution and the labels stay real
+text, which takes the file from the 109 MB a naive PDF cost to well under one.
+
+⚠ ``--svg`` is the ONLY input not cached in ``design.npz``. The artwork is rasterised fresh on
+every run, so the figure cannot be rebuilt without it.
+
+Run (``--steps 3`` with the reference panel is the manuscript's four-panel Figure 4):
   JAX_PLATFORMS=cpu conda run -n kgnn_mac python nff/scripts/figures/render_shield_strip.py \
-      --run-dir data/outputs/shield/princeton_paper --svg ~/Desktop/Princeton_seal.svg \
-      --steps 4 --paper-dir paper
+      --run-dir data/outputs/shield/princeton_paper --svg <path to Princeton_seal.svg> \
+      --steps 3 --paper-dir paper
 """
 
 import argparse
@@ -19,7 +27,8 @@ jax.config.update("jax_enable_x64", True)
 
 import numpy as np
 
-from nff.utils.figstyle import use_agg, apply_charter
+from nff.utils.figstyle import (FS_BASE, TEXT_W_BP, apply_charter, paper_rc, save_paper_figure,
+                                use_agg)
 
 use_agg()
 import matplotlib.pyplot as plt
@@ -53,7 +62,7 @@ def parse_args():
 
 def main():
     args = parse_args()
-    apply_charter()
+    apply_charter(**paper_rc())
     M, N = (int(v) for v in args.grid.lower().split("x"))
     sheet_w, sheet_h = (float(v) for v in args.sheet.lower().split("x"))
 
@@ -61,24 +70,27 @@ def main():
     struct = build_deploy_structure(M, N)
     plan = build_deploy_plan(struct, M, N, sheet_w / M, sheet_h / N)
 
+    # The strip is authored at the width it prints at, so the labels are printed point sizes. The
+    # panel count sets the panel width; the height keeps the composition's 5.7:6.4 proportion.
+    n_panels = args.steps + (1 if args.reference else 0)
+    panel_w_bp = TEXT_W_BP / n_panels
+    panel_h_bp = panel_w_bp * 6.4 / 5.7
     rgb, extent = load_shield_raster(args.svg, args.raster_px)
     fig = render_deployment_strip(
         plan, d["flat_tiles"], d["deployed"], rgb, extent, d["target_unit"],
         float(d["scale"]), d["shift"], d["offset"], float(d["psi"]), n_steps=args.steps,
+        panel_w=panel_w_bp / 72.0, panel_h=panel_h_bp / 72.0,
         reference=args.reference, labels=args.labels or None,
-        label_size=args.label_size)
+        label_size=args.label_size or FS_BASE, rasterize=True)
 
     targets = [(args.run_dir, f"pipeline_{args.steps}_steps")]
     if args.paper_dir:
         targets.append((os.path.join(args.paper_dir, "Images"), args.paper_stem))
-    # PNG only: each panel is a few hundred clipped rasters, so a PDF wraps the same
-    # pixels at ~90x the size without becoming vector.
     for directory, stem in targets:
-        os.makedirs(directory, exist_ok=True)
-        path = os.path.join(directory, f"{stem}.png")
-        fig.savefig(path, dpi=args.dpi, bbox_inches="tight", pad_inches=0.01,
-                    facecolor="white")
-        print(f"  wrote {path}  ({os.path.getsize(path) / 1e6:.1f} MB)")
+        pdf, lo, hi = save_paper_figure(fig, os.path.join(directory, stem),
+                                        TEXT_W_BP, panel_h_bp, dpi=args.dpi)
+        print(f"  wrote {pdf}  ({os.path.getsize(pdf) / 1e6:.1f} MB, "
+              f"{TEXT_W_BP:.1f} x {panel_h_bp:.1f} bp, type {lo:.1f}-{hi:.1f} pt)")
     plt.close(fig)
 
 

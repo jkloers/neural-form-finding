@@ -67,8 +67,16 @@ def create_train_step(
         bond_energy_fn=None,
         hinge_probe_fn=None,
         hinge_geometry_fn=None,
+        extra_loss_fn=None,
 ):
     """Creates a compiled training step for optimizing map_params.
+
+    Args:
+        extra_loss_fn: optional ``params -> scalar`` added to the total loss inside
+            ``value_and_grad``, so it contributes gradients. Exists for design-space penalties
+            that are not part of the shared loss registry — a chart-specific term belongs to the
+            experiment that needs it, not to ``LossWeights``, which every run shares. Its value is
+            reported as ``aux['extra_loss']``.
 
     Returns:
         (optimizer, train_step_fn) where train_step_fn : TrainState → (TrainState, float, dict)
@@ -143,7 +151,7 @@ def create_train_step(
 
     # Pure loss function closed over all compile-time constants.
     def loss_fn(params: Any) -> tuple[Float[Array, ""], dict]:
-        return compute_end_to_end_loss(
+        total, aux = compute_end_to_end_loss(
             params, initial_state, target_cfg, validity_cfg, physics_cfg, training_cfg,
             map_type=map_type,
             use_shirley_chiu=use_shirley_chiu,
@@ -156,6 +164,11 @@ def create_train_step(
             hinge_probe_fn=hinge_probe_fn,
             hinge_geometry_fn=hinge_geometry_fn,
         )
+        if extra_loss_fn is not None:
+            extra = extra_loss_fn(params)
+            total = total + extra
+            aux = {**aux, 'extra_loss': extra}
+        return total, aux
 
     def _step_body(state: TrainState) -> tuple[TrainState, Float[Array, ""], dict]:
         # Split key first so every step consumes a fresh subkey — ready for

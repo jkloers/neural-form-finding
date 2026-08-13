@@ -142,7 +142,14 @@ class LossWeights(eqx.Module):
     closure_delta: float # sharpness of the void-closure reward
     damage: float        # surrogate hinge damage D, path-max over the deployment
     compression: float   # hinge axial compression (eta_a < 0), path-min over the deployment
+    shear_path: float    # hinge transverse shear |eta_s|, path-max over the deployment
     ood: float           # hinges leaving the surrogate's trustworthy training box
+
+    # ⚠ `shear_path` and `shearing` are DIFFERENT terms and both are live. `shearing` weights the
+    # global ligament shear ENERGY from the Stage-2 decomposition; `shear_path` weights the
+    # per-hinge KINEMATIC |eta_s| along the deployment path, the sibling of `compression` on the
+    # other axis of the same (eta_a, eta_s) plane. The names are kept far apart on purpose: a config
+    # that means one and writes the other would train a different experiment in silence.
 
     def __init__(self, chamfer: float = 1.0, material_area: float = 0.0,
                  stretching: float = 0.0, shearing: float = 0.0,
@@ -150,7 +157,8 @@ class LossWeights(eqx.Module):
                  regularization: float = 0.0, coverage: float = 1.0,
                  hinge_gap: float = 0.0,
                  void_closure: float = 0.0, closure_delta: float = 0.0,
-                 damage: float = 0.0, compression: float = 0.0, ood: float = 0.0):
+                 damage: float = 0.0, compression: float = 0.0,
+                 shear_path: float = 0.0, ood: float = 0.0):
         self.chamfer = float(chamfer)
         self.material_area = float(material_area)
         self.stretching = float(stretching)
@@ -164,6 +172,7 @@ class LossWeights(eqx.Module):
         self.closure_delta = float(closure_delta)
         self.damage = float(damage)
         self.compression = float(compression)
+        self.shear_path = float(shear_path)
         self.ood = float(ood)
 
 
