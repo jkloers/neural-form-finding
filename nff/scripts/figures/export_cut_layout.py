@@ -44,6 +44,23 @@ def _centre_faces(config):
     return c * N, c * N + (N - 1)
 
 
+def _grip_matches_design(config, hold, pull):
+    """Whether the marked HOLD/PULL tiles ARE the boundary condition the design was optimised under.
+
+    A centred single-tile config already clamps and pulls exactly one tile, so the hand grip and the
+    simulated grip coincide and the deployed shape is the one that was designed. A distributed
+    config does not, and the drawing has to say so.
+    """
+    clamped = config.topology.get('bc_clamped', None)
+    if not isinstance(clamped, list):
+        return False
+    loaded = set()
+    for s in config.topology.get('loads', []) or []:
+        f = s.get('face')
+        loaded.update(f if isinstance(f, (list, tuple)) else [f])
+    return set(int(c) for c in clamped) == {int(hold)} and loaded == {int(pull)}
+
+
 def _resolve_scale(config, stock_mm):
     """Uniform pattern scale that lands the design on the requested stock, or 1.0 if unset.
 
@@ -123,10 +140,14 @@ def _readme(path, *, schedule, meta, args, scale, design_size, length_scale, run
             "Pull along the long axis of the sheet. Nothing else is gripped, and nothing else is "
             "restrained.",
             "",
-            "> This two-tile grip is the physical test protocol, not the boundary condition the "
-            "design was optimised under. The optimisation used the config's own clamp and load "
-            "set, so the deployed shape under a two-tile pinch will not match the simulated one "
-            "tile for tile.",
+            ("> This IS the boundary condition the design was optimised under: the config clamps "
+             "exactly this tile and pulls exactly that one, with no other restraint. The sheet "
+             "you deploy by hand is the sheet that was simulated."
+             if meta.get("grip_is_design") else
+             "> This two-tile grip is the physical test protocol, not the boundary condition the "
+             "design was optimised under. The optimisation used the config's own clamp and load "
+             "set, so the deployed shape under a two-tile pinch will not match the simulated one "
+             "tile for tile."),
             "",
         ]
     lines += [
@@ -247,11 +268,20 @@ def main():
                   f"so hinge strain rises about {1 / scale:.2f}x.",
                   "Do not quote simulated loads for this",
                   "sheet."]
+    grip_is_design = _grip_matches_design(config, hold, pull)
+    grip_note = (["This IS the boundary condition the",
+                  "design was optimised under: the",
+                  "sheet you deploy is the sheet that",
+                  "was simulated."] if grip_is_design else
+                 ["This is the TEST protocol, not the",
+                  "boundary condition the design was",
+                  "optimised under."])
     meta = dict(title="KIRIGAMI CUT LAYOUT",
                 subtitle=f"{run_label}   ·   hand layout, knife + drilled relief holes",
                 material=material, pitch=f"{pitch_mm:.2f} mm",
                 source=(args.config_name or run_label.split("_", 3)[-1])[:26],
-                date=datetime.date.today().isoformat(), caveat=caveat)
+                date=datetime.date.today().isoformat(), caveat=caveat,
+                grip_is_design=grip_is_design, grip_note=grip_note)
 
     a3 = render_overview_a3(schedule, geom, os.path.join(out_dir, "cut_layout_A3.pdf"),
                             draw_scale=args.drawing_scale, meta=meta,

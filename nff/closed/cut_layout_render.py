@@ -220,9 +220,8 @@ def _overview_notes(ax, schedule, x, w, oy, dh, draw_scale, meta):
                      mono=True, size=5.0, color=_INK if a["role"] == "HOLD" else _RED)
         y = line("Two tiles only. Pull along the long", y, color=_GREY, size=4.6)
         y = line("axis. Nothing else gripped or held.", y, color=_GREY, size=4.6)
-        y = line("This is the TEST protocol, not the", y, color=_GREY, size=4.6)
-        y = line("boundary condition the design was", y, color=_GREY, size=4.6)
-        y = line("optimised under.", y, color=_GREY, size=4.6)
+        for t in ((meta or {}).get("grip_note") or []):
+            y = line(t, y, color=_GREY, size=4.6)
 
     # ── the caveat, anchored to the foot of the drawing so the column reads as a block ──
     caveat = (meta or {}).get("caveat", [])
