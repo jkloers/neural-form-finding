@@ -104,10 +104,15 @@ def render_overview_a3(schedule, geom, out_pdf, *, draw_scale=8.0, meta=None, gr
     ax.text(ox - 5.5, oy - 7.0, "DATUM  (0, 0)", ha="left", va="top", fontsize=5.4,
             color=_INK, fontweight="bold")
 
+    # Type scales with how crowded the sheet is: a 3x3 carries 16 marks where a 5x5 carries 48, and
+    # sizing both for the dense case wastes the legibility the sparse one could have.
+    dense = len(schedule["points"]) > 30
+    id_size, tile_size = (4.0, 4.2) if dense else (5.6, 6.0)
+
     # ── tile numbers, faint, so a grip instruction can name a tile ──
     for t in schedule.get("tiles", []):
         px, py = P(t["x"], t["y"])
-        ax.text(px, py, str(t["face"]), ha="center", va="center", fontsize=4.2, color=_GREY,
+        ax.text(px, py, str(t["face"]), ha="center", va="center", fontsize=tile_size, color=_GREY,
                 zorder=2)
 
     # ── the cuts: drawn line (thin) + the material actually removed (thick) ──
@@ -123,12 +128,13 @@ def render_overview_a3(schedule, geom, out_pdf, *, draw_scale=8.0, meta=None, gr
         ax.add_patch(Circle((px, py), 0.6, facecolor="white", edgecolor=_INK, lw=0.35, zorder=5))
 
     # ── marking points ──
+    r_pt = 0.9 if dense else 1.2
     for p in schedule["points"]:
         px, py = P(p["x"], p["y"])
-        ax.add_patch(Circle((px, py), 0.9, facecolor="white", edgecolor=_BLUE, lw=0.5, zorder=6))
+        ax.add_patch(Circle((px, py), r_pt, facecolor="white", edgecolor=_BLUE, lw=0.5, zorder=6))
         ax.plot([px], [py], marker="+", ms=1.8, mew=0.4, color=_BLUE, zorder=7)
         if label_points:
-            ax.text(px + 1.4, py + 1.0, p["id"], ha="left", va="bottom", fontsize=4.0,
+            ax.text(px + r_pt + 0.5, py + 0.8, p["id"], ha="left", va="bottom", fontsize=id_size,
                     color=_BLUE, zorder=8)
 
     # ── grip marks ──
