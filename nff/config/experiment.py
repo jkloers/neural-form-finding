@@ -63,11 +63,11 @@ class MappingConfig(eqx.Module):
 
 class ValidityConfig(eqx.Module):
     weights: Dict[str, float]
-    validity_method: str   # 'lbfgs' | 'alternating_projection'
+    validity_method: str   # 'none' | 'alternating_projection' | 'lbfgs'
     n_proj_iters: int      # only used when validity_method == 'alternating_projection'
 
     def __init__(self, weights: Dict[str, float],
-                 validity_method: str = 'lbfgs',
+                 validity_method: str = 'none',
                  n_proj_iters: int = 20):
         self.weights = weights
         self.validity_method = validity_method
@@ -347,12 +347,7 @@ def _parse_mapping_config(mapping_raw: dict) -> MappingConfig:
         params_raw = {k: v for k, v in params_raw.items()
                       if k not in ('use_shirley_chiu', 's_val')}
 
-    # For GNN types, map_params holds the initialization config (hidden_dim, seed, ...), not
-    # trainable weights, so it is kept raw.
-    if m_type.startswith('gnn_'):
-        parsed_params = params_raw if isinstance(params_raw, dict) else {}
-    else:
-        parsed_params = parse_map_params(params_raw)
+    parsed_params = parse_map_params(params_raw)
 
     return MappingConfig(
         type=m_type,
@@ -368,12 +363,13 @@ def _parse_validity_config(weights_raw: dict) -> ValidityConfig:
     """Parse the [optimization_weights] YAML section.
 
     Recognises two special keys that are not penalty weights:
-      validity_method : 'lbfgs' (default) | 'alternating_projection'
+      validity_method : 'none' (default; the closed chart is valid by construction)
+                        | 'alternating_projection' | 'lbfgs' (open-pattern ablations only)
       n_proj_iters    : int, only used when validity_method='alternating_projection'
     All other keys are treated as penalty weights and passed to the L-BFGS solver.
     """
     raw = dict(weights_raw)  # copy so we don't mutate the caller's dict
-    validity_method = str(raw.pop('validity_method', 'lbfgs'))
+    validity_method = str(raw.pop('validity_method', 'none'))
     n_proj_iters    = int(raw.pop('n_proj_iters', 20))
     return ValidityConfig(
         weights=raw,

@@ -22,10 +22,9 @@ from nff.stages.state import CentroidalState
 from nff.stages.geometry import reconstruct_vertices
 from nff.stages.mapping import (
     build_mapping_fn, apply_mapping,
-    apply_gnn_mapping, apply_direct_mapping, apply_direct_transform_mapping,
+    apply_direct_mapping, apply_direct_transform_mapping,
     apply_closed_les_mapping,
 )
-from nff.stages.validity import solve_geometric_validity
 from nff.stages.physics.energy import (
     build_potential_energy,
     build_energy_history,
@@ -134,11 +133,9 @@ def _execute_stage0_mapping(
     }
 
     if map_type.startswith('gnn_'):
-        if static_features is None:
-            from legacy.gnn.models.graph_builder import build_static_graph_features
-            static_features = build_static_graph_features(initial_state)
-        mapped_state = apply_gnn_mapping(initial_state, map_params, static_features, map_type=map_type)
-        mapping_fn = None
+        raise ValueError(
+            f"map_type {map_type!r}: the GNN mappings are archived in legacy/gnn/; "
+            "run them from tag pre-cleanup-2026-11.")
     elif map_type == 'direct_vertices':
         mapped_state = apply_direct_mapping(initial_state, map_params)
         mapping_fn = None
@@ -172,9 +169,10 @@ def _execute_stage1_validity(mapped_state, target_cfg, validity_cfg):
         from nff.stages.projection import solve_alternating_projections
         valid_state = solve_alternating_projections(
             mapped_state, n_iters=validity_cfg.n_proj_iters)
-    else:  # 'lbfgs' (default) -- the ONLY branch that reads the cloud, so it is built here and not
+    else:  # 'lbfgs' -- the ONLY branch that reads the cloud, so it is built here and not
            # above: the closed pipeline runs 'none' and was generating then discarding 200 points
            # on every trace.
+        from nff.stages.validity import solve_geometric_validity
         target_cloud = jnp.array(get_target_points({
             'type': target_cfg.type,
             'center': target_cfg.center,
