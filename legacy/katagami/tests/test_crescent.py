@@ -3,14 +3,14 @@
 import numpy as np
 import pytest
 
-from nff_paper.topology_art.crescent import (
+from legacy.katagami.topology_art.crescent import (
     Crescent,
     crescent_area_fn,
     crescent_path_fn,
     crescent_polygon_fn,
     transform_crescent_fn,
 )
-from nff_paper.topology_art.svg_export import path_data_fn
+from legacy.katagami.topology_art.svg_export import path_data_fn
 
 
 def svg_arc_points(start, end, radius, large_arc, sweep, n=200):

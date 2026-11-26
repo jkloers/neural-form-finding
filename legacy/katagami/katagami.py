@@ -8,7 +8,7 @@ in every cell, which is the irregular repeat this module exists to draw.
 Two rules keep the tiling from becoming legible in the artwork:
 
 - motif strokes reach the cell boundary only at corners, which are shared exactly between two tiles
-  (``nff_paper.topology_art.motif``), so strokes join their neighbour to machine precision;
+  (``legacy.katagami.topology_art.motif``), so strokes join their neighbour to machine precision;
 - the ornament sitting on each shared corner is drawn ONCE, in sheet coordinates, so there is no
   join to get wrong and the tangent mismatch between two tiles' strokes is absorbed by a designed
   feature rather than showing as a kink.
@@ -29,8 +29,8 @@ from nff.topology.closed_builder_jax import (
     build_deploy_structure,
     solve_cut_vertices_jax,
 )
-from nff_paper.topology_art.motif import build_motif_fn, check_corner_ports_fn
-from nff_paper.topology_art.quad_warp import (
+from legacy.katagami.topology_art.motif import build_motif_fn, check_corner_ports_fn
+from legacy.katagami.topology_art.quad_warp import (
     BezierPath,
     assert_ccw_convex_fn,
     path_points_fn,
@@ -505,8 +505,8 @@ def build_vine_fn(
     Returns:
         ``(paths, report)`` with filled closed ribbon outlines and chain statistics.
     """
-    from nff_paper.topology_art.motif import CORNERS
-    from nff_paper.topology_art.ribbon import build_chord_fn, build_ribbon_fn, width_profile_fn
+    from legacy.katagami.topology_art.motif import CORNERS
+    from legacy.katagami.topology_art.ribbon import build_chord_fn, build_ribbon_fn, width_profile_fn
 
     structure = diagonal_chains_fn(tiles, rel_tol=rel_tol)
     positions_all = structure["corners"]["positions"]

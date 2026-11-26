@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from nff_paper.topology_art.quad_warp import (
+from legacy.katagami.topology_art.quad_warp import (
     assert_ccw_convex_fn,
     bilinear_fn,
     path_points_fn,

@@ -13,6 +13,10 @@ import jax
 jax.config.update("jax_enable_x64", True)   # the pipeline runs in x64; keep this file self-sufficient
 import pytest
 
+# ~10-40 s per test (full Stage-2 solves under finite differences / harvests): excluded from
+# the fast suite, `pytest -m "not slow"`.
+pytestmark = pytest.mark.slow
+
 from nff.closed.path_dataset import (PathExample, PathDataset, save_dataset, load_dataset,
                                      harvest_paths)
 

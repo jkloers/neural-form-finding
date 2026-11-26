@@ -22,6 +22,10 @@ import jax
 jax.config.update("jax_enable_x64", True)   # a gradient check at 1e-3 is meaningless in float32
 import pytest
 
+# ~10-40 s per test (full Stage-2 solves under finite differences / harvests): excluded from
+# the fast suite, `pytest -m "not slow"`.
+pytestmark = pytest.mark.slow
+
 from nff.config.experiment import load_and_parse_config
 from nff.closed.setup import (build_closed_initial_state, init_closed_les_params,
                               build_surrogate_energy)

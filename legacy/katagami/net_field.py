@@ -14,8 +14,8 @@ reference coordinates and pushed through this mesh is warped by the mechanics an
 import numpy as np
 from jaxtyping import Float
 
-from nff_paper.topology_art.net import build_net_fn, warp_net_fn
-from nff_paper.topology_art.quad_warp import path_points_fn
+from legacy.katagami.topology_art.net import build_net_fn, warp_net_fn
+from legacy.katagami.topology_art.quad_warp import path_points_fn
 
 
 def control_mesh_fn(tiles: Float[np.ndarray, "n 4 2"], grid) -> Float[np.ndarray, "rows cols 2"]:
@@ -46,7 +46,7 @@ def build_net_sheet_fn(tiles, grid, name, *, scale=2.0, **params):
     Args:
         tiles: (n, 4, 2) flat tiles.
         grid: ``(M, N)`` panel grid.
-        name: which net; ``nff_paper.topology_art.net.NETS`` lists them.
+        name: which net; ``legacy.katagami.topology_art.net.NETS`` lists them.
         scale: control-mesh cells per motif repeat.
 
     Returns:
@@ -150,7 +150,7 @@ def render_net_preview_fn(paths, out_png, *, width_mm=1.6, crop=None, dpi=150,
         # the net, so a figure covers the ground rather than being cut up by it.
         from matplotlib.patches import Polygon as MplPolygon
 
-        from nff_paper.topology_art.leaf import ElementSpec, element_layers_fn, leaf_polygon_fn
+        from legacy.katagami.topology_art.leaf import ElementSpec, element_layers_fn, leaf_polygon_fn
 
         ink = {"pale": fill, "dark": ground}
         default = ElementSpec()

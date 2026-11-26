@@ -27,8 +27,8 @@ from shapely.geometry import Polygon, box
 from shapely.ops import unary_union
 from shapely.strtree import STRtree
 
-from nff_paper.topology_art.leaf import element_layers_fn, leaf_polygon_fn
-from nff_paper.topology_art.quad_warp import BezierPath, CompoundPath
+from legacy.katagami.topology_art.leaf import element_layers_fn, leaf_polygon_fn
+from legacy.katagami.topology_art.quad_warp import BezierPath, CompoundPath
 
 
 def _as_components(region):

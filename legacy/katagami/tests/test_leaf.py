@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from nff_paper.topology_art.leaf import (
+from legacy.katagami.topology_art.leaf import (
     ElementSpec,
     Leaf,
     element_layers_fn,
@@ -13,8 +13,8 @@ from nff_paper.topology_art.leaf import (
     rim_fraction_fn,
     transform_leaf_fn,
 )
-from nff_paper.topology_art.leaf import _points_inside_fn
-from tests.paper.test_crescent import svg_arc_points
+from legacy.katagami.topology_art.leaf import _points_inside_fn
+from legacy.katagami.tests.test_crescent import svg_arc_points
 
 
 @pytest.mark.parametrize("width", [0.30, 0.46, 0.62, 0.80])

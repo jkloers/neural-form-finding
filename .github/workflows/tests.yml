@@ -1,0 +1,32 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      JAX_PLATFORMS: cpu
+      MPLBACKEND: Agg
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: requirements-core.txt
+      - name: Install
+        run: |
+          # gmsh (the CalculiX RVE mesher) needs these shared libraries even headless
+          sudo apt-get update -qq && sudo apt-get install -y -qq libglu1-mesa libxft2 libxinerama1 libxcursor1
+          python -m pip install --upgrade pip
+          pip install -r requirements-core.txt
+          pip install -e . --no-deps
+      - name: Package layering
+        run: pytest -q tests/test_layering.py
+      - name: Test suite (data-dependent tests skip on a fresh clone)
+        run: pytest -q -m "not slow" -rs

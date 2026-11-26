@@ -6,6 +6,8 @@ mask, it must report the area it covered, and its masks must be geometry rather 
 test builds a ground truth, damages it, and asks for the damage back.
 """
 
+import os
+
 import numpy as np
 import pytest
 
@@ -173,7 +175,10 @@ def test_sheet_framing_keeps_the_panel_inside_the_photograph():
     from nff_paper.lab.photo_rectify import apply_h
     hb = pytest.importorskip("nff_paper.figures.plot_hinge_buckle_figure")
 
-    z = np.load(f"{hb.DEPLOY}/derived/measured.npz", allow_pickle=True)
+    measured = f"{hb.DEPLOY}/derived/measured.npz"
+    if not os.path.exists(measured):
+        pytest.skip("lab measurement not present (data/ is gitignored)")
+    z = np.load(measured, allow_pickle=True)
     R = hb.rot_h(hb.ROT_DEG)
     foot = Polygon(apply_h(R @ z["Deployed_H"],
                            np.array([[0, 0], [4032, 0], [4032, 3024], [0, 3024]], float)))

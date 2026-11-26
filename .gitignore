@@ -240,6 +240,8 @@ data/experiments/*/*
 !data/experiments/*/manifest.json
 !data/experiments/*/README.md
 
+!data/README.md
+
 # Closed-pipeline configs are source, not data. Scratch configs start with `_`.
 !data/configs/
 data/configs/*

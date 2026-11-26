@@ -8,8 +8,8 @@ import numpy as np
 import pytest
 from shapely.geometry import LineString, Polygon, box
 
-from nff_paper.closed_support.scale_field import Element
-from nff_paper.closed_support.web import (
+from legacy.katagami.scale_field import Element
+from legacy.katagami.web import (
     _components as _as_parts,
     _folded_cells,
     build_cell_web_fn,
@@ -45,8 +45,8 @@ from nff_paper.closed_support.web import (
     territories_fn,
     thread_region_fn,
 )
-from nff_paper.closed_support.cell_motifs import UNIT_MOTIFS, fit_motif_fn
-from nff_paper.topology_art.leaf import ElementSpec, Leaf, leaf_polygon_fn
+from legacy.katagami.cell_motifs import UNIT_MOTIFS, fit_motif_fn
+from legacy.katagami.topology_art.leaf import ElementSpec, Leaf, leaf_polygon_fn
 
 PAGE = (0.0, 0.0, 120.0, 90.0)
 
@@ -335,7 +335,7 @@ def test_the_spanning_tree_is_the_cheapest_connected_armature():
 
 
 def test_the_chain_armature_follows_the_tiling_and_holds_its_width():
-    from nff_paper.closed_support.katagami import load_flat_tiles_fn
+    from legacy.katagami.katagami import load_flat_tiles_fn
 
     tiles, meta = load_flat_tiles_fn(synthetic=(6, 5), amplitude=1.2, seed=3, field_kind="banded")
     polylines, report = chain_thread_fn(tiles)

@@ -49,7 +49,7 @@ from shapely.affinity import scale as affine_scale
 from shapely.ops import unary_union, voronoi_diagram
 from shapely.strtree import STRtree
 
-from nff_paper.topology_art.leaf import (
+from legacy.katagami.topology_art.leaf import (
     ElementSpec,
     Leaf,
     element_layers_fn,
@@ -1160,7 +1160,7 @@ def chain_thread_fn(tiles, *, scale: float = 1.0, offset=(0.0, 0.0), rel_tol: fl
     Returns:
         ``(polylines, report)`` already in page coordinates.
     """
-    from nff_paper.closed_support.katagami import diagonal_chains_fn
+    from legacy.katagami.katagami import diagonal_chains_fn
 
     structure = diagonal_chains_fn(np.asarray(tiles, float), rel_tol=rel_tol)
     positions = structure["corners"]["positions"]
@@ -1224,9 +1224,9 @@ def net_thread_fn(tiles, grid, name, *, width: float, scale: float = 2.0, rings:
     Args:
         transform: ``(scale, offset)`` as applied to the element field.
     """
-    from nff_paper.closed_support.net_field import control_mesh_fn
-    from nff_paper.topology_art.net import build_net_fn, warp_net_fn
-    from nff_paper.topology_art.quad_warp import path_points_fn
+    from legacy.katagami.net_field import control_mesh_fn
+    from legacy.katagami.topology_art.net import build_net_fn, warp_net_fn
+    from legacy.katagami.topology_art.quad_warp import path_points_fn
 
     mesh = extend_mesh_fn(control_mesh_fn(np.asarray(tiles, float), grid), rings=rings)
     rows, cols = mesh.shape[0] - 1, mesh.shape[1] - 1

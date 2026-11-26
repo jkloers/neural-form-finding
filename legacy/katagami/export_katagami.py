@@ -5,7 +5,7 @@ Because each tile is a different quad, a regular motif becomes an irregular repe
 rule. Flat state only; nothing here is meant to be cut.
 
     PYTHONPATH=$(pwd) JAX_PLATFORMS=cpu conda run -n kgnn_mac python \
-      nff_paper/figures/export_katagami.py \
+      legacy/katagami/export_katagami.py \
       --run-dir data/outputs/runs/run_20260806_183646_figmat_1_deploy \
       --motif asanoha --fit-mm 420x297 --preview
 """
@@ -15,7 +15,7 @@ import os
 
 import numpy as np
 
-from nff_paper.closed_support.katagami import (
+from legacy.katagami.katagami import (
     build_vine_fn,
     compose_katagami_fn,
     corner_join_residual_fn,
@@ -25,22 +25,22 @@ from nff_paper.closed_support.katagami import (
     shared_corners_fn,
     transform_layers_fn,
 )
-from nff_paper.closed_support.scale_field import (
+from legacy.katagami.scale_field import (
     build_scale_field_fn,
     render_scale_preview_fn,
     transform_elements_fn,
 )
-from nff_paper.closed_support.stencil import (
+from legacy.katagami.stencil import (
     cut_paths_fn,
     measure_stencil_fn,
     prune_dust_fn,
     resolve_paper_fn,
 )
-from nff_paper.topology_art.leaf import ElementSpec, element_layers_fn, leaf_path_fn
-from nff_paper.closed_support.katagami import R_FIELDS
-from nff_paper.topology_art.motif import MOTIFS
-from nff_paper.topology_art.quad_warp import warp_polyline_fn
-from nff_paper.topology_art.svg_export import fit_to_page_fn, write_svg_fn
+from legacy.katagami.topology_art.leaf import ElementSpec, element_layers_fn, leaf_path_fn
+from legacy.katagami.katagami import R_FIELDS
+from legacy.katagami.topology_art.motif import MOTIFS
+from legacy.katagami.topology_art.quad_warp import warp_polyline_fn
+from legacy.katagami.topology_art.svg_export import fit_to_page_fn, write_svg_fn
 from nff.utils import figstyle
 
 DEFAULT_RUN = "data/outputs/runs/run_20260806_183646_figmat_1_deploy"

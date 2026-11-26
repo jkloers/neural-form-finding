@@ -63,7 +63,7 @@ class MappingConfig(eqx.Module):
 
 class ValidityConfig(eqx.Module):
     weights: Dict[str, float]
-    validity_method: str   # 'none' | 'alternating_projection' | 'lbfgs'
+    validity_method: str   # 'none' | 'alternating_projection'
     n_proj_iters: int      # only used when validity_method == 'alternating_projection'
 
     def __init__(self, weights: Dict[str, float],
@@ -364,7 +364,7 @@ def _parse_validity_config(weights_raw: dict) -> ValidityConfig:
 
     Recognises two special keys that are not penalty weights:
       validity_method : 'none' (default; the closed chart is valid by construction)
-                        | 'alternating_projection' | 'lbfgs' (open-pattern ablations only)
+                        | 'alternating_projection' (free-vertex ablation baseline only)
       n_proj_iters    : int, only used when validity_method='alternating_projection'
     All other keys are treated as penalty weights and passed to the L-BFGS solver.
     """

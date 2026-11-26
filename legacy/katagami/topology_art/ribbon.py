@@ -3,7 +3,7 @@
 A stroke crossing an irregular tiling can only look continuous if neighbouring tiles agree, at the
 corner they share, on three things: where the stroke is, which way it points, and how wide it is.
 None of those may therefore be a property of a tile. They are properties of the CORNER, computed once
-in world coordinates and handed to both tiles (``nff_paper.closed_support.katagami.build_corner_frames_fn``).
+in world coordinates and handed to both tiles (``legacy.katagami.katagami.build_corner_frames_fn``).
 
 This module is the cell-space half of that contract. Authoring stays in the unit cell so the exact
 segment-to-quadratic-Bezier property survives and containment stays free, while the world-space
@@ -27,7 +27,7 @@ Pure numpy; this module imports nothing from ``nff`` outside ``nff.topology``.
 import numpy as np
 from jaxtyping import Float
 
-from nff_paper.topology_art.quad_warp import jacobian_fn, pull_back_fn, solve_offset_fn
+from legacy.katagami.topology_art.quad_warp import jacobian_fn, pull_back_fn, solve_offset_fn
 
 
 def _unit(vector, eps=1e-15):

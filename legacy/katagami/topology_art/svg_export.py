@@ -15,7 +15,7 @@ Pure numpy; this module imports nothing from ``nff``.
 
 import numpy as np
 
-from nff_paper.topology_art.quad_warp import BezierPath, CompoundPath
+from legacy.katagami.topology_art.quad_warp import BezierPath, CompoundPath
 
 FILL_STYLE = {"fill": "#1A1A1A", "fill-rule": "evenodd", "stroke": "none"}
 
@@ -190,7 +190,7 @@ def fit_to_page_fn(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Aspect-preserving similarity taking a world bounding box onto a page.
 
-    Returns ``(matrix, offset)`` for ``nff_paper.topology_art.quad_warp.transform_path_fn``. A similarity is
+    Returns ``(matrix, offset)`` for ``legacy.katagami.topology_art.quad_warp.transform_path_fn``. A similarity is
     exact on Bezier control points, so page fitting costs nothing in precision.
     """
     min_x, min_y, max_x, max_y = (float(v) for v in bounds)

@@ -18,9 +18,9 @@ from typing import NamedTuple
 import numpy as np
 from jaxtyping import Float
 
-from nff_paper.closed_support.katagami import shared_corners_fn, tile_areas_fn
-from nff_paper.topology_art.quad_warp import bilinear_fn
-from nff_paper.topology_art.leaf import (
+from legacy.katagami.katagami import shared_corners_fn, tile_areas_fn
+from legacy.katagami.topology_art.quad_warp import bilinear_fn
+from legacy.katagami.topology_art.leaf import (
     ElementSpec,
     Leaf,
     element_layers_fn,
