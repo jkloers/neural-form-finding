@@ -33,13 +33,17 @@ for the closed chart, so the **ablation baseline stays live** and only the dead 
   anything else raises with a pointer to `legacy/`;
 - `tests/test_chart_ablation_path.py` now guards arm D (it had no test before).
 
-## Session 4 — core hardening
+## Session 4 — core hardening — DONE 2026-11-27
 
-1. Build a fresh conda env (`kgnn_core`) from a pruned `environment.yml` (drop flax, jraph,
-   e3nn-jax, wandb; add ezdxf, pillow). Leave `kgnn_mac` intact.
-2. Follow the README quick start from a fresh shell, verbatim.
-3. Add a `slow` pytest marker so a fast suite runs in under a minute.
-4. GitHub Actions: fast suite + `tests/test_layering.py` on every push.
+- `requirements-core.txt`: the CPU JAX stack pinned to the versions the suite passes on. A clean
+  venv built from it alone runs the README quick start verbatim from a fresh clone (~20 s).
+- `quickstart_4x4_rom.yaml`: a tracked problem that needs no gitignored checkpoint.
+- `slow` marker on the finite-difference gradient checks and the path harvests (22 tests). Fast suite
+  on a fresh clone: 840 passed, 19 skipped (data absent), 91 s. Full suite with data: ~9 min.
+- `.github/workflows/tests.yml`: layering test + fast suite on every push to main and every PR.
+- One test assumed the gitignored lab measurement was present; it now skips without it.
+- Not done: pruning `environment.yml` itself (the research env still carries the GNN-era packages);
+  `requirements-core.txt` is the clean definition, and nothing in core needs the extras.
 
 ## Session 5 — research restart (needs the author)
 

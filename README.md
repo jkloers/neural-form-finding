@@ -53,20 +53,24 @@ nff/rve/ (CalculiX RVE oracle)  ->  generate_hinge_dataset.py  ->  data/fea/<dat
 ## Quick start
 
 ```bash
-conda env create -f environment.yml && conda activate kgnn_mac
-pip install -e .
+python3.10 -m venv .venv && source .venv/bin/activate
+pip install -r requirements-core.txt     # pinned CPU JAX stack (what CI runs)
+pip install -e . --no-deps
 
-# Inverse design (forces float64 and CPU; writes everything into one run folder)
-JAX_PLATFORMS=cpu python nff/scripts/run_closed.py --config-name circle_4x4_surrogate --every 5
-#   -> data/outputs/runs/run_<timestamp>_<config>/  (loss history, design trajectory,
+# Inverse design, ~20 s: a 4x4 closed sheet deployed by the spring hinge onto a circle
+JAX_PLATFORMS=cpu python nff/scripts/run_closed.py --config-name quickstart_4x4_rom --every 5
+#   -> data/outputs/runs/run_<timestamp>_quickstart_4x4_rom/  (loss history, design trajectory,
 #      deployed sheet, cut pattern PNG/DXF/A4 PDF)
 
-# Tests (the suite pins the CPU backend itself)
+# Tests (the suite pins the CPU backend itself; data-dependent tests skip on a fresh clone)
 pytest -q
 ```
 
+The full research environment is `environment.yml` (`conda env create -f environment.yml`).
 Configs live in `data/configs/closed/`. Flip `hinge_model.type` between `rom` and `surrogate`
-to change the hinge physics; the target must be fixed in the config, never adaptive.
+to change the hinge physics (`circle_4x4_surrogate.yaml` is the same problem with the learned
+hinge; it needs a checkpoint in `data/surrogates/`, which is not versioned). The target must be
+fixed in the config, never adaptive.
 
 ### Building a hinge surrogate
 

@@ -45,3 +45,4 @@ nff-hinge-dataset = "nff.scripts.generate_hinge_dataset:main"
 testpaths = ["tests"]
 # `test_*.py` only: diagnostics such as taylor_test.py are scripts, not test modules.
 python_files = ["test_*.py"]
+markers = ["slow: full-solve gradient checks and harvests (minutes); skip with -m \"not slow\""]
