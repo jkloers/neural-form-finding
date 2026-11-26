@@ -6,9 +6,9 @@ import sys
 import numpy as np
 import pytest
 
-from nff_paper.topology_art.motif import CORNERS, MOTIFS, build_motif_fn, check_corner_ports_fn
-from nff_paper.topology_art.quad_warp import BezierPath, bilinear_fn, path_points_fn, warp_polyline_fn
-from nff_paper.topology_art.svg_export import fit_to_page_fn, path_data_fn, write_svg_fn
+from legacy.katagami.topology_art.motif import CORNERS, MOTIFS, build_motif_fn, check_corner_ports_fn
+from legacy.katagami.topology_art.quad_warp import BezierPath, bilinear_fn, path_points_fn, warp_polyline_fn
+from legacy.katagami.topology_art.svg_export import fit_to_page_fn, path_data_fn, write_svg_fn
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 FIGMAT_RUN = os.path.join(REPO, "data/outputs/runs/run_20260806_183646_figmat_1_deploy")
@@ -97,7 +97,7 @@ pytestmark_run = pytest.mark.skipif(
 def figmat_tiles():
     if not os.path.isdir(FIGMAT_RUN):
         pytest.skip("figmat run folder not present")
-    from nff_paper.closed_support.katagami import load_flat_tiles_fn
+    from legacy.katagami.katagami import load_flat_tiles_fn
 
     tiles, meta = load_flat_tiles_fn(run_dir=FIGMAT_RUN)
     return tiles, meta
@@ -112,7 +112,7 @@ def test_flat_tiles_partition_the_sheet(figmat_tiles):
 
 def test_interior_corners_are_shared_by_exactly_two_tiles(figmat_tiles):
     """The structural fact the whole design rests on."""
-    from nff_paper.closed_support.katagami import shared_corners_fn
+    from legacy.katagami.katagami import shared_corners_fn
 
     tiles, _ = figmat_tiles
     valence = shared_corners_fn(tiles)["valence"]
@@ -122,7 +122,7 @@ def test_interior_corners_are_shared_by_exactly_two_tiles(figmat_tiles):
 
 def test_corner_join_residual_is_machine_zero(figmat_tiles):
     """The seam test: strokes terminate at corners, so this bounds how far two of them can land."""
-    from nff_paper.closed_support.katagami import corner_join_residual_fn
+    from legacy.katagami.katagami import corner_join_residual_fn
 
     tiles, _ = figmat_tiles
     span = tiles.reshape(-1, 2).max(axis=0) - tiles.reshape(-1, 2).min(axis=0)
@@ -149,9 +149,9 @@ def test_ribbon_ports_land_on_the_shared_world_points(figmat_tiles):
     produce the same pair of outline endpoints, ``p +/- w * perp(d)``. Checked on the two tiles that
     actually share a corner on the real sheet.
     """
-    from nff_paper.closed_support.katagami import diagonal_chains_fn
-    from nff_paper.topology_art.motif import CORNERS
-    from nff_paper.topology_art.ribbon import (
+    from legacy.katagami.katagami import diagonal_chains_fn
+    from legacy.katagami.topology_art.motif import CORNERS
+    from legacy.katagami.topology_art.ribbon import (
         build_chord_fn, build_ribbon_fn, ribbon_port_points_fn, width_profile_fn,
     )
 
@@ -186,14 +186,14 @@ def test_ribbon_ports_land_on_the_shared_world_points(figmat_tiles):
 
 
 def _chain_frames_for_test(positions, closed):
-    from nff_paper.closed_support.katagami import _chain_frames
+    from legacy.katagami.katagami import _chain_frames
 
     return _chain_frames(positions, closed)
 
 
 def test_diagonal_chains_are_long_and_cover_every_tile(figmat_tiles):
     """The chains are found, not invented: a 2-regular corner graph falls into few long chains."""
-    from nff_paper.closed_support.katagami import diagonal_chains_fn
+    from legacy.katagami.katagami import diagonal_chains_fn
 
     tiles, _ = figmat_tiles
     structure = diagonal_chains_fn(tiles)
@@ -229,7 +229,7 @@ def test_every_tile_puts_geometry_on_all_four_of_its_corners(figmat_tiles):
 @pytest.mark.parametrize("kind", ["shear", "saddle", "pinch", "vortex2", "lens"])
 def test_new_deformation_fields_build_a_usable_sheet(kind):
     """A field is only a design lever if the sheet it makes is still a valid tiling."""
-    from nff_paper.closed_support.katagami import build_r_field_fn, load_flat_tiles_fn
+    from legacy.katagami.katagami import build_r_field_fn, load_flat_tiles_fn
 
     logits = build_r_field_fn((9, 9), kind=kind, seed=1, amplitude=2.0)
     assert logits.shape == (9, 9)
@@ -246,8 +246,8 @@ def test_new_deformation_fields_build_a_usable_sheet(kind):
 
 def test_a_ground_population_leaves_the_main_packing_untouched():
     """The two scales must be comparable, so adding a ground may not move a single figure."""
-    from nff_paper.closed_support.scale_field import build_scale_field_fn
-    from nff_paper.closed_support.katagami import load_flat_tiles_fn
+    from legacy.katagami.scale_field import build_scale_field_fn
+    from legacy.katagami.katagami import load_flat_tiles_fn
 
     tiles, _ = load_flat_tiles_fn(synthetic=(8, 6), field_kind="banded", seed=2, amplitude=1.8)
     plain, _ = build_scale_field_fn(tiles, density=0.5, size_frac=2.0, smoothing=6, seed=2)
@@ -265,8 +265,8 @@ def test_a_ground_population_leaves_the_main_packing_untouched():
 
 
 def test_element_width_follows_the_tile_when_asked_and_not_otherwise():
-    from nff_paper.closed_support.scale_field import build_scale_field_fn, tile_anisotropy_fn
-    from nff_paper.closed_support.katagami import load_flat_tiles_fn
+    from legacy.katagami.scale_field import build_scale_field_fn, tile_anisotropy_fn
+    from legacy.katagami.katagami import load_flat_tiles_fn
 
     tiles, _ = load_flat_tiles_fn(synthetic=(8, 6), field_kind="lens", seed=2, amplitude=2.2)
     assert tile_anisotropy_fn(tiles).min() >= 1.0 - 1e-12
@@ -278,7 +278,7 @@ def test_element_width_follows_the_tile_when_asked_and_not_otherwise():
 
 
 def _lens_tiles(shape=(8, 6)):
-    from nff_paper.closed_support.katagami import load_flat_tiles_fn
+    from legacy.katagami.katagami import load_flat_tiles_fn
 
     tiles, meta = load_flat_tiles_fn(synthetic=shape, field_kind="lens", seed=3, amplitude=1.8)
     return tiles, (meta["M"], meta["N"])
@@ -286,7 +286,7 @@ def _lens_tiles(shape=(8, 6)):
 
 def test_a_strict_lattice_puts_exactly_one_element_on_every_tile():
     """Regular alignment means regular INCIDENCE: each tile carries one element, once."""
-    from nff_paper.closed_support.scale_field import build_scale_field_fn
+    from legacy.katagami.scale_field import build_scale_field_fn
 
     tiles, grid = _lens_tiles()
     elements, report = build_scale_field_fn(tiles, grid=grid, placement="lattice",
@@ -296,7 +296,7 @@ def test_a_strict_lattice_puts_exactly_one_element_on_every_tile():
 
 
 def test_the_lattice_needs_the_grid_and_says_so():
-    from nff_paper.closed_support.scale_field import build_scale_field_fn
+    from legacy.katagami.scale_field import build_scale_field_fn
 
     tiles, _ = _lens_tiles()
     with pytest.raises(ValueError, match="grid"):
@@ -305,7 +305,7 @@ def test_the_lattice_needs_the_grid_and_says_so():
 
 def test_regularity_is_a_dial_from_the_lattice_toward_disorder():
     """Each step down must move elements further from their sites, or the dial does nothing."""
-    from nff_paper.closed_support.scale_field import build_scale_field_fn
+    from legacy.katagami.scale_field import build_scale_field_fn
 
     tiles, grid = _lens_tiles()
     sites = {e.tile: e.leaf.centre for e in build_scale_field_fn(
@@ -321,7 +321,7 @@ def test_regularity_is_a_dial_from_the_lattice_toward_disorder():
 
 
 def test_the_bond_offsets_alternate_rows_and_nothing_else():
-    from nff_paper.closed_support.scale_field import build_scale_field_fn
+    from legacy.katagami.scale_field import build_scale_field_fn
 
     tiles, grid = _lens_tiles()
     common = dict(grid=grid, placement="lattice", regularity=1.0, smoothing=6, seed=3)
@@ -335,7 +335,7 @@ def test_the_bond_offsets_alternate_rows_and_nothing_else():
 
 def test_placement_stays_on_poisson_by_default_even_when_a_grid_is_given():
     """The grid is information, not an instruction: existing renders must not change under it."""
-    from nff_paper.closed_support.scale_field import build_scale_field_fn
+    from legacy.katagami.scale_field import build_scale_field_fn
 
     tiles, grid = _lens_tiles()
     without, _ = build_scale_field_fn(tiles, density=0.5, smoothing=6, seed=3)
@@ -356,10 +356,10 @@ def test_the_lattice_decides_which_elements_fuse_rather_than_discovering_it():
     a lattice neighbour, so the connectivity can be reasoned about at all -- and that a tuned
     overlap then gives a single piece with a bridge worth cutting.
     """
-    from nff_paper.closed_support.scale_field import build_scale_field_fn, transform_elements_fn
-    from nff_paper.closed_support.stencil import measure_stencil_fn, resolve_paper_fn
-    from nff_paper.topology_art.leaf import ElementSpec
-    from nff_paper.topology_art.svg_export import fit_to_page_fn
+    from legacy.katagami.scale_field import build_scale_field_fn, transform_elements_fn
+    from legacy.katagami.stencil import measure_stencil_fn, resolve_paper_fn
+    from legacy.katagami.topology_art.leaf import ElementSpec
+    from legacy.katagami.topology_art.svg_export import fit_to_page_fn
 
     pytest.importorskip("shapely.geometry")
     tiles, grid = _lens_tiles((14, 10))
@@ -390,7 +390,7 @@ def test_the_lattice_decides_which_elements_fuse_rather_than_discovering_it():
 
 @pytest.mark.parametrize("kind", ["swell", "terrace"])
 def test_the_calm_fields_build_a_usable_sheet(kind):
-    from nff_paper.closed_support.katagami import build_r_field_fn, load_flat_tiles_fn
+    from legacy.katagami.katagami import build_r_field_fn, load_flat_tiles_fn
 
     logits = build_r_field_fn((9, 9), kind=kind, seed=1, amplitude=1.2)
     assert np.isfinite(logits).all()
@@ -411,8 +411,8 @@ def test_a_still_flow_comes_from_the_tile_pitch_not_from_a_swirl_free_field():
     no quieter than a two-vortex one. A tall pitch elongates every tile the same way and settles all
     of them at once, which is what the calm presets actually rely on.
     """
-    from nff_paper.closed_support.katagami import load_flat_tiles_fn
-    from nff_paper.closed_support.scale_field import build_scale_field_fn
+    from legacy.katagami.katagami import load_flat_tiles_fn
+    from legacy.katagami.scale_field import build_scale_field_fn
 
     def opposed(kind, aspect):
         tiles, meta = load_flat_tiles_fn(synthetic=(20, 10), field_kind=kind, seed=3,
@@ -435,8 +435,8 @@ def test_a_square_uniform_sheet_has_no_direction_but_a_tall_one_does():
     Worth pinning because the failure is silent: the axis comes back as numerical noise rather than
     as an error, and the sheet quietly fills with elements pointing at each other.
     """
-    from nff_paper.closed_support.katagami import load_flat_tiles_fn
-    from nff_paper.closed_support.scale_field import build_scale_field_fn, tile_anisotropy_fn
+    from legacy.katagami.katagami import load_flat_tiles_fn
+    from legacy.katagami.scale_field import build_scale_field_fn, tile_anisotropy_fn
 
     def measure(aspect):
         tiles, meta = load_flat_tiles_fn(synthetic=(20, 14), field_kind="uniform", seed=3,
@@ -454,9 +454,9 @@ def test_a_square_uniform_sheet_has_no_direction_but_a_tall_one_does():
 
 def test_the_outline_is_off_unless_a_panel_asks_for_it(tmp_path):
     """The regression that shipped: a default of 0.5 drew the rim on every panel that omitted it."""
-    from nff_paper.closed_support.scale_field import PALETTES, Element
-    from nff_paper.figures.katagami_contact_sheet import write_panel_svg_fn
-    from nff_paper.topology_art.leaf import ElementSpec, Leaf
+    from legacy.katagami.scale_field import PALETTES, Element
+    from legacy.katagami.katagami_contact_sheet import write_panel_svg_fn
+    from legacy.katagami.topology_art.leaf import ElementSpec, Leaf
 
     placed = [Element(Leaf(centre=np.array([50.0, 50.0]), angle=0.2, length=40.0), "main", 0)]
     specs = {"main": ElementSpec(rim=0.0, rim_abs=3.0, duty=1.0)}
@@ -475,9 +475,9 @@ def test_the_outline_is_off_unless_a_panel_asks_for_it(tmp_path):
 
 @pytest.mark.parametrize("palette", ["sumi", "kakishibu", "ai"])
 def test_every_palette_reaches_the_vector_output(palette, tmp_path):
-    from nff_paper.closed_support.scale_field import PALETTES, Element
-    from nff_paper.figures.katagami_contact_sheet import write_panel_svg_fn
-    from nff_paper.topology_art.leaf import ElementSpec, Leaf
+    from legacy.katagami.scale_field import PALETTES, Element
+    from legacy.katagami.katagami_contact_sheet import write_panel_svg_fn
+    from legacy.katagami.topology_art.leaf import ElementSpec, Leaf
 
     placed = [Element(Leaf(centre=np.array([50.0, 50.0]), angle=0.2, length=40.0), "main", 0)]
     out = tmp_path / f"{palette}.svg"
@@ -491,11 +491,11 @@ def test_every_palette_reaches_the_vector_output(palette, tmp_path):
 def test_sparse_elements_cut_only_when_they_are_read_as_holes():
     """A sparse motif taken as paper is a field of islands; taken as holes it is one sheet."""
     pytest.importorskip("shapely.geometry")
-    from nff_paper.closed_support.katagami import load_flat_tiles_fn
-    from nff_paper.closed_support.scale_field import build_scale_field_fn, transform_elements_fn
-    from nff_paper.closed_support.stencil import measure_stencil_fn, resolve_paper_fn
-    from nff_paper.topology_art.leaf import ElementSpec
-    from nff_paper.topology_art.svg_export import fit_to_page_fn
+    from legacy.katagami.katagami import load_flat_tiles_fn
+    from legacy.katagami.scale_field import build_scale_field_fn, transform_elements_fn
+    from legacy.katagami.stencil import measure_stencil_fn, resolve_paper_fn
+    from legacy.katagami.topology_art.leaf import ElementSpec
+    from legacy.katagami.topology_art.svg_export import fit_to_page_fn
 
     page = (0.0, 0.0, 420.0, 297.0)
     tiles, meta = load_flat_tiles_fn(synthetic=(21, 10), field_kind="uniform", seed=3,

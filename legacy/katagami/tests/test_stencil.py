@@ -8,8 +8,8 @@ shapely = pytest.importorskip("shapely.geometry")
 from shapely.geometry import Polygon, box  # noqa: E402
 from shapely.ops import unary_union  # noqa: E402
 
-from nff_paper.closed_support.scale_field import Element  # noqa: E402
-from nff_paper.closed_support.stencil import (  # noqa: E402
+from legacy.katagami.scale_field import Element  # noqa: E402
+from legacy.katagami.stencil import (  # noqa: E402
     contact_graph_fn,
     cut_paths_fn,
     measure_stencil_fn,
@@ -18,9 +18,9 @@ from nff_paper.closed_support.stencil import (  # noqa: E402
     resolve_paper_fn,
     solve_slot_for_bridge_fn,
 )
-from nff_paper.topology_art.leaf import ElementSpec, Leaf, element_layers_fn, leaf_polygon_fn  # noqa: E402
-from nff_paper.topology_art.quad_warp import CompoundPath  # noqa: E402
-from nff_paper.topology_art.svg_export import path_data_fn  # noqa: E402
+from legacy.katagami.topology_art.leaf import ElementSpec, Leaf, element_layers_fn, leaf_polygon_fn  # noqa: E402
+from legacy.katagami.topology_art.quad_warp import CompoundPath  # noqa: E402
+from legacy.katagami.topology_art.svg_export import path_data_fn  # noqa: E402
 
 PAGE = (0.0, 0.0, 100.0, 100.0)
 SPEC = ElementSpec(rim=0.0, rim_abs=3.0, duty=1.0)

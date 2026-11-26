@@ -24,7 +24,7 @@ from shapely.affinity import translate as affine_translate
 from shapely.geometry import LineString, Point, Polygon
 from shapely.ops import unary_union
 
-from nff_paper.topology_art.leaf import Leaf, leaf_polygon_fn
+from legacy.katagami.topology_art.leaf import Leaf, leaf_polygon_fn
 
 
 def _regular(sides: int, *, radius: float = 1.0, phase: float = 0.0) -> Polygon:

@@ -180,7 +180,7 @@ def parallelogram_defect(quads: Float[np.ndarray, "n_voids 4 2"], *,
                          normalise: bool = True) -> Float[np.ndarray, "n_voids"]:
     """``|Q0 - Q1 + Q2 - Q3|``, the quad's deviation from a parallelogram.
 
-    Same measure ``nff_paper/topology_art/quad_warp.py`` documents for the bilinear warp. Normalised by the
+    Same measure ``legacy/katagami/topology_art/quad_warp.py`` documents for the bilinear warp. Normalised by the
     mean side length, so it reads as a fraction of the void's own size and is comparable across a
     non-uniform sheet.
     """

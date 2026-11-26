@@ -22,7 +22,7 @@ Pure numpy; this module imports nothing from ``nff`` outside ``nff.topology``.
 import numpy as np
 from jaxtyping import Float
 
-from nff_paper.topology_art.quad_warp import BezierPath, warp_polyline_fn
+from legacy.katagami.topology_art.quad_warp import BezierPath, warp_polyline_fn
 
 # A hexagonal lattice laid on a rectangular reference grid: one hexagon repeat spans 1 unit across
 # and this much along. Kept exact rather than 0.866 so the lattice closes on itself.

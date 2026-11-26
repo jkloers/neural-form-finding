@@ -8,7 +8,7 @@ Panels are grouped by LAYOUT. Everything that changes only the ink is drawn over
 tonal comparison is of the tone alone and not of a different scatter of leaves. Every recipe is
 written to a manifest beside the images, because a variation nobody can rebuild is not a choice.
 
-    PYTHONPATH=$(pwd) JAX_PLATFORMS=cpu python3 nff_paper/figures/katagami_contact_sheet.py
+    PYTHONPATH=$(pwd) JAX_PLATFORMS=cpu python3 legacy/katagami/katagami_contact_sheet.py
 """
 
 import argparse
@@ -17,29 +17,29 @@ import os
 import numpy as np
 import yaml
 
-from nff_paper.closed_support.katagami import load_flat_tiles_fn
-from nff_paper.closed_support.scale_field import (
+from legacy.katagami.katagami import load_flat_tiles_fn
+from legacy.katagami.scale_field import (
     PALETTES,
     build_scale_field_fn,
     render_scale_preview_fn,
     transform_elements_fn,
 )
-from nff_paper.closed_support.net_field import (
+from legacy.katagami.net_field import (
     build_net_sheet_fn,
     net_join_residual_fn,
     net_region_fn,
     render_net_preview_fn,
 )
 from nff_paper.closed_support import cell_motifs, web
-from nff_paper.closed_support.stencil import (
+from legacy.katagami.stencil import (
     cut_paths_fn,
     measure_stencil_fn,
     prune_dust_fn,
     resolve_paper_fn,
 )
-from nff_paper.topology_art.quad_warp import transform_path_fn
-from nff_paper.topology_art.leaf import ElementSpec, element_layers_fn, leaf_path_fn
-from nff_paper.topology_art.svg_export import fit_to_page_fn, write_svg_fn
+from legacy.katagami.topology_art.quad_warp import transform_path_fn
+from legacy.katagami.topology_art.leaf import ElementSpec, element_layers_fn, leaf_path_fn
+from legacy.katagami.topology_art.svg_export import fit_to_page_fn, write_svg_fn
 
 PAGE_MM = (420.0, 297.0)
 PALE, DARK = "#F2EFE6", "#141414"

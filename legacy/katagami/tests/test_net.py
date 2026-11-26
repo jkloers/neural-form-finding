@@ -3,13 +3,13 @@
 import numpy as np
 import pytest
 
-from nff_paper.topology_art.net import (
+from legacy.katagami.topology_art.net import (
     NETS,
     build_net_fn,
     clip_to_cells_fn,
     warp_net_fn,
 )
-from nff_paper.topology_art.quad_warp import path_points_fn
+from legacy.katagami.topology_art.quad_warp import path_points_fn
 
 COLS, ROWS = 8, 6
 
@@ -104,7 +104,7 @@ def test_the_net_is_one_connected_piece_once_it_has_width(name):
     shapely = pytest.importorskip("shapely.geometry")
     from shapely.ops import unary_union
 
-    from nff_paper.closed_support.stencil import min_bridge_fn
+    from legacy.katagami.stencil import min_bridge_fn
 
     mesh = _mesh(0.25)
     paths = warp_net_fn(build_net_fn(name, COLS, ROWS, scale=2.0), mesh)
@@ -131,7 +131,7 @@ def test_flat_caps_pinch_where_pieces_meet_at_a_slight_angle():
     shapely = pytest.importorskip("shapely.geometry")
     from shapely.ops import unary_union
 
-    from nff_paper.closed_support.stencil import min_bridge_fn
+    from legacy.katagami.stencil import min_bridge_fn
 
     bend = np.deg2rad(12.0)
     pieces = [shapely.LineString([(0.0, 0.0), (10.0, 0.0)]),
@@ -145,7 +145,7 @@ def test_flat_caps_pinch_where_pieces_meet_at_a_slight_angle():
 
 def test_a_folded_control_cell_is_refused():
     """A folded cell warps the net inside out rather than failing, so it is checked."""
-    from nff_paper.closed_support.net_field import control_mesh_fn
+    from legacy.katagami.net_field import control_mesh_fn
 
     # Four tiles in a 2x2 grid whose centroids cross over into a bow tie.
     centroids = np.array([[0.0, 0.0], [1.0, 1.0], [1.0, 0.0], [0.0, 1.0]])
@@ -156,7 +156,7 @@ def test_a_folded_control_cell_is_refused():
 
 def test_the_control_mesh_is_conforming_where_the_tiles_are_not():
     """The reason the centroids are used and the tiles are not: shared edges, no hanging nodes."""
-    from nff_paper.closed_support.net_field import control_mesh_fn
+    from legacy.katagami.net_field import control_mesh_fn
 
     rng = np.random.default_rng(0)
     grid = (6, 5)
@@ -165,7 +165,7 @@ def test_the_control_mesh_is_conforming_where_the_tiles_are_not():
     jitter = base + 0.12 * rng.normal(size=base.shape)
     tiles = np.repeat(jitter.reshape(-1, 2)[:, None, :], 4, axis=1)
     mesh = control_mesh_fn(tiles, grid)
-    from nff_paper.topology_art.quad_warp import bilinear_fn
+    from legacy.katagami.topology_art.quad_warp import bilinear_fn
 
     def quad(row, column):
         return np.array([mesh[row, column], mesh[row, column + 1],

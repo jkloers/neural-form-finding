@@ -24,7 +24,7 @@ from functools import lru_cache
 import numpy as np
 from jaxtyping import Float
 
-from nff_paper.topology_art.quad_warp import BezierPath
+from legacy.katagami.topology_art.quad_warp import BezierPath
 
 
 @dataclass(frozen=True)
