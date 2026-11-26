@@ -164,13 +164,20 @@ def analyze(
     )
 
 
-def true_from_engineering(sigma_eng: float, eps_eng: float) -> tuple[float, float]:
+def true_from_engineering(sigma_eng, eps_eng):
     """Engineering -> true stress/strain assuming incompressible uniform deformation.
 
     Valid only while deformation is uniform (pre-neck). For the cold-draw anchor use
     :func:`draw_true_point` instead, which uses the measured draw ratio.
+
+    Args:
+        sigma_eng: engineering stress, scalar or (n,).
+        eps_eng: engineering strain, same shape.
+
+    Returns:
+        ``(sigma_true, eps_true)``, matching the input shape.
     """
-    return sigma_eng * (1.0 + eps_eng), float(np.log(1.0 + eps_eng))
+    return sigma_eng * (1.0 + eps_eng), np.log(1.0 + eps_eng)
 
 
 def draw_true_point(plateau_eng_MPa: float, draw_ratio_lambda: float) -> tuple[float, float]:

@@ -1,0 +1,85 @@
+# Closed-state RDPQK -- SQUARE 21x21 sheet, 441 panels, 840 hinges. ROM.
+#
+# PURPOSE: the FORCE POCKET study, largest rung of the domain ladder 11 -> 15 -> 21.
+# ★ RATIONALE FOR EVERY CHOICE HERE IS IN `pocket_11.yaml` -- read that banner first. The three
+# files differ ONLY in M, N, sheet_width_mm, the target centre, and the background moment.
+# Centre tile = col 10, row 10 = face 220 (face id = col * N + row).
+#
+# ⚠ COST. 441 faces = 1323 DOFs, 1320 free. The Stage-0 LES is dense with P = 2*22*22 = 968, which
+# is comfortable; the linear layer's dense Hessian is 1320^2 and `jax.hessian` costs ~1320 passes.
+# This rung is the one that decides whether the pocket radius has converged, so it is worth it, but
+# run 11 and 15 first.
+
+tessellation:
+  tessellation_type: closed_rdpqk
+  M: 21
+  N: 21
+  r_init: 0.5
+  spacing: 1.0
+  spacing_y: 1.0
+  sheet_width_mm: 8534.4     # 21 panels x the 406.4 mm calibrated pitch
+  hinge_margin: 0.13
+  init_noise: 0.0
+  init_seed: 0
+  target_cx: 10.5
+  target_cy: 10.5
+  target_r: 11.0
+
+mapping:
+  map_type: closed_les
+
+optimization_weights:
+  validity_method: none
+
+hinge_model:
+  type: rom
+  w_lig_mm: 18.0
+  length_scale: 406.4
+  energy_scale: 2.4606e-3
+  calibrate: false
+  learn_w_lig: false
+
+physics:
+  use_contact: true
+  k_contact: 1000000.0
+  min_angle: -2.0
+  cutoff_angle: 0.0
+  linearized_strains: true
+  incremental: true
+  num_load_steps: 24
+  solver_maxiter: 20000
+  solver_tol: 1.0e-8         # ★ absolute tolerance, and the pocket is a DIFFERENCE. See pocket_11.
+  backward_reg: 0.01
+  updated_lagrangian: false
+
+material:
+  k_stretch: 96763.84
+  k_shear:   51775.36
+  k_rot:         1.1983
+  density: 1.0
+
+boundary_conditions:
+  clamped_faces: [0]         # corner tile, all three DOFs. The GAUGE, not a support.
+
+loads:
+  # ⚠⚠ COMPARISON ARM ONLY -- see the long banner in `pocket_11.yaml`. The default background is
+  # `--bg-mode checkerboard`, built in the driver, because a point actuator puts a stress
+  # concentration into every difference. Reached with `--bg-mode point`.
+  - {face: 1, dof: 2, value: 785.0}
+
+target:
+  type: circle
+  center: [10.5, 10.5]
+  radius: 11.0
+
+loss_weights:
+  chamfer: 0.0
+
+training:
+  num_epochs: 0
+  learning_rate: 0.0
+  optimizer: adam
+
+visualization:
+  save_outputs: false
+  show_plots: false

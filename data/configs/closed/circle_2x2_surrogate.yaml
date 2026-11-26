@@ -1,0 +1,99 @@
+# Closed-state RDPQK kirigami — minimal 2x2 demonstrator, driven by the LEARNED hinge-energy
+# SURROGATE (physical S235 steel).
+#
+# Smallest useful closed sheet: 2x2 tiles (cut grid 3x3, only 4 hinges). Physical scale =
+# 10 * w_lig_mm / spacing = 50 mm/tile, so the flat sheet is ~100x100 mm — a compact laser-cut test
+# coupon that sits well inside a quarter of the lab bed (84x54 cm).
+#
+# Actuation = the surrogate MOMENT setup: pin ONE tile (face 1, top-left) and apply a single
+# sub-fracture moment to the adjacent tile (face 3, top-right). Steel yields by ~0.6deg, so the
+# moment is kept modest (value 1.0 -> ~4.7deg, maxD 0.43, 0 fractures); above ~2.0 the 4-hinge
+# mechanism SNAPS THROUGH (181deg, hinges fracture). Clamping more than one tile or applying a net
+# force instead of a moment over-rotates and fractures every hinge — keep it single-clamp + moment.
+#
+# Face index = col * N + row  (row 0 = bottom). For N=2:
+#   bottom row (row 0): 0, 2      top row (row 1): 1, 3
+
+tessellation:
+  tessellation_type: closed_rdpqk
+  M: 2
+  N: 2
+  r_init: 0.45
+  spacing: 1.0
+  target_radius_scale: 1.8          # blow up the auto-fit target circle (encourage more expansion)
+
+mapping:
+  map_type: closed_les
+
+optimization_weights:
+  validity_method: none            # bypass Stage 1 (LES output is already valid)
+
+# ── Hinge energy: the config switch (ROM vs learned surrogate) ──
+hinge_model:
+  type: surrogate                  # rom | surrogate
+  checkpoint: data/surrogates/hinge_surrogate.pkl
+  material: S235                    # E=210 GPa, sigma_y=235 MPa, eps_f=0.25 (surrogate training regime)
+  thickness_mm: 1.0                # fixed by the surrogate
+  w_lig_mm: 5.0                    # manufacturing choice, in [1, 10] mm -> 50 mm/tile
+  calibrate: true                  # auto Gap-2 scale to k_stretch/k_rot
+  barrier: 0.05                    # OOD validity barrier
+
+physics:
+  use_contact: false
+  linearized_strains: true
+  incremental: true
+  num_load_steps: 12
+  solver_maxiter: 1000
+  solver_tol: 1.0e-5
+  updated_lagrangian: false
+
+material:
+  k_stretch: 1000.0                # stiff ligaments — keep hinges connected
+  k_shear: 1000.0
+  k_rot: 0.5                       # soft rotation — easy deployment
+  density: 1.0
+
+boundary_conditions:
+  clamped_faces: [1]               # pin ONE tile (top-left)
+
+loads:
+  - face: 3                        # adjacent tile (top-right)
+    dof: 2                         # moment (Mz, CCW +)
+    value: 1.0                     # sub-fracture (~4.7deg, maxD 0.43); >=2.0 snaps through
+
+target:
+  type: circle
+  center: [1.0, 1.0]
+  radius: 1.5
+
+loss_weights:
+  chamfer: 1.0
+  coverage: 0.5
+  stretching: 0.01
+  shearing: 0.01
+  bending: 0.001
+  contact: 0.0
+  material_area: 0.0
+  hinge_gap: 0.0
+  openness: 0.0
+  deformation: 0.0
+  void_closure: 0.0
+  closure_delta: 0.0
+  regularization: 1.0e-4
+
+training:
+  num_epochs: 80
+  learning_rate: 0.02
+  optimizer: adam
+  lr_schedule: cosine
+  grad_clip: 1.0
+  geometric_loss_type: boundary_vertices
+
+visualization:
+  stage0: false
+  stage1: false
+  stage2: false
+  energy_plot: false
+  animation: false
+  show_plots: false
+  save_outputs: false

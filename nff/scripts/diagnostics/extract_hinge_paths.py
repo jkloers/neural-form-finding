@@ -28,6 +28,7 @@ from nff.config.experiment import load_and_parse_config
 from nff.stages.pipeline import forward_pipeline
 from nff.closed.setup import build_closed_initial_state, init_closed_les_params, build_surrogate_energy
 from nff.closed.hinge_paths import (build_hinge_geometry, extract_hinge_paths, path_diagnostics,
+                                    resolve_length_scale,
                                     fit_deployment_rays, save_paths)
 from nff.models.hinge_surrogate import DOMAIN
 from nff.scripts.figures.plot_hinge_paths import build_figure
@@ -83,24 +84,44 @@ def main():
                               map_type=config.mapping.type, map_params=params,
                               static_features=static_features, load_specs=load_specs,
                               bond_energy_fn=bond_energy,
-                              hinge_geometry=(geometry_fn(params) if geometry_fn else None))
+                              # Solver-side geometry only when a surrogate bond energy reads it —
+                              # the ROM's ligament energy takes it as an ignored kwarg. Same rule as
+                              # nff/training/loss.py, so a ROM solve here matches a ROM solve there.
+                              hinge_geometry=(geometry_fn(params)
+                                              if (geometry_fn is not None and bond_energy is not None)
+                                              else None))
 
     # length_scale is a pure GEOMETRIC bridge (mm per pipeline unit), so it is meaningful even on the
-    # ROM branch where the physics never reads it. Falls back to the real panel pitch if declared.
+    # ROM branch where the physics never reads it. Shared with the Stage-2 ROM probe, so the two
+    # cannot report different eta_a for the same deployment.
     hm = getattr(config, 'hinge_model', None)
-    ls = float(getattr(hm, 'length_scale', 0.0) or 0.0) if hm is not None else 0.0
-    if ls <= 0.0:
-        sheet_w = float(config.topology.get('sheet_width_mm', 0.0) or 0.0)
-        ls = (sheet_w / (int(config.topology['M']) * float(config.topology.get('spacing', 1.0)))
-              if sheet_w > 0 else 1.0)
+    ls = resolve_length_scale(config)
     geom = build_hinge_geometry(config, static_features, initial_state, params)
+
+    # Score against the CHECKPOINT'S OWN trust box, not the module fallback. `DOMAIN` is the legacy
+    # tension-only, theta<=37.8deg box; the PET net's is eta_a in [-0.140, +0.233], theta<=71.9deg.
+    # Scoring a compressive deployment against a 0 floor reports it as wildly out-of-domain when it
+    # is not, and blames theta for violations that are actually eta_a.
+    # ⚠ Only under `type: surrogate`. On the ROM branch `build_surrogate_energy` returns (None,)*5
+    # WITHOUT reading `checkpoint`, so that field is inert and routinely stale -- the ROM configs
+    # still name the dead steel net. Scoring a ROM deployment against a checkpoint the run never
+    # touched is exactly the kind of borrowed-constant error this whole diagnostic exists to catch.
+    hm_cfg = getattr(config, 'hinge_model', None)
+    domain, domain_src = DOMAIN, "module fallback"
+    if getattr(hm_cfg, 'type', 'rom') == 'surrogate' and getattr(hm_cfg, 'checkpoint', None):
+        from nff.models.hinge_surrogate import load_hinge_surrogate
+        _, _stats, _ = load_hinge_surrogate(hm_cfg.checkpoint)
+        if _stats.get("domain"):
+            domain, domain_src = dict(_stats["domain"]), os.path.basename(hm_cfg.checkpoint)
+    else:
+        domain_src += " (hinge_model.type is not 'surrogate' -- no checkpoint box applies)"
 
     paths = extract_hinge_paths(result['solution'], result['valid_state'], geom, ls,
                                 reference_bond_vectors=result.get('reference_bond_vectors'))
-    diag = path_diagnostics(paths)
+    diag = path_diagnostics(paths, domain)
     rays = fit_deployment_rays(paths)
-    summary = save_paths(paths, os.path.join(out_dir, "hinge_paths"),
-                         meta={'config': args.config, 'n_load_steps': args.steps,
+    summary = save_paths(paths, os.path.join(out_dir, "hinge_paths"), domain=domain,
+                         meta={'config': args.config, 'domain_source': domain_src, 'n_load_steps': args.steps,
                                'trained_params': args.params,
                                'fitted_rays': [{'tag': r.tag, 'theta1_deg': r.theta1_deg,
                                                 'eta_a': r.eta_a, 'eta_s': r.eta_s,
@@ -111,12 +132,13 @@ def main():
     d = summary['diagnostics']
     print(f"\n  {d['n_hinges']} hinges x {d['n_steps']} steps   length_scale={ls:.1f} mm/unit")
     print(f"  eta_a  {d['eta_a_range'][0]:+.3f} .. {d['eta_a_range'][1]:+.3f}"
-          f"   (box {DOMAIN.get('eta_a_min', 0.0)} .. {DOMAIN['eta_a_max']})")
+          f"   (box {domain.get('eta_a_min', 0.0):+.3f} .. {domain['eta_a_max']:+.3f})")
     print(f"  eta_s  {d['eta_s_range'][0]:+.3f} .. {d['eta_s_range'][1]:+.3f}"
-          f"   (box +-{DOMAIN['eta_s_max']})")
+          f"   (box +-{domain['eta_s_max']:.3f})")
     print(f"  theta  {d['theta_range_deg'][0]:+.1f} .. {d['theta_range_deg'][1]:+.1f} deg"
-          f"   (box {np.degrees(DOMAIN.get('theta_min', -DOMAIN['theta_max'])):+.1f}"
-          f" .. {np.degrees(DOMAIN['theta_max']):.1f})")
+          f"   (box {np.degrees(domain.get('theta_min', -domain['theta_max'])):+.1f}"
+          f" .. {np.degrees(domain['theta_max']):.1f})")
+    print(f"  trust box from: {domain_src}")
     print(f"  straightness  mean={d['straightness_mean']:.4f}  max={d['straightness_max']:.4f}"
           f"   (0 = a proportional ray reproduces it exactly)")
     print(f"  monotonic frac  eta_a={d['monotonic_frac']['eta_a']:.2f} "
@@ -126,7 +148,7 @@ def main():
     c = d['compression']
     print(f"  COMPRESSION  {c['n_hinges_compressive']}/{d['n_hinges']} hinges go a<0 "
           f"(min eta_a={c['min_eta_a']:+.3f}, {100*c['sample_frac']:.1f}% of samples)"
-          f"   -- oracle samples eta_a>=0 ONLY")
+          f"   -- box floor {domain.get('eta_a_min', 0.0):+.3f}")
     occ = d['box_occupancy']
     print(f"  box occupancy  eta_a={100*occ['eta_a']:.0f}%  eta_s={100*occ['eta_s']:.0f}%  "
           f"theta={100*occ['theta']:.0f}%   (low = oracle budget spent off the ridden manifold)")

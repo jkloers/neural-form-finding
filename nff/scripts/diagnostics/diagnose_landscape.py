@@ -119,7 +119,9 @@ def _closed_target_and_energy(config, initial_state, static_features, init_param
                 hw, hh = (mx[0] - mn[0]) / 2.0 * scx, (mx[1] - mn[1]) / 2.0 * scy
             target_cloud = get_target_points(
                 {'type': 'rectangle', 'center': cen0, 'radius': max(hw, hh),
-                 'half_w': hw, 'half_h': hh}, n_points=400)
+                 'half_w': hw, 'half_h': hh,
+                 'rot_deg': float(config.topology.get('target_rot_deg', 0.0) or 0.0)},
+                n_points=400)
             target_eff = TargetConfig(type='circle', center=(float(cen0[0]), float(cen0[1])),
                                       radius=float(max(hw, hh)))
         else:

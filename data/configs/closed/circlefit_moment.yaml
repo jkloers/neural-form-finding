@@ -1,0 +1,80 @@
+# Closed-state RDPQK — moment-actuated deployment toward a SIZE-FREE circle.
+#
+# Uses geometric_loss_type: circle_fit — the loss fits the best circle (center +
+# radius) to the deployed boundary itself, so the target adapts to the
+# tessellation's natural deployed size instead of being a fixed circle.
+#
+# Clamp one central face, apply a moment to a neighbor; the 1-DOF mechanism opens.
+
+tessellation:
+  tessellation_type: closed_rdpqk
+  M: 4
+  N: 4
+  r_init: 0.45
+  spacing: 1.0
+
+mapping:
+  map_type: closed_les
+
+optimization_weights:
+  validity_method: none
+
+physics:
+  use_contact: false
+  linearized_strains: true
+  incremental: true
+  num_load_steps: 12
+  solver_maxiter: 1000
+  solver_tol: 1.0e-5
+  updated_lagrangian: false
+
+material:
+  k_stretch: 1000.0
+  k_shear: 1000.0
+  k_rot: 0.5
+  density: 1.0
+
+boundary_conditions:
+  clamped_faces: [5]
+
+loads:
+  - face: 6
+    dof: 2
+    value: 4.0
+
+target:
+  type: circle            # ignored by circle_fit (kept for compatibility)
+  center: [2.0, 2.0]
+  radius: 2.5
+
+loss_weights:
+  chamfer: 1.0            # weights the circularity term
+  coverage: 0.5
+  stretching: 0.01
+  shearing: 0.01
+  bending: 0.001
+  contact: 0.0
+  material_area: 0.0
+  hinge_gap: 0.0
+  openness: 0.0
+  deformation: 0.0
+  void_closure: 0.0
+  closure_delta: 0.0
+  regularization: 1.0e-4
+
+training:
+  num_epochs: 200
+  learning_rate: 0.02
+  optimizer: adam
+  lr_schedule: cosine
+  grad_clip: 1.0
+  geometric_loss_type: circle_fit
+
+visualization:
+  stage0: false
+  stage1: false
+  stage2: false
+  energy_plot: false
+  animation: false
+  show_plots: false
+  save_outputs: false

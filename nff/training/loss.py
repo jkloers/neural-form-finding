@@ -60,6 +60,91 @@ def _softmax_min(x, axis, temperature: float = _PATH_TEMPERATURE):
     return -_softmax_max(-x, axis, temperature)
 
 
+# Soft-extremum temperature as a FRACTION of each path's own range, rather than the absolute
+# _PATH_TEMPERATURE above. A softmax-weighted mean is biased toward the mean by roughly the
+# temperature, so an absolute temperature is only meaningful next to the spread of the data it
+# reduces -- and on the 15x10 sheet it was not: temperature 0.05 against a mean per-path eta_a
+# spread of 0.0198 biased the "minimum" by +0.0101, i.e. 0.51x the whole signal. The reduction
+# reported a mean of +0.0024 (tension) for a population whose true path-minimum averaged -0.0077
+# (compression), so relu(-worst) zeroed 68 of 196 compressive hinges before the penalty ever saw
+# them. Scaling with the spread makes the bias a fixed small fraction of the signal instead.
+_PATH_REL_TEMPERATURE = 0.05
+
+
+def _softmax_extremum_relative(x, axis, sign: float,
+                               rel_temperature: float = _PATH_REL_TEMPERATURE):
+    """Smooth extremum with a per-path temperature set from that path's own range.
+
+    Written on the NORMALIZED coordinate ``u = (x - min) / spread`` rather than on ``x`` with a
+    temperature ``rel_temperature * spread``. The two are ALGEBRAICALLY IDENTICAL -- softmax is
+    shift-invariant, so ``softmax(x / (r * spread))`` and ``softmax(u / r)`` differ only by the
+    constant ``min / (r * spread)``, which cancels -- but only the second form is numerically safe.
+
+    The first form divides by ``spread``, and its guard (``maximum(r * spread, 1e-9)``) did not
+    guard: a path whose values barely move makes the temperature ``1e-9``, so the softmax Jacobian
+    carries ``1 / t = 1e9`` and the reverse pass overflows. On the normalized coordinate ``u`` lies
+    in [0, 1] and the softmax argument is at most ``1 / rel_temperature``, independent of the data
+    scale, so no path can drive it. A path with zero spread gets ``u = 0`` everywhere, hence uniform
+    weights and the constant value itself -- the right answer.
+
+    ⚠ This is a latent-hazard fix, NOT the fix for the ``shear_path`` NaN. That one was ``jnp.abs``
+    (see ``_ABS_EPS``), and it was still NaN at 80 deg after this rewrite. The hazard here is real
+    and was measured to bite at 70 deg, but do not credit this rewrite with the whole bug.
+
+    Values are unchanged: agreement with the old form is 2.7e-16 relative on non-degenerate data, so
+    every ``compression`` result predating this rewrite stands.
+
+    Args:
+        x: values to reduce.
+        axis: reduction axis.
+        sign: ``+1`` for a smooth maximum, ``-1`` for a smooth minimum.
+        rel_temperature: temperature as a fraction of the per-path peak-to-peak range.
+
+    Returns:
+        The soft extremum, with ``axis`` removed.
+    """
+    lo = jnp.min(x, axis=axis, keepdims=True)
+    spread = jnp.max(x, axis=axis, keepdims=True) - lo
+    # Double `where`: sanitizing only the OUTPUT still returns NaN from the backward pass, because
+    # AD differentiates the discarded branch too. The denominator itself has to be finite.
+    degenerate = spread <= 0.0
+    safe_spread = jnp.where(degenerate, 1.0, spread)
+    u = jnp.where(degenerate, 0.0, (x - lo) / safe_spread)
+    w = jax.nn.softmax(sign * u / rel_temperature, axis=axis)
+    return jnp.sum(w * x, axis=axis)
+
+
+# Smoothing for |eta_s|, in squared eta units, so the kink at eta_s = 0 has radius sqrt(_ABS_EPS)
+# = 1e-6. That is four orders of magnitude below the smallest per-hinge |eta_s| path spread measured
+# on the 15x10 sheet (2.4e-4), so it changes the reported value nowhere that matters.
+#
+# It is a NUMERICAL fix, not a modelling choice. `jnp.abs` inside the path reduction returned a NaN
+# gradient UNDER JIT ONLY -- eager was exact, so it passed a gradient check and then silently froze
+# training, because the trainer's NaN-safe update zeroes a non-finite gradient rather than failing.
+# Measured on sheet_15x10_rom_d80_shear at the untrained design: abs gave 176/226 NaN parameter
+# gradients under jit and 0 eager, while this smooth form gives 0 NaN and reproduces BOTH the abs
+# loss (7.72284e+01, 6 significant figures) and the abs EAGER gradient norm (4.971e+01). Independent
+# of the penalty weight and of `backward_reg`, and non-monotonic in load steps (10 clean, 20 and 40
+# NaN, 80 clean) -- the signature of a fused-kernel cancellation, not of the physics.
+_ABS_EPS = 1e-12
+
+
+def _smooth_abs(x, eps: float = _ABS_EPS):
+    """``|x|``, differentiable at zero. See ``_ABS_EPS``: this exists to keep the path reduction's
+    gradient finite under JIT, and is exact to 6 significant figures at the scales in use."""
+    return jnp.sqrt(x * x + eps)
+
+
+def _softmax_min_relative(x, axis, rel_temperature: float = _PATH_REL_TEMPERATURE):
+    """Smooth minimum, temperature scaled by each path's own range."""
+    return _softmax_extremum_relative(x, axis, -1.0, rel_temperature)
+
+
+def _softmax_max_relative(x, axis, rel_temperature: float = _PATH_REL_TEMPERATURE):
+    """Smooth maximum, temperature scaled by each path's own range."""
+    return _softmax_extremum_relative(x, axis, +1.0, rel_temperature)
+
+
 def _deformed_state(valid_state, displacements):
     """Rigid-tile deformed centroids, rotations and centroid-node vectors at a displacement field."""
     centroids = valid_state.face_centroids + displacements[:, :2]
@@ -205,7 +290,14 @@ def _energy_term(component: str):
     """
     def term(ctx: LossContext):
         energies = ctx.results['solution'].energies
-        return energies.get(component, jnp.zeros_like(energies['stretch']))[-1], {}
+        if component not in energies:
+            # Never substitute zeros. A weighted term that silently evaluates to 0 is
+            # indistinguishable from a term that is doing nothing useful, and the weight in the
+            # config reads as if the physics were active.
+            raise KeyError(
+                f"loss term '{component}' is weighted but the Stage-2 energy decomposition does not "
+                f"provide it; available: {sorted(energies)}.")
+        return energies[component][-1], {}
     return term
 
 
@@ -255,13 +347,57 @@ def _term_compression(ctx: LossContext):
     NumPy diagnostic read against each other directly.
     """
     eta_a = ctx.hinge_probe['eta_a']                          # (n_steps, n_hinges)
-    worst = _softmax_min(eta_a, axis=0)                       # (n_hinges,) most-compressive value
+    worst = _softmax_min_relative(eta_a, axis=0)              # (n_hinges,) most-compressive value
     violation = jax.nn.relu(-worst)                           # 0 in tension, |eta_a| in compression
-    return jnp.mean(violation ** 2), {
+    # LINEAR, not quadratic. Violations here are order 1e-2, so squaring shrinks the term and its
+    # gradient by another ~76x and makes the penalty weakest exactly where it is still doing useful
+    # work -- on the many mildly compressed hinges rather than the few extreme ones. A linear
+    # penalty also matches how the result is reported (a population fraction, not a worst case).
+    true_worst = jnp.min(eta_a, axis=0)
+    return jnp.mean(violation), {
         'min_eta_a': jnp.min(eta_a),
         'n_hinges_compressive': jnp.sum(worst < -1e-6),
         'compression_sample_frac': jnp.mean(eta_a < -1e-6),
+        # The reduction's own bias, so it can never again silently exceed the signal it reduces.
+        'compression_softmin_bias': jnp.mean(worst - true_worst),
+        'compression_path_spread': jnp.mean(jnp.max(eta_a, axis=0) - true_worst),
     }
+
+
+def _term_shear_path(ctx: LossContext):
+    """Penalize hinges driven into transverse SHEAR at any point during deployment.
+
+    ``eta_s = s / w_lig`` is the ligament's transverse offset in units of its own width, signed
+    either way, so the penalized quantity is ``|eta_s|``. A rotating-squares mechanism is supposed
+    to open by ROTATION about a hinge that stays aligned; shear is the ligament being dragged
+    sideways, which does no opening work and is the in-plane mode a slender neck resists least.
+
+    The sibling of ``compression`` and deliberately built the same way: path extremum (a hinge
+    sheared mid-deployment has been sheared whatever the final state says), soft-min temperature
+    scaled to the path's own range, and a LINEAR penalty so the many mildly-sheared hinges are not
+    discounted against the few extreme ones.
+
+    ``compression`` and this term act on the two axes of the SAME plane -- one pushes the path cloud
+    off ``eta_a < 0``, the other squeezes it toward ``eta_s = 0`` -- so weighting both asks whether
+    those two moves are compatible for one design. ``compression_shear_corr`` reports it directly:
+    the correlation, over hinges, between how compressed and how sheared each one is. Strongly
+    negative means the two penalties are fighting.
+    """
+    eta_s = ctx.hinge_probe['eta_s']                          # (n_steps, n_hinges)
+    abs_eta_s = _smooth_abs(eta_s)                            # |eta_s|, differentiable at 0
+    worst = _softmax_max_relative(abs_eta_s, axis=0)          # (n_hinges,) most-sheared value
+    true_worst = jnp.max(abs_eta_s, axis=0)
+
+    metrics = {
+        'max_abs_eta_s': jnp.max(abs_eta_s),
+        'mean_abs_eta_s': jnp.mean(abs_eta_s),
+        'shear_softmax_bias': jnp.mean(true_worst - worst),
+        'shear_path_spread': jnp.mean(true_worst - jnp.min(abs_eta_s, axis=0)),
+    }
+    if 'eta_a' in ctx.hinge_probe:
+        compression = jax.nn.relu(-_softmax_min_relative(ctx.hinge_probe['eta_a'], axis=0))
+        metrics['compression_shear_corr'] = jnp.corrcoef(compression, worst)[0, 1]
+    return jnp.mean(worst), metrics
 
 
 def _term_ood(ctx: LossContext):
@@ -281,22 +417,30 @@ def _term_regularization(ctx: LossContext):
 
 # ── the registry ──────────────────────────────────────────────────────────────
 
-# (name, LossWeights attribute, term fn, needs the surrogate probe).
+# (name, LossWeights attribute, term fn, REQUIRED PROBE KEY or None).
 # This tuple IS the objective: evaluation order, and nothing outside it enters the loss.
+#
+# The fourth field was a bare "needs the probe" boolean, which conflated two different things: does
+# this term read the hinge probe, and does the probe in use actually supply what it reads. The ROM
+# has a KINEMATIC probe (eta_a, eta_s, theta -- see setup.build_rom_probe_fn) but no D and no ood,
+# so a boolean would either enable all three terms or none. Naming the key each term needs lets
+# `compression` run under the linear-spring model while `damage` and `ood`, which are surrogate
+# predictions, disable themselves because their key is simply not there.
 TERMS = (
-    ('chamfer',        'chamfer',        _term_chamfer,           False),
-    ('material_area',  'material_area',  _term_material_area,     False),
-    ('hinge_gap',      'hinge_gap',      _term_hinge_gap,         False),
-    ('void_closure',   'void_closure',   _term_void_closure,      False),
-    ('closure_delta',  'closure_delta',  _term_closure_delta,     False),
-    ('stretching',     'stretching',     _energy_term('stretch'), False),
-    ('shearing',       'shearing',       _energy_term('shear'),   False),
-    ('bending',        'bending',        _energy_term('rot'),     False),
-    ('contact',        'contact',        _energy_term('contact'), False),
-    ('damage',         'damage',         _term_damage,            True),
-    ('compression',    'compression',    _term_compression,       True),
-    ('ood',            'ood',            _term_ood,               True),
-    ('regularization', 'regularization', _term_regularization,    False),
+    ('chamfer',        'chamfer',        _term_chamfer,           None),
+    ('material_area',  'material_area',  _term_material_area,     None),
+    ('hinge_gap',      'hinge_gap',      _term_hinge_gap,         None),
+    ('void_closure',   'void_closure',   _term_void_closure,      None),
+    ('closure_delta',  'closure_delta',  _term_closure_delta,     None),
+    ('stretching',     'stretching',     _energy_term('stretch'), None),
+    ('shearing',       'shearing',       _energy_term('shear'),   None),
+    ('bending',        'bending',        _energy_term('rot'),     None),
+    ('contact',        'contact',        _energy_term('contact'), None),
+    ('damage',         'damage',         _term_damage,            'D'),
+    ('compression',    'compression',    _term_compression,       'eta_a'),
+    ('shear_path',     'shear_path',     _term_shear_path,        'eta_s'),
+    ('ood',            'ood',            _term_ood,               'ood'),
+    ('regularization', 'regularization', _term_regularization,    None),
 )
 
 
@@ -367,6 +511,13 @@ def compute_end_to_end_loss(
 
     hinge_geometry = hinge_geometry_fn(map_params) if hinge_geometry_fn is not None else None
 
+    # The SOLVER only needs the hinge geometry when a surrogate bond energy reads it; the ROM's
+    # ligament energy is a function of the corotated strains alone and ignores it. Keeping it out of
+    # control_params on the ROM branch means a linear-spring solve is bit-identical whether or not a
+    # kinematic probe was built alongside it -- the probe still gets the design-tracked geometry
+    # below, so d(compression)/d(design) flows through sec_dir as it must.
+    solver_hinge_geometry = hinge_geometry if bond_energy_fn is not None else None
+
     results = forward_pipeline(
         initial_state=initial_state,
         target_cfg=target_cfg,
@@ -379,14 +530,14 @@ def compute_end_to_end_loss(
         static_features=static_features,
         load_specs=load_specs,
         bond_energy_fn=bond_energy_fn,
-        hinge_geometry=hinge_geometry,
+        hinge_geometry=solver_hinge_geometry,
     )
 
     weights = training_cfg.loss_weights
     # The probe runs ONCE and is shared: damage, compression and ood all read the same per-step
     # readings, and the surrogate MLP should not sweep the load history three times.
     wants_probe = any(float(getattr(weights, attr)) != 0.0
-                      for _, attr, _, needs in TERMS if needs)
+                      for _, attr, _, key in TERMS if key is not None)
     hinge_probe = None
     if hinge_probe_fn is not None and wants_probe:
         hinge_probe = hinge_probe_fn(results['solution'].fields,
@@ -407,9 +558,11 @@ def compute_end_to_end_loss(
 
     total = jnp.asarray(0.0, dtype=jnp.float64)
     metrics: dict = {}
-    for name, attr, term_fn, needs_probe in TERMS:
+    for name, attr, term_fn, probe_key in TERMS:
         weight = float(getattr(weights, attr))
-        if weight == 0.0 or (needs_probe and hinge_probe is None):
+        if weight == 0.0:
+            continue
+        if probe_key is not None and (hinge_probe is None or probe_key not in hinge_probe):
             continue
         raw, extra = term_fn(ctx)
         contribution = weight * raw

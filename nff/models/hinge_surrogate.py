@@ -50,8 +50,23 @@ from jaxtyping import Array, Float
 from nff.utils.linalg import corotated_bond_deformation, gather_bond_node_dofs
 
 # u = (a, s, theta); geometry g = (w_lig, alpha[rad]) or (w_lig, alpha, fillet_ratio) for the swept
-# 3rd DOF. Standardized network features: [a, s, theta, log(w_lig), alpha (, fillet)] -> 5-D or 6-D.
+# 3rd DOF. Standardized network features are 5-D (or 6-D with the swept fillet DOF); which QUANTITIES
+# fill them is set by stats["feat_kind"] -- see FEAT_KIND_* and :func:`_features`.
 FEAT_DIM = 5
+
+# Feature parameterizations. The kind is recorded in ``stats`` at training time and read back at
+# inference, so a checkpoint always evaluates with the features it was trained on.
+#
+#   "raw"  [a, s, theta, log(w_lig), alpha]              -- legacy; every checkpoint before 2026-07-30
+#   "eta"  [a/w_lig, s/w_lig, theta, log(w_lig), alpha]  -- dimensionless kinematics
+#
+# "eta" is the default for NEW training. The oracle samples the kinematics as eta = (a, s)/w_lig,
+# `_domain_barrier` gates on eta, and `build_hinge_probe_fn` reports eta -- so "raw" was the only
+# place in the module that still spoke mm-alongside-width, forcing the net to spend capacity
+# learning a coupling the rest of the code already knows. Costs one divide, zero parameters.
+FEAT_KIND_RAW = "raw"
+FEAT_KIND_ETA = "eta"
+FEAT_KIND_DEFAULT = FEAT_KIND_ETA
 
 
 class HingeGeometry(NamedTuple):
@@ -115,23 +130,52 @@ def _robust_std(std):
     return np.where(std < 1e-6, 1.0, std)
 
 
-def compute_norm_stats(a, s, theta, w_lig, alpha_rad, W, fillet_ratio=None, F=None, D=None) -> dict:
+def _feature_cols(a, s, theta, w_lig, alpha, extra, kind, xp):
+    """The raw (un-standardized) feature columns -- THE single definition of the input layout.
+
+    Shared by :func:`compute_norm_stats` (numpy, at training time) and :func:`_features` (jnp, at
+    inference) so the standardization stats and the features they standardize cannot drift apart.
+    ``xp`` is the array module to compute in.
+
+    ``extra`` is any number of additional per-hinge scalars carried on ``g`` beyond
+    ``(w_lig, alpha)`` -- historically just ``fillet_ratio``, now also an internal/history variable
+    ``z``. It is a LIST, not one column: the single-slot version silently disagreed with
+    ``feat_dim = 3 + g.shape[-1]`` the moment a second scalar was added, which surfaces as a
+    `dot_general` shape error rather than as anything readable.
+    """
+    if kind == FEAT_KIND_ETA:
+        a, s = a / w_lig, s / w_lig
+    cols = [a, s, theta, xp.log(w_lig), alpha]
+    if extra is None:
+        return cols
+    if not isinstance(extra, (list, tuple)):
+        extra = [extra]
+    return cols + list(extra)
+
+
+def compute_norm_stats(a, s, theta, w_lig, alpha_rad, W, fillet_ratio=None, F=None, D=None,
+                       feat_kind: str = FEAT_KIND_DEFAULT) -> dict:
     """Standardization stats from the training arrays (static; closed over at inference).
 
-    ``fillet_ratio`` optional: when given, the geometry input ``g`` is 3-D (w_lig, alpha, fillet) and
-    the feature vector is 6-D; otherwise the legacy 2-D g / 5-D features. The chosen width is baked
-    into ``feat_mean``/``feat_std`` length, so inference reads it back from the checkpoint.
+    ``fillet_ratio`` optional: the extra per-hinge scalar(s) carried on ``g`` beyond
+    ``(w_lig, alpha)``. One array (the legacy swept fillet) or a LIST of them, e.g. fillet plus an
+    internal/history variable ``z``. ``None`` gives the legacy 2-D g / 5-D features. The chosen
+    width is baked into ``feat_mean``/``feat_std`` length, so inference reads it back from the
+    checkpoint -- see the ``n_extra`` computation in :func:`_features`.
 
     ``F`` (n, 3) and ``D`` (n,) optional: supply them to get FIXED target scales -- ``sigma_F``
     per force component and ``D_scale`` -- computed once from the train split. Their presence is
     what switches :func:`sobolev_loss` off its legacy per-batch variance normalization; see there
     for why the pooled version left ``dW/da`` and ``dW/ds`` untrained.
+
+    ``feat_kind`` selects the input parameterization (see FEAT_KIND_*) and is RECORDED in the
+    returned stats, so inference reads back the layout the checkpoint was trained on.
     """
-    cols = [a, s, theta, np.log(w_lig), alpha_rad]
-    if fillet_ratio is not None:
-        cols.append(fillet_ratio)
+    cols = _feature_cols(np.asarray(a, dtype=float), np.asarray(s, dtype=float), theta,
+                         np.asarray(w_lig, dtype=float), alpha_rad, fillet_ratio, feat_kind, np)
     feats = np.stack(cols, axis=-1)
     stats = dict(
+        feat_kind=feat_kind,
         feat_mean=jnp.asarray(feats.mean(0), dtype=jnp.float64),
         feat_std=jnp.asarray(_robust_std(feats.std(0)), dtype=jnp.float64),
         # a positive energy scale so the net's ||dh||^2 ~ O(1) maps to physical N.mm
@@ -151,11 +195,16 @@ def compute_norm_stats(a, s, theta, w_lig, alpha_rad, W, fillet_ratio=None, F=No
 
 
 def _features(u: Float[Array, "... 3"], g: Float[Array, "... _"], stats: dict) -> Float[Array, "... _"]:
-    """Standardized features. Includes the fillet DOF ``g[...,2]`` iff the checkpoint's stats are 6-D."""
-    a, s, th = u[..., 0], u[..., 1], u[..., 2]
-    cols = [a, s, th, jnp.log(g[..., 0]), g[..., 1]]
-    if stats["feat_mean"].shape[-1] >= 6:                    # 3rd geometry DOF: fillet_ratio
-        cols.append(g[..., 2])
+    """Standardized features. Includes the fillet DOF ``g[...,2]`` iff the checkpoint's stats are 6-D.
+
+    The parameterization comes from ``stats["feat_kind"]``; checkpoints predating the key are
+    ``"raw"``, which is the legacy layout, so they keep evaluating bit-identically.
+    """
+    # everything on g beyond (w_lig, alpha); width 5 => none, 6 => fillet, >6 => fillet + z...
+    n_extra = int(stats["feat_mean"].shape[-1]) - 5
+    extra = [g[..., 2 + i] for i in range(max(0, n_extra))]
+    cols = _feature_cols(u[..., 0], u[..., 1], u[..., 2], g[..., 0], g[..., 1], extra,
+                         stats.get("feat_kind", FEAT_KIND_RAW), jnp)
     raw = jnp.stack(cols, axis=-1)
     return (raw - stats["feat_mean"]) / stats["feat_std"]
 

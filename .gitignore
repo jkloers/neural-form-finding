@@ -231,3 +231,35 @@ __marimo__/
 
 # Manuscript (Overleaf-synced, not versioned here)
 /paper/
+
+# Lab facts that cannot be regenerated: which tile was held, the tape datum,
+# hand-picked fiducial corners. The photographs and derived numbers stay ignored.
+# `data/*` excludes the directory itself, so it must be re-included before its files can be.
+!data/experiments/
+data/experiments/*/*
+!data/experiments/*/manifest.json
+!data/experiments/*/README.md
+
+# Closed-pipeline configs are source, not data. Scratch configs start with `_`.
+!data/configs/
+data/configs/*
+!data/configs/closed/
+data/configs/closed/_*
+
+# Defense deck. The source is versioned; the staged plates are copies of paper/Images
+# (itself ignored) and the LaTeX artefacts are rebuilt by slides/build.sh.
+/slides/figures/
+/slides/*.aux
+/slides/*.log
+/slides/*.nav
+/slides/*.out
+/slides/*.snm
+/slides/*.toc
+/slides/*.pdf
+/slides/*.synctex*
+# Third-party images and lab photographs: kept locally, not published in a public repo.
+/slides/assets/
+
+# Night review agents: eleven regenerated machine reports plus a frozen build.
+# A finding worth keeping is promoted into docs/ by hand.
+/review/

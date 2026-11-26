@@ -1,0 +1,371 @@
+% The Princeton charter, moved from the page to the screen.
+%
+% The palette and the type ladder are those of nff/utils/figstyle.py, so a plate dropped on a
+% slide is in the same document as the slide around it. The body face is EB Garamond and the
+% figures keep DejaVu Sans, which is the manuscript's own arrangement rather than a departure
+% from it: sn-jnl sets a serif body against sans figure labels.
+%
+% Compile with XeLaTeX. Requires only beamer, tikz, xcolor, fontspec, graphicx.
+
+\ProvidesPackage{beamerthemecharter}[2026/08/17 Princeton charter beamer theme]
+
+\RequirePackage{tikz}
+\RequirePackage{fontspec}
+\RequirePackage{graphicx}
+\RequirePackage{calc}
+
+% ── Charter palette ────────────────────────────────────────────────────────────────────────
+% Values are copied from figstyle.py. Do not drift from them.
+\definecolor{charterorange}{HTML}{F58025}   % material / cut pattern -- the accent, inside plates
+\definecolor{charterteal}  {HTML}{2A9D8F}   % hinges / physical loss
+\definecolor{charterred}   {HTML}{D62828}   % loads / target / disagreement
+\definecolor{chartergrey}  {HTML}{6C757D}   % clamps / secondary annotation
+\definecolor{charterink}   {HTML}{1A1A1A}   % text / edges
+\definecolor{charterpurple}{HTML}{6A4C93}   % boundary sliders
+\definecolor{chartergreen} {HTML}{1F8A4C}   % deployed boundary / geometric loss
+\definecolor{charterrule}  {HTML}{D3D6DB}   % the legend-edge grey, for hairlines
+\definecolor{chartershear} {HTML}{F2B705}   % the shear mark in the load-path plates
+
+% The deck's own chrome is Princeton orange (PMS 158), one shade off the plate accent above.
+% The two are never adjacent at a boundary: charterorange lives inside a plate, princetonorange
+% only in the furniture around it, so across a slide they read as one orange.
+\definecolor{princetonorange}{HTML}{E77500}
+
+% ── Type ───────────────────────────────────────────────────────────────────────────────────
+% SemiBold rather than Bold carries emphasis: Garamond's true Bold is heavy enough to read as a
+% different family beside the Regular, which is exactly what a charter is meant to prevent.
+\setmainfont{EBGaramond}[
+  Extension      = .otf,
+  UprightFont    = *-Regular,
+  ItalicFont     = *-Italic,
+  BoldFont       = *-SemiBold,
+  BoldItalicFont = *-SemiBoldItalic,
+  Numbers        = Lining,
+]
+
+% The figure face, so a label written in prose matches the label inside the plate beside it.
+\newfontfamily\figurefont{DejaVuSans}[
+  Path       = /opt/miniconda3/envs/kgnn_mac/lib/python3.10/site-packages/matplotlib/mpl-data/fonts/ttf/,
+  Extension  = .ttf,
+  UprightFont = *,
+  BoldFont   = *-Bold,
+  ItalicFont = *-Oblique,
+]
+
+\usefonttheme{serif}
+% \Large, not \LARGE: the band already gives the title its prominence, and the two marks beside
+% it leave 99mm of measure, on which \LARGE breaks half the titles in the deck onto three lines.
+\setbeamerfont{frametitle}{size=\large,series=\bfseries}
+\setbeamerfont{framesubtitle}{size=\small,shape=\itshape}
+\setbeamerfont{title}{size=\fontsize{23}{27}\selectfont,series=\bfseries}
+\setbeamerfont{author}{size=\large}
+\setbeamerfont{footline}{size=\scriptsize}
+
+\setbeamercolor{normal text}{fg=charterink,bg=white}
+\setbeamercolor{frametitle}{fg=white,bg=princetonorange}
+\setbeamercolor{framesubtitle}{fg=chartergrey}
+\setbeamercolor{structure}{fg=princetonorange}
+\setbeamercolor{alerted text}{fg=charterred}
+\setbeamercolor{itemize item}{fg=princetonorange}
+\setbeamercolor{itemize subitem}{fg=chartergrey}
+
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{itemize item}{\raisebox{0.12ex}{\rule{0.42em}{0.42em}}}
+\setbeamertemplate{itemize subitem}{\raisebox{0.18ex}{\rule{0.30em}{0.30em}}}
+
+% The contents entries are numbered, and the number is the accent. Orange type on white is
+% about 2.4:1 and will not survive a projector, so the colour lives in the chip behind the
+% number and never in the words beside it.
+\newcommand{\charterchip}[3]{%
+  \colorbox{#1}{\makebox[1.55em][c]{\rule[-0.30em]{0pt}{1.30em}\color{#2}\bfseries#3}}}
+
+\setbeamercolor{section in toc}{fg=charterink}
+\setbeamerfont{section in toc}{size=\large}
+\setbeamertemplate{section in toc}{%
+  \leavevmode
+  \charterchip{princetonorange}{white}{\inserttocsectionnumber}\hskip1.5em
+  {\color{charterink}\inserttocsection}\par\vskip3.2mm
+}
+% Shown on a section divider for the sections that are NOT the one being entered. Grey, not
+% transparent: beamer's shading is pgf opacity, which some projectors flatten to nothing.
+\setbeamertemplate{section in toc shaded}{%
+  \leavevmode
+  \charterchip{chartergrey!20}{chartergrey}{\inserttocsectionnumber}\hskip1.5em
+  {\color{chartergrey}\inserttocsection}\par\vskip3.2mm
+}
+
+% ── The band ───────────────────────────────────────────────────────────────────────────────
+% 13.5mm, not 11: at 11 the two marks fit only at 5.6mm tall, which on a 3:1 mark is about 16pt
+% of height for a wordmark and cannot be read from a lecture room. 8.5mm marks need 11.5mm of band
+% once \fboxsep is counted. The cost is 7pt of body height, which \charterbleed below more than
+% returns.
+\newlength{\charterbandht}   \setlength{\charterbandht}{13.5mm}
+\newlength{\charterbandpad}  \setlength{\charterbandpad}{8mm}
+\newlength{\charterbodyht}   % \textheight less the band
+
+% How far a plate may reach outside the text block, each side. Beamer's default margins are 10mm
+% and a slide has almost no running text for a plate edge to align with, so the measure is given
+% to the figures: \textwidth + 2 x 6mm is 432pt against 398, and 3.9mm of paper margin is left.
+\newlength{\charterbleed}    \setlength{\charterbleed}{6mm}
+
+% \fboxsep, not a \raisebox with declared dimensions. Setting the height and depth by hand does
+% NOT centre the plate on marks that \raisebox has already centred on the baseline: it leaves
+% white above them and none below, which is what put the marks on the floor of their own box.
+% Padding is the only way to stay symmetric whatever the marks' own dimensions turn out to be.
+%
+% Order is the title page's: the school, then the lab.
+\newcommand{\charterbandlogos}{%
+  {\setlength{\fboxsep}{1.5mm}%
+   \colorbox{white}{%
+     \raisebox{-0.5\height}{\includegraphics[height=8.5mm]{assets/enpc_logo.pdf}}%
+     \hspace{3.5mm}%
+     \raisebox{-0.5\height}{\includegraphics[height=8.5mm]{assets/ffl_logo.pdf}}%
+   }}%
+}
+
+% Drawn with tikz rather than typeset in a beamercolorbox, so the band's height is fixed by
+% \charterbandht alone and the body below it starts in the same place on every frame, whatever
+% the title does. The two marks are 2.90:1 and 3.11:1, so at 8.5mm they are 24.7 and 26.4mm wide
+% and take about 57mm of the 144mm between the band's pads. That leaves 80mm of measure for the
+% title, which is why the titles in this deck are short; \large is sized to it.
+\setbeamertemplate{frametitle}{%
+  \begin{tikzpicture}[remember picture,overlay]
+    \fill[princetonorange]
+      (current page.north west) rectangle
+      ([yshift=-\charterbandht]current page.north east);
+    \node[anchor=east,inner sep=0pt]
+      at ([xshift=-\charterbandpad,yshift=-0.5\charterbandht]current page.north east)
+      {\charterbandlogos};
+    % A frame title is a headline, and headlines do not hyphenate. Left to itself LaTeX will
+    % break "produced" across two lines of a two-line title rather than rebalance it.
+    \node[anchor=west,inner sep=0pt,text width=80mm,align=left]
+      at ([xshift=\charterbandpad,yshift=-0.5\charterbandht]current page.north west)
+      {\usebeamerfont{frametitle}\color{white}%
+       \hyphenpenalty=10000\exhyphenpenalty=10000\relax
+       \baselineskip=1.02\baselineskip\relax
+       \insertframetitle\par};
+  \end{tikzpicture}%
+  % Reserve the WHOLE band, then open the subtitle below it. Under-reserving by a few
+  % millimetres puts the subtitle inside the band, grey on orange, where it cannot be read:
+  % beamer's own skip above the body is only about 2.5mm and will not make up the difference.
+  \vbox to \charterbandht{}%
+  \ifx\insertframesubtitle\@empty\else
+    \par\vskip0.6mm
+    {\usebeamerfont{framesubtitle}\usebeamercolor[fg]{framesubtitle}\insertframesubtitle\par}%
+  \fi
+  \par\vspace*{-1.6mm}%
+}
+
+% \hbox to\paperwidth, not \hbox: a natural-width box gives \hfill nothing to stretch, which
+% both overfills the line and leaves the slide number sitting at the left margin.
+% The frame number and nothing else. The section and subsection used to run along the bottom
+% in grey italic; a slide already says where it is, in the band, in its own title, and a third
+% typeface running under every frame is one voice too many.
+% ── The progress strips ────────────────────────────────────────────────────────────────────
+% Both live in the FOOTLINE. beamer already reserves 14.23pt of footskip for the frame number, so
+% a strip there costs the plates no height, and the bottom edge is where a locator belongs: the
+% author's instruction was that it must not draw attention away from the picture.
+%
+% \charterstrip is what the footline shows at the left, and the FOOTLINE clears it once it has
+% been drawn. A frame that sets nothing therefore shows nothing, and no strip survives into the
+% next frame.
+% ⚠ The reset cannot live in the frametitle template. beamer expands that at shipout, AFTER the
+%   frame body, so a \gdef there runs after \designstrip has set the value and clears it again:
+%   the strip silently never appears, which is what happened. Clearing after use is ordered.
+% ⚠ The footline is typeset once per PAGE, so an overlaid frame clears the strip between its
+%   overlays. \designstrip therefore sits in the frame body OUTSIDE any \only,
+%   where they run again for every overlay.
+\newcommand{\charterstrip}{}
+
+% Which design of the five we are looking at. The thumbnails are pre-rendered, the current one at
+% full strength and the rest lightened, by slides/make_slide_figures.py.
+% ⚠ Lightened in the IMAGE, not drawn under a pgf opacity. Some projectors flatten pgf
+%   transparency to nothing, which would show five identical thumbnails and no progress at all.
+\newcommand{\dthumb}[2]{%
+  \ifnum#1=#2\relax\includegraphics[height=4.8mm]{design_thumb_#1.png}%
+  \else\includegraphics[height=4.8mm]{design_thumb_#1_grey.png}\fi
+  \hspace{1.2mm}}
+\newcommand{\designstrip}[1]{\gdef\charterstrip{%
+  \raisebox{-0.6mm}{\dthumb{1}{#1}\dthumb{2}{#1}\dthumb{3}{#1}\dthumb{4}{#1}\dthumb{5}{#1}}}}
+
+\setbeamertemplate{footline}{%
+  \hbox to\paperwidth{%
+    \hspace*{8mm}\charterstrip
+    \hfill
+    {\usebeamerfont{footline}\color{princetonorange}\insertframenumber}%
+    \hspace*{8mm}%
+  }%
+  \gdef\charterstrip{}%
+  % 4.2mm, not 2.6: the strip's lowest ink sits on this hbox's baseline, so the space BELOW the
+  % baseline is the only thing between it and the paper edge. At 2.6 the thumbnails came within
+  % 0.9mm of the trim, which a projector's overscan can eat.
+  \vspace*{4.2mm}%
+}
+
+% ── The claim line ─────────────────────────────────────────────────────────────────────────
+% One per slide. Ink on white with an orange rule at the left, because orange type on white is
+% about 2.4:1 and will not survive a projector; the accent belongs in the rule.
+\newcommand{\punch}[1]{%
+  \par\vspace{0.42em}%
+  \noindent\begin{minipage}{\linewidth}%
+    \hspace*{0pt}{\color{princetonorange}\rule[-0.55em]{2pt}{1.55em}}\hspace{2.2mm}%
+    \begin{minipage}{\dimexpr\linewidth-5mm\relax}\small\raggedright #1\end{minipage}%
+  \end{minipage}\par
+}
+
+% ── The carry ──────────────────────────────────────────────────────────────────────────────
+% A sentence that hands the audience to the next slide, or to the next section. An arrow rather
+% than the claim line's bar, and italic rather than roman, because the two say different things:
+% the claim is what this slide showed, the carry is what the next one owes. Same face, same two
+% colours; nothing new is introduced to say it.
+%
+% ⚠ NOTHING CALLS THIS. The four carries were cut on the author's instruction 2026-08-24: small
+% italic under a claim line already set small is hard to read on a projector, whatever it says.
+% Kept defined rather than deleted, so a future carry does not get reinvented in a different
+% style. If it is ever used again, set it roman at \normalsize first.
+\newcommand{\bridge}[1]{%
+  \par\vspace{0.34em}%
+  \noindent\begin{minipage}{\linewidth}%
+    {\color{princetonorange}$\rightarrow$}\hspace{2.2mm}%
+    \begin{minipage}{\dimexpr\linewidth-6.5mm\relax}\small\itshape\raggedright #1\end{minipage}%
+  \end{minipage}\par
+}
+
+% ── The two plate layouts ──────────────────────────────────────────────────────────────────
+% Which one a plate takes is decided by its aspect, not by taste. Both cap BOTH dimensions and
+% let keepaspectratio pick the binding one, so a plate can never overrun the frame: a slide has
+% no next page to flow onto, and an overrun is simply ink cut off at the bottom edge.
+
+% The height cap is an argument because what is left over depends on the frame: a subtitle and a
+% three-line claim cost about 0.16\textheight between them, and a plate sized for the worst case
+% is needlessly small on every frame that is not the worst case.
+
+% The fraction is taken against \textheight less the band, not against \textheight: the band
+% costs 14mm of the frame that beamer still counts as text height, so a fraction measured
+% against \textheight would overrun the bottom edge by that much on every plate. Measuring it
+% here rather than restating every fraction in the deck keeps the per-frame numbers, which were
+% measured one frame at a time, meaning what they meant before the band.
+\newcommand{\charterplateheight}{%
+  \setlength{\charterbodyht}{\dimexpr\textheight-\charterbandht\relax}%
+}
+% \textheight is fixed for the whole deck, so the body height can be known before the first
+% plate. Frames that size an image by hand need it too, not only \wideplate and plateside.
+\AtBeginDocument{\charterplateheight}
+
+% Layout A -- a plate across the whole slide. Aspect >~ 1.7.
+%
+% \moveleft on a \vbox with a wider \hsize, not \makebox[\linewidth] and not a negative \hspace
+% inside center. \makebox is built on \hbox to and reports an overfull box for every plate that
+% overhangs, which would bury the one warning the build gate reads. A negative \hspace inside
+% center mis-centres by half the bleed on any plate that keepaspectratio has made narrower than
+% its box, which is most of them. A wider \hsize is the measure actually changing, so \centering
+% inside it centres on the paper.
+\newcommand{\fullplate}[2][0.50]{%
+  \charterplateheight
+  \par
+  \moveleft\charterbleed\vbox{\hsize=\dimexpr\textwidth+2\charterbleed\relax
+    \centering
+    \includegraphics[width=\hsize,height=#1\charterbodyht,keepaspectratio]{#2}\par}%
+  \par
+}
+% The old name, kept so a frame that has not been moved over still builds.
+\newcommand{\wideplate}[2][0.50]{\fullplate[#1]{#2}}
+
+% A photograph on a frame with NO BAND. \begin{frame}[plain] suppresses the headline and the
+% footline, and giving no frametitle is what stops the band being drawn at all: the band IS this
+% theme's frametitle template. Such a frame is a pause in the talk, so it carries nothing but the
+% picture.
+% The height is measured against \textheight, not \charterbodyht: with no band there is no 13.5mm
+% to subtract, and that height belongs to the picture.
+\newcommand{\photoplate}[2][0.86]{%
+  \par
+  \moveleft\charterbleed\vbox{\hsize=\dimexpr\textwidth+2\charterbleed\relax
+    \centering
+    \includegraphics[width=\hsize,height=#1\textheight,keepaspectratio]{#2}\par}%
+  \par
+}
+
+% The bled measure, for a frame that places a plate by hand rather than through \fullplate.
+\newcommand{\charterplatew}{\dimexpr\textwidth+2\charterbleed\relax}
+
+% Layout B -- a near-square plate beside its claim. A 16:9 slide has width that a square plate
+% cannot use; a column of text uses it instead of shrinking the plate to fill it.
+\newenvironment{plateside}[2][0.66]
+  {\charterplateheight
+   \begin{columns}[c,onlytextwidth]%
+     \begin{column}{0.52\textwidth}%
+       \centering
+       \includegraphics[width=\linewidth,height=#1\charterbodyht,keepaspectratio]{#2}%
+     \end{column}\hfill
+     \begin{column}{0.44\textwidth}\small\ignorespaces}
+  {\end{column}\end{columns}}
+
+% ── Full-bleed orange frames ───────────────────────────────────────────────────────────────
+\newcommand{\charterfield}{%
+  \begin{tikzpicture}[remember picture,overlay]
+    \fill[princetonorange] (current page.south west) rectangle (current page.north east);
+  \end{tikzpicture}%
+}
+
+% A section divider: the title slide's field, with one line on it.
+\newcommand{\sectionslide}[2][]{%
+  {\setbeamertemplate{footline}{}%
+   \begin{frame}[plain,noframenumbering]
+     \vspace*{9mm}
+     \hspace*{18mm}%
+     \begin{minipage}{0.76\textwidth}
+       \tableofcontents[currentsection,hideallsubsections,sectionstyle=show/shaded]
+       \ifx\relax#1\relax\else
+         \vskip6mm{\color{charterink}\itshape #1\par}
+       \fi
+     \end{minipage}
+     \vfill
+   \end{frame}}%
+}
+
+% ── Title slide ────────────────────────────────────────────────────────────────────────────
+\newcommand{\charterinstitute}[1]{\def\@charterinstitute{#1}}
+\charterinstitute{}
+
+\newcommand{\chartertitlepage}{%
+  {\setbeamertemplate{footline}{}%
+   \begin{frame}[plain,noframenumbering]
+     \charterfield
+     \vspace{5mm}
+     \begin{center}
+       % Both marks are set as blocks of one height, 15mm. The lab logo carries its own dark
+       % field, so its bounding box IS its block; the ENPC mark needs the white plate to have
+       % one, and \fboxsep supplies it symmetrically, 2mm around an 11mm mark. The two aspect
+       % ratios are within 7 per cent of each other, so equal height is also equal weight.
+       %
+       % ⚠ THE SHIFT IS 0.5\depth-0.5\height AND NOT -0.5\height. \colorbox splits its padding
+       %   between height and depth, so the plated mark is 13mm tall over a 2mm depth while the
+       %   lab mark is 15mm tall over none. Raising each by half its own HEIGHT therefore lands
+       %   two boxes of identical total size on centres 1mm apart, which is what the two marks
+       %   sat at. Half of (height - depth) is the shift that puts a box's middle on the
+       %   baseline whatever its depth, and it reduces to -0.5\height for a bare image.
+       {\setlength{\fboxsep}{2mm}%
+        \raisebox{\dimexpr0.5\depth-0.5\height\relax}%
+                 {\colorbox{white}{\includegraphics[height=11mm]{assets/enpc_logo.pdf}}}}%
+       \hspace{8mm}%
+       % Vector, converted from the lab's own ffl_logo.svg, which is kept beside it.
+       \raisebox{\dimexpr0.5\depth-0.5\height\relax}%
+                {\includegraphics[height=15mm]{assets/ffl_logo.pdf}}
+     \end{center}
+     \vfill
+     \begin{center}
+       \begin{minipage}{\textwidth}
+         \centering\color{charterink}\usebeamerfont{title}\inserttitle\par
+       \end{minipage}
+     \end{center}
+     \vfill
+     \begin{center}
+       {\color{charterink}\usebeamerfont{author}\insertauthor\par}
+       \vskip3mm
+       {\color{charterink}\small\@charterinstitute\par}
+     \end{center}
+     \vspace{6mm}
+   \end{frame}}%
+}
+
+\endinput

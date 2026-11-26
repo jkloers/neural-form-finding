@@ -30,39 +30,10 @@ import argparse
 import jax
 jax.config.update("jax_enable_x64", True)
 
-import numpy as np
-import jax.numpy as jnp
-
 from nff.config.experiment import load_and_parse_config
-from nff.closed.setup import (build_closed_initial_state, init_closed_les_params,
-                                      build_surrogate_energy)
-from nff.closed.cut_export import build_run_cut_geometry
-from nff.topology.closed_builder_jax import solve_cut_vertices_jax, boundary_flat_from_logits
+from nff.closed.cut_export import reconstruct_run_geometry
 from nff.topology.cut_dxf import export_cut_geometry_dxf, render_dxf_png
 from nff.topology.cut_pattern import measure_cut_geometry
-
-
-def _reconstruct_geometry(config, params_override=None, w_c_mm=None):
-    """(geom, w_lig, length_scale, hinge_model) for a config's design (override params = trained)."""
-    initial_state, _ = build_closed_initial_state(config)
-    params, static_features = init_closed_les_params(config)
-    _, _, geometry_fn, _, w_lig_logit0 = build_surrogate_energy(
-        config, static_features, initial_state, params)
-    if w_lig_logit0 is not None:
-        params = {**params, 'w_lig_logit': w_lig_logit0}
-    if params_override is not None:                     # trained design from best_params.pkl
-        params = {**params, **{k: jnp.asarray(v) for k, v in params_override.items()}}
-
-    geom_hinge = geometry_fn(params) if geometry_fn is not None else None
-    hinge_w_lig = geom_hinge.w_lig if geom_hinge is not None else None
-
-    struct, sliders = static_features['struct'], static_features['sliders']
-    cut_coords = np.asarray(solve_cut_vertices_jax(
-        struct, boundary_flat_from_logits(sliders, params['bnd_logits']),
-        jax.nn.sigmoid(params['z'])))
-    geom, w_lig, length_scale = build_run_cut_geometry(
-        initial_state, cut_coords, struct, config, config.hinge_model, hinge_w_lig, w_c_mm=w_c_mm)
-    return geom, w_lig, length_scale
 
 
 def main():
@@ -93,7 +64,7 @@ def main():
         params_override = None
         out = args.out or f"data/outputs/{args.config_name}_cut_pattern.dxf"
 
-    geom, w_lig, length_scale = _reconstruct_geometry(config, params_override, w_c_mm=args.kerf)
+    geom, w_lig, length_scale, _ = reconstruct_run_geometry(config, params_override, w_c_mm=args.kerf)
     rt = measure_cut_geometry(geom)
     print(f"  geometry: {len(geom['hinge_info'])} hinges, w_lig {w_lig.min():.1f}-{w_lig.max():.1f}mm, "
           f"kerf {args.kerf:.2f}mm, scale {length_scale:.1f} mm/unit, "

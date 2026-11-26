@@ -1,0 +1,148 @@
+# Closed-state RDPQK — SQUARE 7x7 sheet deployed into a PLUM-BLOSSOM (ume) outline.
+#
+# PURPOSE: the closing figure, ARM C. Trained through equilibrium under the actuation
+# below. Identical to `ume_7x7.yaml` except for the disturbance load.
+#
+# One design, three states — traced by geometry alone, then driven by
+# the physics it never saw, then designed through equilibrium. The target is deliberately a shape
+# the rigid-panel kinematics have to work for.
+#
+# ── PROVENANCE ────────────────────────────────────────────────────────────────────────────────
+# Derived from `sheet_7x7_circle.yaml` and changes ONLY the target. The sheet, the clamp, the
+# moment, the springs and the hinge model are that file's, unedited, because they are calibrated
+# together: see its header for the bisection of M and for why the grid is odd and the pitch square.
+#
+# ── THE TARGET ────────────────────────────────────────────────────────────────────────────────
+# r(t) = target_r * (1 + target_eps * cos(target_petals * t)): the calibrated circle carrying a
+# 5-fold ripple, so `target_r` keeps its meaning as the MEAN radius and the sheet is asked for the
+# same amount of deployment as before, redistributed.
+#
+# ★ eps CROSSES A STATED GEOMETRIC BOUNDARY. A polar curve is convex where r^2 + 2r'^2 - r r'' > 0,
+# which at the worst point (cos n t = -1) is 1 - (n^2+2) eps + (n^2+1) eps^2 > 0. That quadratic
+# always has eps = 1 as a root, so the other is 1/(n^2+1) and the outline is strictly convex iff
+#     eps < 1/(n^2 + 1) = 1/26 = 0.038462   at n = 5.
+# eps = 0.15 is 3.9x the threshold, so the target is decisively RE-ENTRANT. It is not "a hard
+# shape" by assertion; it is on the far side of a boundary that can be written down.
+#
+# ★ eps = 0.15 WAS MEASURED, NOT CHOSEN BY EYE. `diagnostics/probe_ume_reachability.py` swept
+# eps = 0, 0.02, 0.0385, 0.06, 0.10, 0.15, 0.20, 0.22 on this sheet under geometry alone (closed
+# form, 1-DOF, pin closure 3.6e-15 throughout). There is NO reachability cliff: the kinematic match
+# degrades smoothly, precision 47.6 -> 53.0 -> 71.1 -> 104.8 mm over eps = 0.06 -> 0.10 -> 0.15 ->
+# 0.22 without floors. 0.15 is the largest ripple whose notches the sheet still fills; at 0.20-0.22
+# the deployed outline visibly cuts the corners off the re-entrant notches. Renders in
+# `data/outputs/ume_probe_n5/` and `ume_probe_n5_reg/`.
+#
+# ⚠ THE SHEET IS 4-FOLD SYMMETRIC AND A 5-PETAL TARGET IS NOT. That is deliberate: no symmetric
+# design can be optimal, so the sheet cannot reach the target by inheriting its own symmetry. It
+# was the main reachability risk and the probe cleared it — n = 5 tracks as well as n = 4 does.
+#
+# ⚠ THE TARGET DOES NOT ADAPT. `run_closed` builds a FIXED cloud for `type: ume` from the
+# `target_*` keys below, exactly as it does for a fixed rectangle. It is NOT the auto-fitted circle
+# path. Two designs can only be compared on ONE target.
+
+tessellation:
+  tessellation_type: closed_rdpqk
+  M: 7
+  N: 7
+  r_init: 0.45
+  spacing: 1.0
+  spacing_y: 1.0             # SQUARE pitch -> psi_x = psi_y = 45 deg, isotropic deployment
+  sheet_width_mm: 2844.8     # 7 panels x the 406.4 mm calibrated pitch
+  hinge_margin: 0.13
+  clamped_dofs: [0, 1, 2]    # ONE tile, fully restrained: a net moment would otherwise spin the
+                             # whole sheet as a rigid body
+  # ★ Face 24 is the sheet centroid (3.5, 3.5) EXACTLY at 7x7, so the blossom centre is a priori
+  # and no design spends freedom correcting a rigid-body translation.
+  target_cx: 3.5
+  target_cy: 3.5
+  target_r: 5.6471           # = 2295 mm, the MEAN radius of the naturally deployed sheet
+  target_petals: 5
+  target_eps: 0.15
+
+mapping:
+  map_type: closed_les
+
+optimization_weights:
+  validity_method: none      # valid by construction on the closed chart; Stage 1 is bypassed
+
+hinge_model:
+  type: rom                  # the linear-spring ligament; `material:` below is LIVE
+  w_lig_mm: 18.0
+  length_scale: 406.4        # mm per pipeline unit = the real panel pitch
+  energy_scale: 2.4606e-3    # 1 / length_scale -> `loads.value` is in newtons
+  calibrate: false
+  learn_w_lig: false
+
+physics:
+  use_contact: true
+  k_contact: 1000000.0
+  min_angle: -2.0            # DEGREES
+  cutoff_angle: 0.0
+  linearized_strains: true
+  incremental: true
+  num_load_steps: 24
+  solver_maxiter: 20000      # ⚠ 1500 stops on the ITERATION CAP and returns a silently wrong state
+  solver_tol: 1.0e-5
+  backward_reg: 0.01
+  updated_lagrangian: false
+
+material:                    # PET hinge campaign, t = 0.5 mm, w_lig = 18 mm, r_win = 100 mm
+  k_stretch: 96763.84        # = 238.1 N/mm
+  k_shear:   51775.36        # = 127.4 N/mm
+  k_rot:         1.1983      # = 487 N.mm/rad (the BUCKLED SECANT at 20 deg, not the tangent)
+  density: 1.0
+
+boundary_conditions:
+  clamped_faces: [24]        # ⚠ the parser maps this to topology['bc_clamped']; writing
+                             # 'clamped_faces' into topology AFTER parsing is silently ignored
+
+loads:
+  # ★ ONE MOMENT drives the whole sheet: a rigid-deployable kirigami is a ONE-DOF mechanism, so a
+  # single moment moves every hinge in lockstep. Calibrated on this sheet at 0.572 deg per unit;
+  # M = 157 gives theta max 89.82, mean 89.37, min/max 0.993 across all 84 hinges.
+  # ⚠ DO NOT RAISE. 90 deg is the kinematic LOCK, not a waypoint: at M = 200 the sheet passes to
+  # 114.1 deg and its mean radius FALLS 2295 -> 2248 mm, the rotating-squares pattern going over
+  # the top and re-closing. M = 157 is the maximum-expansion point.
+  # ⚠ M = 150 returns one wrapped hinge angle (1803 deg) while 155 and 157 are clean. Sanity-check
+  # min/max after any change, never theta_max alone.
+  - {face: 25, dof: 2, value: 157.0}
+  # ★ THE DISTURBANCE. A transverse load on the far corner competes with the 1-DOF drive. Measured
+  # on this sheet (`diagnostics/sweep_ume_collapse.py`, face 48, -y): both the uniform sheet and the
+  # geometry-only design deploy normally to 35 N and are SHUT by 40 N (uniform 56.0 -> 11.2 deg,
+  # geometry 98.5 -> 7.9 deg, and the 1-DOF fit r2 falls from 1.000 to 0.76-0.90, so the sheet stops
+  # moving in its deployment mode). The transition occupies ONE step of a 5 N grid.
+  # ⚠ TRAINED AT 20 N, HALF THE MEASURED BOUNDARY. Training nearer than this puts the objective on a
+  # basin boundary where it is discontinuous and descent thrashes between adjacent epochs.
+  - {face: 48, dof: 1, value: -20.0}
+
+target:
+  type: ume                  # the driver reads the outline from the target_* keys above
+  center: [3.5, 3.5]
+  radius: 5.6471
+
+loss_weights:
+  chamfer: 50.0
+  coverage: 0.5              # ⚠ must NEVER equal `chamfer`; 0.5 is canonical
+  regularization: 1.0e-4
+  damage: 0.0                # inert under the ROM (no damage model)
+  ood: 0.0                   # inert under the ROM
+  compression: 0.0           # inert under the ROM
+
+training:
+  num_epochs: 300            # at lr 0.1 the match is essentially reached by epoch 75 on this sheet
+  learning_rate: 0.1         # ⚠ 0.01 is ~20x too small here and looks converged while it is not
+  optimizer: adam
+  lr_schedule: cosine
+  grad_clip: 1.0
+  geometric_loss_type: boundary_vertices
+
+visualization:
+  stage0: true
+  stage1: false              # bypassed (validity_method: none) — the plot would be empty
+  stage2: true
+  energy_plot: true
+  animation: true
+  show_plots: false
+  save_outputs: true
+  show_external_forces: false
+  show_kinematic_blocks: true

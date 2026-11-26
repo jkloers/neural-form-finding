@@ -1,0 +1,133 @@
+# ── PET SHEET, 49 TILES (7x7), PET SURROGATE, theta_deploy 45 deg — ARM: "NORMAL DEPLOYMENT".
+#
+# WHY THIS EXISTS. `pet45_baseline.yaml` is the same experiment on 9 tiles = 12 hinges, and 12 is
+# too few for the ENDPOINT view of the compression-shift figure: one point per hinge per design
+# means one hinge is worth 8.3 percentage points and the hex field reads as isolated specks. This
+# config is that experiment at 7x7 = 49 tiles = **84 hinges**, purely to give the endpoint view
+# enough population to be a field rather than a scatter.
+#
+# ★★ THE SHEET GROWS; THE TILE DOES NOT. The obvious way to get more hinges — keep the 4 ft x 8 ft
+# stock and subdivide it — is WRONG here, and the reason is the surrogate, not the geometry. The
+# hinge condensation was run on an RVE half-disk of r_win = 100 mm, and that radius ENCODES THE
+# PANEL SIZE (see memory/project_rve_domain_radius.md): the window has to fit inside the tile that
+# surrounds the hinge. At the validated 406.4 mm pitch the half-pitch is 203 mm and a 100 mm window
+# sits comfortably inside. Subdividing 1219.2 mm across 7 columns gives a 174 mm pitch — half-pitch
+# 87 mm — so neighbouring hinges' windows would OVERLAP and the condensation would no longer be a
+# condensation. Every hinge-scale quantity here is therefore bit-identical to the 3x3 baseline
+# (pitch, w_lig, length_scale, energy_scale, checkpoint); only M, N and the sheet extent change.
+#   stock: 7 * 406.4 = 2844.8 mm x 5689.6 mm  (9.33 ft x 18.67 ft) — NOT 4 ft x 8 ft.
+# ⚠ Read this config for LOAD-PATH PHYSICS, not for manufacturability: the 4x8 ft result is
+# `pet45_baseline.yaml`, and nothing here supersedes it as the standard-stock reference.
+#
+# Everything else is inherited verbatim from pet45_baseline.yaml — see that file for the full
+# reasoning on barrier 0.5, backward_reg 0.01, num_load_steps 40, solver_maxiter 20000, coverage 0,
+# contact, and why 45 deg is a defensible deployment once the load is calibrated on the SURROGATE
+# rather than on the springs.
+#
+# CALIBRATED 2026-08-05:
+#   calibrate_target.py --config <this> --angle 45 --shape-angle 40 --steps 6
+#   -> load x0.9734 = 5.75 N/tile;  theta max 44.96, mean 44.18, min 43.09, spread 1.87 deg
+#   -> deployed 12.0160 x 15.6632 u, measured lam 1.7166 / 1.1188 (analytic 1.6892 / 1.1152)
+#   -> target sized at 40 deg: the design must PULL IN +5.4% x, +0.7% y -- the same order of
+#      headroom the 3x3 config carries (+6.0% / +1.2%), so the design problem is comparable.
+#   (both are rewritten in place by the tool's output — a config carrying the 3x3 numbers would
+#    deploy this sheet to the wrong angle, since the loaded row now has 7 tiles rather than 3.)
+
+tessellation:
+  tessellation_type: closed_rdpqk
+  M: 7
+  N: 7
+  r_init: 0.45
+  spacing: 1.0
+  spacing_y: 2.0             # elongated panels -> 1:2 sheet, same aspect as the 3x3 baseline
+  sheet_width_mm: 2844.8     # = 7 * 406.4, i.e. the SAME panel pitch as the 3x3 config
+  hinge_margin: 0.13
+  clamped_dofs: [1]          # bottom edge: y only (rollers in x, free rotation)
+  y_pin_faces: [21]          # centre bottom tile (column 3, row 0) pinned in x -> no rigid mode
+  # Face index = column * N + row, so column c's bottom tile is c*7 and its top tile is c*7 + 6.
+  target_cx: 3.6612
+  target_cy: 7.6286
+  target_half_w: 5.6831
+  target_half_h: 7.7749
+
+mapping:
+  map_type: closed_les
+
+optimization_weights:
+  validity_method: none
+
+hinge_model:
+  type: surrogate
+  checkpoint: data/surrogates/hinge_surrogate_pet_v3.pkl
+  material: PET
+  thickness_mm: 0.5
+  w_lig_mm: 18.0
+  calibrate: false
+  length_scale: 406.4        # mm per pipeline unit = the real panel pitch, UNCHANGED from 3x3
+  energy_scale: 2.4606e-3    # 1 / length_scale -> load values are newtons
+  barrier: 0.5
+  fail_line: 1.0
+  learn_w_lig: true
+
+physics:
+  use_contact: true
+  k_contact: 1000000.0
+  min_angle: -2.0            # DEGREES
+  cutoff_angle: 0.0
+  linearized_strains: true
+  incremental: true
+  num_load_steps: 40         # the compression term reads the PATH; 6 steps scores an artefact
+  solver_maxiter: 20000      # NOT 1500 — at the cap the design gradient is a function of the cap
+  solver_tol: 1.0e-5
+  backward_reg: 0.01
+  updated_lagrangian: false
+
+material:                    # inert under the surrogate (calibrate: false); kept for the ROM twin
+  k_stretch: 96763.84
+  k_shear:   51775.36
+  k_rot:         1.1983
+  density: 1.0
+
+boundary_conditions:
+  clamped_faces: [0, 7, 14, 21, 28, 35, 42]     # bottom edge (row 0 of every column)
+
+loads:                                          # top edge (row 6) pulled +y
+  - {face: 6,  dof: 1, value: 5.75}
+  - {face: 13, dof: 1, value: 5.75}
+  - {face: 20, dof: 1, value: 5.75}
+  - {face: 27, dof: 1, value: 5.75}
+  - {face: 34, dof: 1, value: 5.75}
+  - {face: 41, dof: 1, value: 5.75}
+  - {face: 48, dof: 1, value: 5.75}
+
+target:                      # fallback; run_closed overrides it with the rectangle above
+  type: rectangle
+  center: [3.5, 7.0]
+  radius: 7.0
+
+loss_weights:
+  damage: 0
+  ood: 0.001
+  compression: 0
+  chamfer: 50.0
+  coverage: 0.0
+  regularization: 1.0e-4
+
+training:
+  num_epochs: 200
+  learning_rate: 0.01
+  optimizer: adam
+  lr_schedule: cosine
+  grad_clip: 1.0
+  geometric_loss_type: boundary_vertices
+
+visualization:
+  stage0: true
+  stage1: false              # Stage 1 is BYPASSED (validity_method: none)
+  stage2: true
+  energy_plot: false         # ROM-only decomposition; meaningless under the surrogate
+  animation: true
+  show_plots: false
+  save_outputs: true
+  show_external_forces: false
+  show_kinematic_blocks: true

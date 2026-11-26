@@ -14,15 +14,27 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.patches import Circle
+from matplotlib.patches import Circle, FancyBboxPatch
+from matplotlib.lines import Line2D
 import jax.numpy as jnp
 
 from nff.topology.hinge_descriptor import (build_hinge_descriptor_structure,
                                            hinge_descriptors_from_design)
 from nff.topology.closed_builder_jax import boundary_points_flat, solve_cut_vertices_jax
 from nff.utils.visualization import plot_hinge_strips, plot_hinge_dimensions
+from nff.utils.figstyle import (FS_ANNOT, GREY, INK, TEXT_W_BP, apply_charter, panel_letter,
+                                paper_rc, save_paper_figure)
 
-_INK = "#1A1A1A"
+# ── The canvas is authored at its PRINTED size, so an authored fontsize IS its printed point
+# size. TEXT_W_BP is \textwidth in sn-jnl.cls; the paper includes this plate at \linewidth.
+# Do NOT enlarge the canvas without rescaling the type ladder, and do NOT add `bbox_inches`
+# to savefig -- either one silently breaks that guarantee.
+FIG_W_BP  = TEXT_W_BP                # \textwidth, shared with every other plate
+FIG_H_BP  = FIG_W_BP / 1.97          # preserves the original 15:7.6 content aspect
+FS_LABEL  = 7.0                      # dimension labels on the detail
+_PLATE_RC = paper_rc()               # the shared ladder, family and Type-42 embedding
+
+_INK = INK
 # design ratios matching the real pipeline (so the DETAIL panel gives physical intuition):
 _W_LIG_FRAC = 0.10          # ligament width = 1/10 tile
 _KERF_FRAC = 0.06           # kerf / w_lig on the DETAIL (a thin slit — accurate)
@@ -51,7 +63,9 @@ def main():
     ap.add_argument("--seed", type=int, default=3, help="random-tessellation seed")
     ap.add_argument("--supplement", action="store_true",
                     help="draw the detail at 180-alpha (the raw cut-opening) to compare the pi-alpha")
-    ap.add_argument("--out", default="data/outputs/hinge_overview.png")
+    ap.add_argument("--out", default="data/outputs/hinge_overview.pdf")
+    ap.add_argument("--no-boxes", action="store_true",
+                    help="omit the grouping rule drawn round the plate. A slide has a speaker to group the panels, and a framed plate on a slide reads as a page")
     args = ap.parse_args()
 
     # RANDOM tessellation: per-cell aspect ratios r in (0,1) -> varied, non-90 hinge angles
@@ -71,29 +85,46 @@ def main():
     w_lig = _W_LIG_FRAC                                  # coords units (tile pitch = 1)
     # Article layout: no panel titles, tight inter-panel gap, both panels centred in their half.
     # The figure is sized close to 2x the (~square) panel content so there is little padding to gap.
-    fig, (axL, axR) = plt.subplots(1, 2, figsize=(15, 7.6), facecolor="white",
-                                   gridspec_kw={"wspace": 0.0})
+    apply_charter(**_PLATE_RC)
+    fig, (axL, axR) = plt.subplots(1, 2, figsize=(FIG_W_BP / 72.0, FIG_H_BP / 72.0),
+                                   facecolor="white", gridspec_kw={"wspace": 0.02})
+    for _ax in (axL, axR):
+        _ax.set_facecolor("none"); _ax.set_zorder(2)   # above the shared ground below
 
     # LEFT = principle drawing: exaggerated kerf + tip fillets so the cut geometry reads clearly
     plot_hinge_strips(coords, hs, w_lig, _KERF_MACRO * w_lig, r_win_factor=_RWIN_FACTOR, ax=axL,
-                      mm_per_unit=_MM_PER_TILE, scale_mm=100.0, fillet=_FILLET_MACRO * w_lig)
+                      fillet=_FILLET_MACRO * w_lig, fs=FS_ANNOT)
 
     P, Rc = pivots[hid], 3.2 * w_lig                    # circle the detailed hinge — bigger, DOTTED
-    axL.add_patch(Circle(P, Rc, edgecolor=_INK, facecolor="none", lw=1.1,
-                         linestyle=(0, (1, 1.4)), zorder=30))
-    axL.annotate("detailed at right", P + np.array([0.0, 1.35 * Rc]), color=_INK,
-                 fontsize=11, ha="center", va="bottom", zorder=30)
+    _TIE = dict(edgecolor=_INK, facecolor="none", lw=0.9, linestyle=(0, (1.2, 1.6)))
+    axL.add_patch(Circle(P, Rc, zorder=30, **_TIE))
+
 
     # RIGHT = the SAME hinge's alpha, real pipeline proportions + the real gmsh mesh.
     # w_lig = 5 units => 5 mm (1 unit = 1 mm; the panel's "10 mm" bar) matching the left's 5 mm.
     wl = 5.0
     alpha_draw = (180.0 - alpha_sel) if args.supplement else alpha_sel
     plot_hinge_dimensions(w_lig=wl, w_c=_KERF_FRAC * wl, alpha_deg=alpha_draw,
-                          fillet=_FILLET_FRAC * wl, ax=axR)
+                          fillet=_FILLET_FRAC * wl, ax=axR, fs=FS_LABEL,
+                          scale_bar=False)
 
-    axL.set_anchor("E"); axR.set_anchor("W")            # pull both to the inner edge -> close together,
-    fig.savefig(args.out, dpi=200, bbox_inches="tight")  # vertically centred
+    # ── one plate, not two drawings. A single faint ground behind both panels groups them;
+    # the letters sit in figure space above each panel so nothing collides with the drawings.
+    # A border round (b) was tried and rejected: it clipped L_sec and fouled the letter.
+    if not args.no_boxes:
+        fig.patches.append(FancyBboxPatch((0.008, 0.02), 0.984, 0.96,
+                                          boxstyle="round,pad=0,rounding_size=0.012",
+                                          transform=fig.transFigure, facecolor="#F7F7F5",
+                                          edgecolor=GREY, lw=0.4, zorder=-10))
+    fig.add_artist(Line2D([0.505, 0.505], [0.09, 0.91], color=GREY, lw=0.4,
+                          transform=fig.transFigure, zorder=-5))
+    for _x, _lab in ((0.030, "a"), (0.530, "b")):
+        panel_letter(fig, _lab, x=_x, y=0.945, va="top", zorder=40)
+
+    fig.subplots_adjust(left=0.015, right=0.985, bottom=0.03, top=0.90)   # bigger drawings
+    pdf, lo, hi = save_paper_figure(fig, args.out, FIG_W_BP, FIG_H_BP, dpi=600)
     plt.close(fig)
+    print(f"  {pdf} ({FIG_W_BP:.1f} x {FIG_H_BP:.1f} bp, type {lo:.1f}-{hi:.1f} pt)")
     print(f"saved {args.out}  (hinge {hid}, alpha {alpha_sel:.1f}°)")
 
 

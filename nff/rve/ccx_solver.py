@@ -228,9 +228,9 @@ def _write_deck(path, xyz, conn, arcA, arcB, pivot, mat, states, elastic_only, f
                 field_freq=1000, el_fields=None, free_dofs=(), rigid_drive=False):
     """One *STEP per kinematic state (a,s,theta) -> correct arc path; energy+reaction+fields out.
 
-    ``stabilize`` (None = off): add ``*STATIC, STABILIZE=<val>`` automatic viscous damping to walk
-    through buckling snap-through (e.g. the fold past the localization wall). NOTE the viscous
-    reaction contaminates F/M -- use only when the out-of-plane displacement (uz) is the target.
+    ``stabilize``: ⚠ UNSUPPORTED -- setting it raises. ``*STATIC, STABILIZE`` is an Abaqus keyword
+    that CalculiX 2.23 ignores silently, so a "stabilized" deck solves bit-identically to an
+    undamped one (measured 2026-07-30). See the guard below for the alternatives that do work.
 
     ``arcB_uz_free``: leave the driven arc free out of plane, prescribing only the in-plane (a, s,
     theta) it exists to impose. Pinning uz = 0 on BOTH arcs while the ligament bows out of plane
@@ -257,6 +257,16 @@ def _write_deck(path, xyz, conn, arcA, arcB, pivot, mat, states, elastic_only, f
     exact: RF at the reference node IS (F_a, F_s) and at the rotation node IS M_theta, with no
     lever-arm summation. Empty ⟹ all three prescribed, via the same rigid body.
     """
+    if stabilize:
+        # MEASURED 2026-07-30: CalculiX 2.23 does NOT implement STABILIZE -- it is an Abaqus
+        # keyword. ccx ignores the unrecognised parameter, so the deck LOOKS damped and the solve is
+        # bit-identical to an undamped one: four on/off pairs matched W to 5 significant figures and
+        # diverged at the same increment, and `STABILIZ` appears zero times in the ccx binary
+        # (`VISCO` 16, `DASHPOT` 9). Refuse rather than emit a no-op that reads as physics.
+        raise NotImplementedError(
+            f"stabilize={stabilize!r}: CalculiX 2.23 has no *STATIC, STABILIZE (Abaqus-only) and "
+            "ignores it silently, producing undamped results that look damped. To walk past the "
+            "buckling bifurcation use *VISCO, quasi-static *DYNAMIC, or dashpot elements.")
     hyp = hyp or Hypotheses()
     n_ref, n_rot = len(xyz) + 1, len(xyz) + 2
     rigid = bool(rigid_drive or free_dofs)
@@ -278,8 +288,7 @@ def _write_deck(path, xyz, conn, arcA, arcB, pivot, mat, states, elastic_only, f
         L.append(f"*NSET, NSET=NDRIVE\n{n_ref},{n_rot}")
     L.append(mat.constitutive_cards(hyp, elastic_only=elastic_only))
     L.append(mat.section_cards("EALL", hyp))
-    stat = "*STATIC" + (f", SOLVER={solver}" if solver else "") \
-         + (f", STABILIZE={stabilize:g}" if stabilize else "")
+    stat = "*STATIC" + (f", SOLVER={solver}" if solver else "")
     # min increment (default 1e-3): the solver bails (ends the job) once it needs tiny steps -- for
     # steel that is the deep-plastic grind past rupture (natural stop-at-fracture, no endless
     # cutbacks). Thin elastic sheets (paper) buckle-snap instead and need a smaller floor to walk
@@ -431,6 +440,17 @@ def prepare_job(p, angle_deg=60.0, n_steps=15, pivot=None, material=STEEL, imp_a
     pivot = pivot if pivot is not None else (0.0, -p.w_lig)
     os.makedirs(workdir, exist_ok=True)
     job = os.path.join(workdir, "hinge")
+    # Clear any previous run's results FIRST. `workdir` defaults to a fixed path, and
+    # `evaluate_hinge` derives its own from geometry+ray only -- neither depends on the solver
+    # settings, so re-evaluating one hinge under different HingeConstants reuses the directory. If
+    # the new solve then diverges early, `parse_job` reads the OLD .frd frames alongside the new
+    # .dat and returns a blend of two runs, silently. That fabricated a bit-identical W across a
+    # stabilize on/off comparison (a false PASS) before this guard.
+    for ext in (".frd", ".dat", ".sta", ".cvg", ".12d"):
+        try:
+            os.remove(job + ext)
+        except OSError:
+            pass
     xyz, conn, arcA, arcB = _build_mesh(p, pivot, imp_amp, n_through, lc_min, lc_max)
     if states is None:
         dth = np.radians(angle_deg) / n_steps

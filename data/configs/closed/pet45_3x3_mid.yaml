@@ -1,0 +1,135 @@
+# ── 3x3 PET SHEET — CENTRED SINGLE-TILE GRIP. Clamp face 3 (bottom middle) -> pull face 5 (top middle). ──
+#
+# ⚠ THE LOAD AND THE FOUR target_* KEYS ARE OWNED BY `calibrate_target.py`. In THIS file (the stub
+# `pet45_3x3_mid.yaml`) the load is a placeholder the bisection multiplies and the target keys are
+# absent, so do not run it. In the `_base` / `_phys` / `_phys10` files the calibrator writes from
+# it, both are calibrated -- read the generated banner at the top of those for the actual values.
+#
+# THE PROBLEM, as posed: ONE clamped tile in the middle of the bottom edge, pulled against the tile
+# directly opposite it in the middle of the top edge. Nothing else is restrained.
+#
+# Controlled variation of `pet45_5x5_mid_phys.yaml` -- the SAME experiment on 9 tiles = 12 hinges
+# instead of 25 tiles = 40 hinges. Checkpoint, barrier, physics, training and the seeded start are
+# byte-identical; only M, N, the sheet extent and the two grip faces change.
+#
+# ★★ WHY 3x3 IS THE HONEST SHEET AT 4 ft x 8 ft, AND 5x5 IS NOT. The panel pitch is
+# `sheet_width_mm / M` = 1219.2 / 3 = 406.4 mm — the pitch every hinge-scale quantity in this
+# pipeline was validated at. A 5x5 on the same stock would be 243.84 mm, half-pitch 122 mm, and the
+# hinge condensation's Saint-Venant window is r_win = 100 mm: neighbouring windows would nearly
+# touch and the condensation would stop being a condensation. At 406.4 the half-pitch is 203 mm and
+# a 100 mm window sits comfortably inside. So this config is cut 1:1 from the design: the simulated
+# forces and the damage margin transfer to the physical sheet, which is NOT true of a 5x5 scaled
+# onto this stock. See memory/project_standard_configuration.md.
+#
+# Face index = column * N + row on a 3x3, so face 3 = (col 1, row 0) and face 5 = (col 1, row 2).
+# Both sit on the vertical centreline.
+#
+# ★ WHY THIS GRIP NEEDS NO ROLLER. The single-tile family carries a rigid-body swing: with one
+# support and an OFF-CENTRE pull the assembly rotates bodily about the clamp instead of opening,
+# which is why `pet_1t_D_c3p5.yaml` (the same two faces, but reached from the off-centre family)
+# carries `y_roller_faces: [0]`. Here the pull is COLLINEAR with the clamp about the sheet's
+# centreline, so there is no moment arm and no swing to suppress. The 5x5 twin measured +7.17 deg of
+# residual swing with no roller, against +27 deg for the diagonal grip at 1 N. Two supports, which
+# is also what the lab set-up wants.
+#
+# ⚠ NOT `pet_1t_D_c3p5.yaml`. That file has the same two grip faces but carries `num_load_steps: 6`
+# and `solver_maxiter: 1500`, and at 1500 the Stage-2 solve stops short of equilibrium so the design
+# gradient becomes a function of the iteration cap (measured 122x wrong). Its `compression: 1.0` was
+# inherited from a different problem and never measured on this grip. Hence this file.
+#
+tessellation:
+  tessellation_type: closed_rdpqk
+  M: 3
+  N: 3
+  r_init: 0.45
+  spacing: 1.0
+  spacing_y: 2.0             # elongated panels -> 1:2 sheet, so 4 ft of stock gives 8 ft of length
+  sheet_width_mm: 1219.2     # 4 ft across M=3 panels -> 406.4 mm pitch, the validated value
+  hinge_margin: 0.13
+  # clamped_dofs OMITTED -> all three DOFs (x, y, theta) fixed on the single clamped tile.
+  # ⚠ A PIN here (clamped_dofs: [0, 1]) would leave a NEUTRAL rotation mode: the layout is
+  # symmetric so the pull exerts no net moment, but `init_noise` breaks that symmetry and the
+  # zero-stiffness mode would then be fed by whatever asymmetry the random start happens to
+  # carry. A full clamp is the well-posed choice for a centred grip.
+  # NO y_roller_faces: see the banner. The grip is collinear with the sheet's centreline.
+  init_noise: 0.25           # seeded random start, matching the 5x5 twin
+  init_seed: 7
+  # Face index = column * N + row, so column c's bottom tile is c*3 and its top tile is c*3 + 2.
+
+mapping:
+  map_type: closed_les
+
+optimization_weights:
+  validity_method: none
+
+hinge_model:                 # byte-identical to pet45_5x5_mid_phys.yaml
+  type: surrogate
+  checkpoint: data/surrogates/hinge_surrogate_pet_v3.pkl
+  material: PET
+  thickness_mm: 0.5
+  w_lig_mm: 18.0
+  calibrate: false
+  length_scale: 406.4        # mm per pipeline unit = the real panel pitch
+  energy_scale: 2.4606e-3    # 1 / length_scale -> load values are newtons
+  barrier: 0.5
+  fail_line: 1.0
+  learn_w_lig: true
+
+physics:                     # byte-identical to pet45_5x5_mid_phys.yaml
+  use_contact: true
+  k_contact: 1000000.0
+  min_angle: -2.0            # DEGREES
+  cutoff_angle: 0.0
+  linearized_strains: true
+  incremental: true
+  num_load_steps: 40         # the compression term reads the PATH; 6 steps scores an artefact
+  solver_maxiter: 20000      # NOT 1500 — at the cap the design gradient is a function of the cap
+  solver_tol: 1.0e-5
+  backward_reg: 0.01
+  updated_lagrangian: false
+
+material:                    # inert under the surrogate (calibrate: false); kept for the ROM twin
+  k_stretch: 96763.84
+  k_shear:   51775.36
+  k_rot:         1.1983
+  density: 1.0
+
+boundary_conditions:
+  clamped_faces: [3]                            # ONE tile, bottom-MIDDLE (col 1, row 0)
+
+loads:                                          # CENTRED pull: clamp 3 -> load 5
+  - {face: 5, dof: 1, value: 1.0}   # ONE tile, top-MIDDLE (col 1, row 2); value owned by the calibrator
+
+target:                      # fallback; run_closed overrides it with the calibrated rectangle
+  type: rectangle
+  center: [1.5, 3.0]
+  radius: 3.3
+
+loss_weights:
+  # ARM 0 — no hinge-path term. The calibrator and the parity probe both run against this state, so
+  # the weights below stay zero here and are set only in the `_phys` / `_phys10` arms.
+  damage: 0.0
+  ood: 0.001
+  compression: 0.0
+  chamfer: 50.0
+  coverage: 0.0
+  regularization: 1.0e-4
+
+training:
+  num_epochs: 200
+  learning_rate: 0.01
+  optimizer: adam
+  lr_schedule: cosine
+  grad_clip: 1.0
+  geometric_loss_type: boundary_vertices
+
+visualization:
+  stage0: true
+  stage1: false              # Stage 1 is BYPASSED (validity_method: none)
+  stage2: true
+  energy_plot: false         # ROM-only decomposition; meaningless under the surrogate
+  animation: true
+  show_plots: false
+  save_outputs: true
+  show_external_forces: false
+  show_kinematic_blocks: true

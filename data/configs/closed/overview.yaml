@@ -1,0 +1,85 @@
+# Closed-state RDPQK kirigami — the PEDAGOGICAL example for the pipeline-overview figure.
+#
+# 5x5 tiles (odd grid -> a true CENTRE tile). Moment-actuated: clamp the centre tile and apply a
+# moment to a neighbour; the 1-DOF rotating-quad mechanism then blooms RADIALLY (symmetric opening
+# toward a circle) instead of the anisotropic fan of a clamp-row / pull-row setup.
+#
+# Tuned for a CLEAN, schematic look (real physics, real optimized design, legible rotating squares):
+#   * r_init 0.5 + strong z-regularization -> panels stay near-square (the iconic mechanism);
+#   * moderate moment -> legible void opening;
+#   * size-free circle_fit loss -> the target circle tracks the deployed bloom.
+#
+# Face index = col*N + row (N=5). Centre = col2,row2 = 12; neighbour above = 13.
+
+tessellation:
+  tessellation_type: closed_rdpqk
+  M: 5
+  N: 5
+  r_init: 0.4                     # r != 1/2 so the sliders (cut endpoints) are visibly offset
+  spacing: 1.0
+
+mapping:
+  map_type: closed_les
+
+optimization_weights:
+  validity_method: none
+
+physics:
+  use_contact: false
+  linearized_strains: true
+  incremental: true
+  num_load_steps: 20
+  solver_maxiter: 1000
+  solver_tol: 1.0e-5
+  updated_lagrangian: false
+
+material:
+  k_stretch: 1000.0
+  k_shear: 1000.0
+  k_rot: 0.5
+  density: 1.0
+
+boundary_conditions:
+  clamped_faces: [12]            # central tile
+
+loads:
+  - face: 13                     # a neighbour of the centre
+    dof: 2                       # moment (Mz, CCW +)
+    value: 22.0                  # large opening, but rounder boundary -> tighter circle fit
+
+target:
+  type: circle
+  center: [2.5, 2.5]
+  radius: 3.0
+
+loss_weights:
+  chamfer: 1.0
+  coverage: 0.5
+  stretching: 0.05
+  shearing: 0.05
+  bending: 0.001
+  contact: 0.0
+  material_area: 0.0
+  hinge_gap: 0.0
+  openness: 0.0
+  deformation: 0.0
+  void_closure: 0.0
+  closure_delta: 0.0
+  regularization: 6.0e-3         # cleaner near-uniform inner panels, still a visible a -> e change
+
+training:
+  num_epochs: 250
+  learning_rate: 0.02
+  optimizer: adam
+  lr_schedule: cosine
+  grad_clip: 1.0
+  geometric_loss_type: circle_fit
+
+visualization:
+  stage0: false
+  stage1: false
+  stage2: false
+  energy_plot: false
+  animation: false
+  show_plots: false
+  save_outputs: false

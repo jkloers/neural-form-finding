@@ -1,0 +1,288 @@
+# Closed-state RDPQK — 15 x 10, ROM, theta_deploy 70 deg — ARM "both": COMBINED arm: both path penalties, each at its OWN parity weight.
+#
+# PURPOSE. Two things no other config in this repo tests:
+#   1. SCALE — inverse design over 150 panels at once, against the 3x3 (9-panel) toy behind every
+#      result so far. 275 hinges is 23x the baseline's 12.
+#   2. LOAD-PATH CONTROL — one tile clamped, one tile pulled, so the load must walk a specific chain
+#      of hinges. The claim under test is that the DESIGN (closed_les z / boundary sliders) reroutes
+#      the internal forces, and that penalising hinge COMPRESSION opens the sheet further.
+#
+# Forked from `sheet_4x8ft_rom.yaml`. Everything not called out below is inherited verbatim, so the
+# springs, contact model and unit convention are the calibrated ones.
+#
+# ★★★ THE ONE DECISION THAT MATTERS: THE TILES ARE SQUARE (spacing_y = spacing = 1.0).
+# This is NOT cosmetic and it is NOT the 4ft x 8ft sheet's geometry. The mechanism law is
+#     lam(theta) = cos(psi - theta/2)/cos(psi),   full deployment at theta = 2*psi,  lam_max = 1/cos(psi)
+#     psi_x = atan2(spacing_y/2, spacing/2)       psi_y = atan2(spacing/2, spacing_y/2)
+# The standard sheet's 1 x 2 pitch gives psi_y = 26.57 deg, so its short axis LOCKS AT 53.1 deg and
+# no load can pass it (see the load sweep in sheet_4x8ft_rom.yaml). Asking that sheet for 90 deg is
+# impossible, and asking it for sqrt(2) is wrong by ~25%.
+#     SQUARE tiles give psi_x = psi_y = 45 deg  ->  full deployment at EXACTLY 90 deg,
+#     lam_max = sqrt(2) per direction  ->  AREA RATIO 2.0.
+# That is the classic rotating-squares result, and it is the only pitch that delivers the
+# "90 deg, sqrt(2)" target. The sheet is consequently 15 x 10 units (3:2 landscape), not 1:2.
+#
+# ⚠ 90 deg is the ASYMPTOTE, not a reachable set point. lam is maximal exactly at theta = 2*psi,
+# where the tile centres and the hinge become collinear and the mechanism locks; the load-angle
+# curve saturates onto it. Calibrate at a deployment angle BELOW 90 and let the target sit lower
+# still, or `calibrate_target.py` will chase an asymptote and demand an absurd load.
+#
+# ⚠ SHEET SIZE. `length_scale` (mm per pipeline unit) is held at 406.4 — the real panel pitch the
+# ROM springs were condensed at, with an RVE window r_win = 100 mm and w_lig = 18 mm. Shrinking the
+# panel to fit 15 tiles across 4 ft of stock would put the pitch at 81 mm, smaller than the
+# condensation window, and the spring constants below would no longer describe this hinge. So the
+# sheet grows instead: 15 x 406.4 = 6096 mm wide by 4064 mm tall. A 150-tile sheet with a
+# physically-condensed hinge is necessarily large; that is a real constraint, not an oversight.
+
+tessellation:
+  tessellation_type: closed_rdpqk
+  M: 15
+  N: 10
+  r_init: 0.45
+  spacing: 1.0
+  spacing_y: 1.0             # ★ SQUARE tiles -> psi = 45 deg -> 90 deg / sqrt(2). See banner.
+  sheet_width_mm: 6096.0     # = M * spacing * length_scale = 15 * 406.4
+  hinge_margin: 0.13
+
+  # ── SUPPORTS: a PIN and a ROLLER, which is one clamped tile with its rotation free ────────────
+  # Face id = col * N + row, verified against the built tessellation: face 0 = bottom-left,
+  # face 140 = bottom-right, face 9 = top-left, face 79 = top-centre, face 149 = top-right.
+  #
+  # `clamped_dofs: [0, 1]` pins x and y at the clamped tile but leaves its ROTATION FREE, as
+  # specified. On its own that is SINGULAR: the strain energy is corotated, so a rigid rotation of
+  # the whole assembly about the pin costs exactly zero, and a force-controlled solve has nothing to
+  # resist it. `project_single_tile_grip_family` measured this failure — the sheet SWUNG +11.2 deg
+  # bodily, tilting -12.1 deg against an axis-aligned target, and chamfer plateaued 8.9x worse,
+  # because no design can cancel a rigid-body rotation.
+  #
+  # The fix is the second support, and pin + roller is the textbook statically-determinate pair:
+  # rotating about face 9 would move face 0 in x, which the x-roller forbids. Both tiles keep their
+  # own rotational DOF, so "rotation allowed" holds where it was asked for.
+  #
+  # ★ Roller PLACEMENT follows the measured rule: the support-side tile FARTHEST from the clamp —
+  # the long lever arm restrains the swing while carrying least load. The clamp is face 9 (TOP-left),
+  # so the far LEFT-EDGE tile is face 0 (bottom-left), 9 rows away.
+  #
+  # ★ Roller DIRECTION is x here, and it is x for a GEOMETRIC reason. Face 0 sits directly below
+  # face 9 (offset purely in -y), so a small rigid rotation about the pin moves it along +-x. Only an
+  # x restraint has any lever on that mode; a y-roller there would be nearly parallel to the motion
+  # it is supposed to block. The x-roller also leaves face 0 free to slide in y, so the sheet still
+  # expands vertically.
+  # ⚠ The grip family recorded an x-roller as the WRONG restraint, but that verdict came from the
+  # 1x2 sheet's anisotropy (lam_x 1.48 vs lam_y 1.10) under a +y pull. SQUARE tiles remove the
+  # anisotropy (lam_x = lam_y) and this grip pulls +x, so neither half of that reasoning transfers.
+  # ★ MEASURED for THIS grip at 200 N (SWING = mean face rotation; a NET rotation is the rigid mode,
+  # the counter-rotating deployment mode averages ~0):
+  #     roller        theta_max  spread   SWING     deployed w x h
+  #     none            70.73     1.18   +36.54 deg   24.26 x 22.10
+  #     x_roller [0]    67.36     1.83    +3.79 deg   20.83 x 13.96   <- USE THIS
+  #     y_roller [0]    67.06     2.85   +46.49 deg   23.80 x 23.35   <- WORSE THAN NO ROLLER
+  # The y-roller does not merely underperform, it fails: nearly parallel to the motion it must
+  # block, it leaves the swing free and the sheet balloons. 10x separation, so this is not a
+  # close call.
+  clamped_dofs: [0, 1]       # PIN at the clamped tile: x, y fixed; rotation FREE
+  x_roller_faces: [0]        # ROLLER at the far LEFT corner: x only, slides in y. See below.
+
+  # ── TARGET, RECALIBRATED 2026-08-04 — theta_deploy 70 deg, target sized at 65 deg ────────────
+  #   PYTHONPATH=$(pwd) JAX_PLATFORMS=cpu conda run -n kgnn_mac python \
+  #     nff/scripts/diagnostics/calibrate_target.py --config <this file> \
+  #     --angle 70 --shape-angle 65 --steps 6
+  #
+  # ★ WHY 70 AND NOT 80. This is the 80-deg problem backed 10 deg away from the kinematic lock at
+  # theta = 2*psi = 90 deg, to test whether the lock is what limits load-path control. Near full
+  # deployment lam(theta) = cos(psi - theta/2)/cos(psi) is FLAT (dlam/dtheta -> 0), every hinge
+  # piles up against the same limit, and the SHAPE is very nearly forced by the kinematics -- so
+  # there may be little left for a design to trade. Dropping to 70 deg cuts the load by 2.2x
+  # (517.40 -> 234.99 N) and leaves lam at 1.3952/1.4030, i.e. AREA RATIO 1.958 against 2.005 at
+  # 80 deg. The area goal is therefore essentially intact; what changes is the distance to lock.
+  #
+  # ⚠ MEASURED, AND IT CUTS AGAINST THE OBVIOUS READING: hinge-angle spread is SMALLER here, not
+  # larger -- 1.89 deg at 70 deg against 2.38 deg at 80 deg. Spread is non-monotonic in load (21.7
+  # deg at 79 N, 2.06 at 264 N, 2.65 at 776 N), so backing off the lock does not buy a more
+  # differentiated ANGLE field. Any advantage this problem has must show up in the eta_a / eta_s
+  # strain field, which is what the compression and shear_path terms read. Do not justify this
+  # config by "more headroom" without measuring it.
+  #
+  # Measured at the calibrated load: flat 15.0000 x 10.0000 u -> deployed 20.9286 x 14.0304 u,
+  # theta max 70.03 / mean 68.94 / min 68.14. Pull-in the design must supply: +1.0% x, +1.6% y.
+  target_cx: 10.1905
+  target_cy: 3.1303
+  target_half_w: 10.3552
+  target_half_h: 6.9035
+
+mapping:
+  map_type: closed_les
+
+optimization_weights:
+  validity_method: none
+
+hinge_model:
+  # Under `type: rom`, build_surrogate_energy returns (None,)*5 before reading `checkpoint` /
+  # `material` / `thickness_mm`, so those three are INERT and describe a checkpoint, not this run.
+  #
+  # ★ WHY THE ROM AND NOT THE SURROGATE, at 90 deg. The PET FEA campaign's database ceiling is
+  # 45 deg and the v3 checkpoint's trust box tops out at 71.9 deg. A 90-deg deployment is therefore
+  # PURE EXTRAPOLATION for the surrogate — it would be reporting physics it never saw. Under the ROM
+  # the quantity this experiment measures (hinge axial compression, eta_a = a / w_lig) is a
+  # KINEMATIC fact read off the corotated local hinge frame, not a model prediction. That is the
+  # right instrument for this question. The ROM's known defect — a quadratic k_rot cannot saturate —
+  # is not load-bearing here, because nothing in this experiment claims a hinge FORCE magnitude.
+  type: rom
+  checkpoint: data/surrogates/hinge_surrogate_v2.pkl   # inert under rom
+  material: S235                                       # inert; the CHECKPOINT's material
+  thickness_mm: 0.5
+  w_lig_mm: 18.0             # LIVE: drives cut geometry, the DXF export, and eta_a = a / w_lig
+  calibrate: false
+  length_scale: 406.4        # mm per pipeline unit = the real panel pitch (held, see banner)
+  energy_scale: 2.4606e-3    # 1 / length_scale -> loads.value is newtons
+  barrier: 0.05
+  fail_line: 1.0
+  learn_w_lig: false         # ⚠ EXACTLY INERT under the ROM (the springs are blind to w_lig).
+                             # Set false rather than true so the config does not imply otherwise.
+
+physics:
+  # Contact block inherited verbatim from sheet_4x8ft_rom.yaml — tiles cannot interpenetrate.
+  # ⚠ min_angle / cutoff_angle are DEGREES (_parse_physics_config converts).
+  # This matters MORE here than at 45 deg: near full deployment the tiles swing toward collinearity
+  # and neighbours close on each other, so contact is what stops the sheet folding through itself.
+  use_contact: true
+  k_contact: 1000000.0
+  min_angle: -2.0            # DEGREES
+  cutoff_angle: 0.0
+  linearized_strains: true
+  incremental: true
+  # ★★ 40, NOT 6 — MEASURED 2026-08-03, and 6 would have corrupted the compression experiment.
+  # Incremental loading solves a SEQUENCE of equilibria, so the path BETWEEN them depends on the
+  # stepping. The endpoint does not care (theta_max = 80.00 deg at every resolution below) but the
+  # compression penalty reads the PATH, and it moves a lot:
+  #     steps      hard min eta_a   soft min   PENALTY value   % compressive samples
+  #        6          -0.1051       -0.0651      2.012e-04            34.8
+  #       12          -0.0703       -0.0340      8.340e-05            33.8
+  #       20          -0.0831       -0.0372      7.129e-05            33.1
+  #       40          -0.0603       -0.0290      5.158e-05            32.7
+  #       80          -0.0475       -0.0287      4.824e-05            32.7
+  # At 6 steps the penalty is 4.2x its converged value: the coarse solve OVERSHOOTS between
+  # equilibria and the term scores that artifact rather than the physics. It converges by 40
+  # (within 7% of 80). Cost is ~6.7x a 6-step run, which at ~0.4 s/epoch is affordable.
+  # ⚠ Note what is and is not robust: the EXTREME (min eta_a) is resolution-sensitive, the
+  # POPULATION measure (% of compressive samples) is stable to ~2 pts everywhere. Prefer the
+  # population measure when reporting, and never compare a min eta_a across step counts.
+  num_load_steps: 40
+  solver_maxiter: 20000      # ★★★ 20000, NOT 1500 — MEASURED 2026-08-03. At 1500 the Stage-2
+                             # L-BFGS stops on the ITERATION CAP, so the returned state is a
+                             # function of the iteration count and jumps discontinuously with
+                             # the design: d(compression)/d(design) disagreed with central FD
+                             # by 122x. At 20000 it agrees to 1% at 40 load steps and is stable
+                             # across solver_tol 1e-5..1e-9. Chamfer was insensitive (it is a
+                             # coarse geometric measure), which is why this hid for so long.
+  solver_tol: 1.0e-5
+  backward_reg: 1.0e-6       # MEASURED 2026-08-03: the ROM Hessian here is POSITIVE DEFINITE
+                             # (lam_min +17.9, cond 4.25e4), so no ridge is needed. At 0.01 the
+                             # ridge biased d(compression)/d(design) by 3.7%; at 1e-6 the
+                             # analytic gradient matches central FD to 0.1%. Do NOT copy this
+                             # value to a surrogate config -- plastic softening makes H
+                             # indefinite there and the ridge is load-bearing.
+  updated_lagrangian: false
+
+material:                    # LIVE under the ROM. Inherited unchanged — see sheet_4x8ft_rom.yaml
+                             # for the full derivation. PET t = 0.5 mm, w_lig = 18 mm, r_win = 100 mm:
+                             #   k_stretch 238.1 N/mm, k_shear 127.4 N/mm, k_rot 487 N.mm/rad
+                             # converted at length_scale = 406.4, energy_scale = 1/length_scale.
+  k_stretch: 96763.84        # = 238.1 N/mm
+  k_shear:   51775.36        # = 127.4 N/mm
+  k_rot:         1.1983      # = 487 N.mm/rad (the BUCKLED SECANT at 20 deg, not the elastic tangent)
+  density: 1.0
+
+boundary_conditions:
+  clamped_faces: [9]         # ONE tile on the LEFT edge (col 0, row 9 = top-left). Pinned x+y.
+
+loads:                       # ONE tile on the RIGHT edge (col 14, row 0 = bottom-right), pulled +x
+                             # against the left-edge supports. Clamp LEFT, pull RIGHT — so the load
+                             # must cross the full 15-tile span, and because the pin is top-left
+                             # while the load is bottom-right the path runs DIAGONALLY across the
+                             # sheet. That is the interesting case for isostatics: a straight
+                             # left-to-right pull would be too symmetric to reveal much.
+                             # ★ 234.99 N PUTS THE WORST HINGE AT 70.03 deg (calibrate_target.py
+                             # --angle 70 --shape-angle 65, bisecting on theta_MAX: the angle is a
+                             # ceiling the mechanism imposes, not a value every hinge must reach).
+                             # Measured: max 70.03, mean 68.94, min 68.14, spread 1.89 deg,
+                             # deployed 20.9286 x 14.0304 u -> lam 1.3952 / 1.4030 -> AREA 1.958.
+                             # ⚠ This is the 70-deg fork of the 80-deg problem, whose load was
+                             # 517.40 N. Same grip (clamp 9 / pull 140), same springs.
+                             #
+                             # ⚠ THE SHEET OPENS ALMOST UNIFORMLY DESPITE THE SINGLE-TILE GRIP —
+                             # spread 2.65 deg across 275 hinges, against the 12-20 deg spreads the
+                             # 3x3 grip family showed at 15-20 deg deployment. This is the kinematic
+                             # lock homogenising the sheet: near theta = 2*psi every hinge piles up
+                             # against the same limit, so a concentrated grip cannot keep a
+                             # concentrated ANGLE field. Measured spread vs load: 21.7 deg at 79 N,
+                             # 2.06 at 264 N, 2.65 at 776 N. It is the FORCE field, not the angle
+                             # field, that stays concentrated — which is why this experiment reads
+                             # load paths and not rotations.
+                             #
+                             # ⚠ 517 N through ONE 406 mm tile of 0.5 mm PET is far past what the
+                             # real material would survive. The ROM cannot see that: linear springs
+                             # do not yield (see the history note in sheet_4x8ft_rom.yaml). This is a
+                             # kinematics-and-load-path study, not a strength prediction, and no
+                             # claim here depends on the force magnitude being physical.
+  - {face: 140, dof: 0, value: 234.99}
+
+target:                      # fallback TargetConfig; run_closed overrides it with the rectangle above
+  type: rectangle
+  center: [10.1905, 3.1303]
+  radius: 10.3552
+
+loss_weights:
+  chamfer: 50.0
+  # coverage = 0. This sheet has few boundary vertices against a long perimeter, so the coverage
+  # term has a hard floor no design can beat and it actively fights precision (measured on the 3x3:
+  # boundary error 18.3 -> 29.5 mm, deployment angle dragged 45 -> 62.7 deg). At 0, chamfer_total IS
+  # the precision term and reads cleanly.
+  coverage: 0.0
+  # ── PATH PENALTIES: the two axes of the (eta_a, eta_s) hinge-strain plane ────────────────────
+  # Both are LIVE under the ROM via the kinematic probe (nff/closed/setup.py::build_rom_probe_fn) —
+  # eta_a = a/w_lig and eta_s = s/w_lig are read off the corotated hinge frame, so neither is a
+  # surrogate prediction. `compression` pushes the path cloud off eta_a < 0; `shear_path` squeezes
+  # it toward eta_s = 0. Both take a path extremum (soft, temperature scaled to each path's own
+  # range) and a LINEAR penalty.
+  #
+  # ⚠ `shear_path` is NOT `shearing`. `shearing` weights the global ligament shear ENERGY from the
+  # Stage-2 decomposition and is 0 here; `shear_path` weights the per-hinge kinematic |eta_s|.
+  #
+  # ★★ WEIGHTS ARE MEASURED GRADIENT PARITY WITH chamfer(w=50) AT THE UNTRAINED START, 2026-08-04,
+  # by full design-gradient NORM (not a single d/dz coordinate, which can be structurally near-zero
+  # and give a meaningless ratio). At theta_deploy 70 deg, 40 load steps:
+  #     chamfer      w=50   |grad| 5.281e+01
+  #     compression  w=1    |grad| 1.781e-03   ->  parity 2.9643e4
+  #     shear_path   w=1    |grad| 3.349e-03   ->  parity 1.5766e4
+  # The COMBINED arm carries each term at its own full parity rather than half each, so it applies
+  # exactly the pressure of the two single-term arms and any difference is INTERACTION, not a
+  # weight change. Measured correlation over hinges between compression and shear at the untrained
+  # design: -0.18 — weakly opposed, so the two are not obviously incompatible.
+  #
+  # ⚠ Do NOT carry these to the 80-deg config (its parity is compression 1.5696e4 / shear_path
+  # 8.3113e3) or to a surrogate config, whose raw magnitudes differ again.
+  #
+  # THIS FILE: COMBINED arm: both path penalties, each at its OWN parity weight.
+  compression: 29643
+  shear_path: 15766
+  regularization: 1.0e-4
+
+training:
+  num_epochs: 200
+  learning_rate: 0.01
+  optimizer: adam
+  lr_schedule: cosine
+  grad_clip: 1.0
+  geometric_loss_type: boundary_vertices
+
+visualization:
+  stage0: true
+  stage1: false              # Stage 1 is BYPASSED (validity_method: none) — the plot would be empty
+  stage2: true
+  energy_plot: true          # valid under the ROM (the decomposition IS the linear-spring one)
+  animation: true
+  show_plots: false
+  save_outputs: true
+  show_external_forces: false
+  show_kinematic_blocks: true

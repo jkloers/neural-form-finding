@@ -1,0 +1,151 @@
+# ── PET SHEET, 25 TILES (5x5), PET SURROGATE, theta_deploy 45 deg — SINGLE-TILE GRIP, RANDOM START. ARM: "NORMAL DEPLOYMENT".
+#
+# ★★ SINGLE-TILE GRIP, ported from the validated `pet_1t_A_c0p2.yaml` (3x3). ONE clamped tile at
+# the bottom, ONE pulled tile at the top, in the SAME COLUMN so the pull opens the sheet rather
+# than swinging it. The clamp fixes all three DOFs (`clamped_dofs` OMITTED): a one-tile y-only
+# clamp leaves x-translation and rotation free, i.e. singular.
+# ⚠ `y_roller_faces` IS LOAD-BEARING, do not remove. With a single clamped tile the assembly SWINGS
+# bodily about it -- measured on the 3x3 family, every face rotated the SAME way (mean +11.2 deg),
+# a net rotation rather than the counter-rotating deployment mode, tilting the sheet against an
+# axis-aligned target that no design can cancel. A y-only roller on the bottom tile FARTHEST from
+# the clamp removes it while carrying the least load.
+# ⚠ The force below is calibrated WITH the roller in place; the roller carries part of the load, so
+# it is much larger than a roller-free value would be. A single-tile grip also spans ~4.8x in force
+# and ~20x in hinge-angle spread against a distributed grip -- do NOT inherit either.
+#
+# ★ RANDOM START (`init_noise` / `init_seed`): the uniform-symmetric init on the distributed-grip
+# 5x5 produced one extreme outlier ligament (eta_a -0.88) that dominated every plot axis. A seeded
+# random start probes whether that outlier is a property of the problem or of the symmetric
+# attractor. Still valid by construction -- r = sigmoid(z) stays in (0,1).
+#
+# WHY THIS EXISTS. `pet45_baseline.yaml` is the same experiment on 9 tiles = 12 hinges, and 12 is
+# too few for the ENDPOINT view of the compression-shift figure: one point per hinge per design
+# means one hinge is worth 8.3 percentage points and the hex field reads as isolated specks. This
+# config is that experiment at 5x5 = 25 tiles = **40 hinges**, purely to give the population views
+# -- the endpoint field and the projected strain distributions -- enough members to be a
+# distribution rather than a scatter.
+#
+# ★★ THE SHEET GROWS; THE TILE DOES NOT. The obvious way to get more hinges — keep the 4 ft x 8 ft
+# stock and subdivide it — is WRONG here, and the reason is the surrogate, not the geometry. The
+# hinge condensation was run on an RVE half-disk of r_win = 100 mm, and that radius ENCODES THE
+# PANEL SIZE (see memory/project_rve_domain_radius.md): the window has to fit inside the tile that
+# surrounds the hinge. At the validated 406.4 mm pitch the half-pitch is 203 mm and a 100 mm window
+# sits comfortably inside. Subdividing 1219.2 mm across 5 columns gives a 244 mm pitch — half-pitch
+# 122 mm — so neighbouring hinges' windows would OVERLAP and the condensation would no longer be a
+# condensation. Every hinge-scale quantity here is therefore bit-identical to the 3x3 baseline
+# (pitch, w_lig, length_scale, energy_scale, checkpoint); only M, N and the sheet extent change.
+#   stock: 5 * 406.4 = 2032.0 mm x 4064.0 mm  (6.67 ft x 13.33 ft) — NOT 4 ft x 8 ft.
+# ⚠ Read this config for LOAD-PATH PHYSICS, not for manufacturability: the 4x8 ft result is
+# `pet45_baseline.yaml`, and nothing here supersedes it as the standard-stock reference.
+#
+# Everything else is inherited verbatim from pet45_baseline.yaml — see that file for the full
+# reasoning on barrier 0.5, backward_reg 0.01, num_load_steps 40, solver_maxiter 20000, coverage 0,
+# contact, and why 45 deg is a defensible deployment once the load is calibrated on the SURROGATE
+# rather than on the springs.
+#
+# CALIBRATED 2026-08-05:
+#   calibrate_target.py --config <this> --angle 45 --shape-angle 40 --steps 6
+#   -> PLACEHOLDER, recalibrated for the single-tile grip below. Old distributed value:  theta max 44.98, mean 44.37, min 43.27, spread 1.71 deg
+#   -> deployed 8.6195 x 11.2075 u, measured lam 1.7239 / 1.1208 (analytic 1.6892 / 1.1152)
+#   -> target sized at 40 deg: the design must PULL IN +5.8% x, +0.9% y -- the same order of
+#      headroom the 3x3 config carries (+6.0% / +1.2%), so the design problem is comparable.
+#   -> deployed 12.0160 x 15.6632 u, measured lam 1.7166 / 1.1188 (analytic 1.6892 / 1.1152)
+#   -> target sized at 40 deg: the design must PULL IN +5.4% x, +0.7% y -- the same order of
+#      headroom the 3x3 config carries (+6.0% / +1.2%), so the design problem is comparable.
+#   (both are rewritten in place by the tool's output — a config carrying the 3x3 numbers would
+#    deploy this sheet to the wrong angle, since the loaded row now has 7 tiles rather than 3.)
+
+tessellation:
+  tessellation_type: closed_rdpqk
+  M: 5
+  N: 5
+  r_init: 0.45
+  spacing: 1.0
+  spacing_y: 2.0             # elongated panels -> 1:2 sheet, same aspect as the 3x3 baseline
+  sheet_width_mm: 2032.0     # = 5 * 406.4, i.e. the SAME panel pitch as the 3x3 config
+  hinge_margin: 0.13
+  # clamped_dofs OMITTED -> all three DOFs (x, y, theta) fixed on the single clamped tile.
+  y_roller_faces: [20]       # ANTI-SWING: bottom-RIGHT tile (col 4, row 0), y only, slides in x.
+  init_noise: 0.25           # seeded random start; see the banner
+  init_seed: 7
+  # Face index = column * N + row, so column c's bottom tile is c*5 and its top tile is c*5 + 4.
+  target_cx: 3.3039
+  target_cy: 5.4695
+  target_half_w: 4.0593
+  target_half_h: 5.5535
+
+mapping:
+  map_type: closed_les
+
+optimization_weights:
+  validity_method: none
+
+hinge_model:
+  type: surrogate
+  checkpoint: data/surrogates/hinge_surrogate_pet_v3.pkl
+  material: PET
+  thickness_mm: 0.5
+  w_lig_mm: 18.0
+  calibrate: false
+  length_scale: 406.4        # mm per pipeline unit = the real panel pitch, UNCHANGED from 3x3
+  energy_scale: 2.4606e-3    # 1 / length_scale -> load values are newtons
+  barrier: 0.5
+  fail_line: 1.0
+  learn_w_lig: true
+
+physics:
+  use_contact: true
+  k_contact: 1000000.0
+  min_angle: -2.0            # DEGREES
+  cutoff_angle: 0.0
+  linearized_strains: true
+  incremental: true
+  num_load_steps: 40         # the compression term reads the PATH; 6 steps scores an artefact
+  solver_maxiter: 20000      # NOT 1500 — at the cap the design gradient is a function of the cap
+  solver_tol: 1.0e-5
+  backward_reg: 0.01
+  updated_lagrangian: false
+
+material:                    # inert under the surrogate (calibrate: false); kept for the ROM twin
+  k_stretch: 96763.84
+  k_shear:   51775.36
+  k_rot:         1.1983
+  density: 1.0
+
+boundary_conditions:
+  clamped_faces: [0]                            # ONE tile, bottom-left (col 0, row 0)
+
+loads:                                          # top edge (row 6) pulled +y
+  - {face: 4, dof: 1, value: 32.75}  # ONE tile, top-left (col 0, row 4)
+
+target:                      # fallback; run_closed overrides it with the rectangle above
+  type: rectangle
+  center: [2.5, 5.0]
+  radius: 5.5
+
+loss_weights:
+  damage: 0
+  ood: 0.001
+  compression: 0
+  chamfer: 50.0
+  coverage: 0.0
+  regularization: 1.0e-4
+
+training:
+  num_epochs: 200
+  learning_rate: 0.01
+  optimizer: adam
+  lr_schedule: cosine
+  grad_clip: 1.0
+  geometric_loss_type: boundary_vertices
+
+visualization:
+  stage0: true
+  stage1: false              # Stage 1 is BYPASSED (validity_method: none)
+  stage2: true
+  energy_plot: false         # ROM-only decomposition; meaningless under the surrogate
+  animation: true
+  show_plots: false
+  save_outputs: true
+  show_external_forces: false
+  show_kinematic_blocks: true

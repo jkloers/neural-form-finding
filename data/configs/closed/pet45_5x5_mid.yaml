@@ -1,0 +1,125 @@
+# ── 5x5 PET SHEET — CENTRED SINGLE-TILE GRIP. Clamp face 10 (bottom middle) -> pull face 14 (top middle). ──
+#
+# THE PROBLEM, as posed: ONE clamped tile in the middle of the bottom edge, pulled against the tile
+# directly opposite it in the middle of the top edge. Nothing else is restrained.
+#
+# Controlled variation of `pet45_5x5_1t_baseline.yaml` -- same sheet, same checkpoint, same barrier,
+# same loss weights, same seeded start (`init_noise` 0.25 / `init_seed` 7). Only the clamped tile,
+# the loaded tile and the force change. The supports ARE the problem statement.
+#
+# Face index = column * N + row on a 5x5, so face 10 = (col 2, row 0) and face 14 = (col 2, row 4).
+# Measured centroids on the flat sheet: face 10 at (2.555, 1.040), face 14 at (2.445, 8.960), with
+# the sheet spanning x 0.46..4.54 and y 0.91..9.09. Both sit on the vertical centreline.
+#
+# ★ WHY THIS GRIP IS BETTER POSED THAN THE OFF-CENTRE ONES. The single-tile family carries a
+# rigid-body swing: with one support and an off-centre pull the assembly rotates bodily about the
+# clamp instead of opening, which is why `pet45_5x5_1t_baseline.yaml` needs a y-roller and why the
+# bottom-left -> top-right DIAGONAL variant is unusable (measured: +27 deg of swing at 1 N before
+# the sheet had opened 1.1 deg, then a snap-through between 3.5 and 4.0 N to a near-uniform 70 deg
+# state far outside the checkpoint's angle range). Here the pull is COLLINEAR with the clamp about
+# the sheet's centreline, so there is no moment arm and no swing to suppress -- and therefore no
+# roller, no restraint spent on holding the sheet still, and no tilt to carry into the shape loss.
+#
+# The force is CALIBRATED FOR THIS GRIP, not inherited: a single-tile grip spans ~4.8x in force
+# across the family, and this one has no roller carrying part of the load.
+#
+tessellation:
+  tessellation_type: closed_rdpqk
+  M: 5
+  N: 5
+  r_init: 0.45
+  spacing: 1.0
+  spacing_y: 2.0             # elongated panels -> 1:2 sheet, same aspect as the 3x3 baseline
+  sheet_width_mm: 2032.0     # = 5 * 406.4, i.e. the SAME panel pitch as the 3x3 config
+  hinge_margin: 0.13
+  # clamped_dofs OMITTED -> all three DOFs (x, y, theta) fixed on the single clamped tile.
+  # ⚠ A PIN here (clamped_dofs: [0, 1]) would leave a NEUTRAL rotation mode: the layout is
+  # symmetric so the pull exerts no net moment, but `init_noise` breaks that symmetry and the
+  # zero-stiffness mode would then be fed by whatever asymmetry the random start happens to
+  # carry. A full clamp is the well-posed choice for a centred grip.
+  # NO y_roller_faces: the grip is COLLINEAR with the sheet's vertical centreline, so there is
+  # no moment arm to swing about -- unlike the off-centre grips this family is named for.
+  # Verified by the force ladder rather than assumed; see the banner.
+  init_noise: 0.25           # seeded random start; see the banner
+  init_seed: 7
+  # Face index = column * N + row, so column c's bottom tile is c*5 and its top tile is c*5 + 4.
+  target_cx: 3.3039
+  target_cy: 5.4695
+  target_half_w: 4.0593
+  target_half_h: 5.5535
+
+mapping:
+  map_type: closed_les
+
+optimization_weights:
+  validity_method: none
+
+hinge_model:
+  type: surrogate
+  checkpoint: data/surrogates/hinge_surrogate_pet_v3.pkl
+  material: PET
+  thickness_mm: 0.5
+  w_lig_mm: 18.0
+  calibrate: false
+  length_scale: 406.4        # mm per pipeline unit = the real panel pitch, UNCHANGED from 3x3
+  energy_scale: 2.4606e-3    # 1 / length_scale -> load values are newtons
+  barrier: 0.5
+  fail_line: 1.0
+  learn_w_lig: true
+
+physics:
+  use_contact: true
+  k_contact: 1000000.0
+  min_angle: -2.0            # DEGREES
+  cutoff_angle: 0.0
+  linearized_strains: true
+  incremental: true
+  num_load_steps: 40         # the compression term reads the PATH; 6 steps scores an artefact
+  solver_maxiter: 20000      # NOT 1500 — at the cap the design gradient is a function of the cap
+  solver_tol: 1.0e-5
+  backward_reg: 0.01
+  updated_lagrangian: false
+
+material:                    # inert under the surrogate (calibrate: false); kept for the ROM twin
+  k_stretch: 96763.84
+  k_shear:   51775.36
+  k_rot:         1.1983
+  density: 1.0
+
+boundary_conditions:
+  clamped_faces: [10]                           # ONE tile, bottom-MIDDLE (col 2, row 0)
+
+loads:                                          # CENTRED pull: clamp 10 -> load 14
+  - {face: 14, dof: 1, value: 1.0}   # ONE tile, top-MIDDLE (col 2, row 4)
+
+target:                      # fallback; run_closed overrides it with the rectangle above
+  type: rectangle
+  center: [2.5, 5.0]
+  radius: 5.5
+
+loss_weights:
+  damage: 0
+  ood: 0.001
+  compression: 0
+  chamfer: 50.0
+  coverage: 0.0
+  regularization: 1.0e-4
+
+training:
+  num_epochs: 200
+  learning_rate: 0.01
+  optimizer: adam
+  lr_schedule: cosine
+  grad_clip: 1.0
+  geometric_loss_type: boundary_vertices
+
+visualization:
+  stage0: true
+  stage1: false              # Stage 1 is BYPASSED (validity_method: none)
+  stage2: true
+  energy_plot: false         # ROM-only decomposition; meaningless under the surrogate
+  animation: true
+  show_plots: false
+  save_outputs: true
+  show_external_forces: false
+  show_kinematic_blocks: true

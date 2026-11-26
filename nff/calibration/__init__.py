@@ -11,13 +11,18 @@ Modules:
     stress_strain        stress-strain curves, E / yield / draw extraction, true-stress
     compliance           load-train compliance C [mm/N]: crosshead travel that is not specimen
     ladder               ink-ladder video strain + grip-based video/Bluehill time sync
+    photo_rectify        deployment photographs -> a metric mm frame via a taped fiducial
+    photo_geometry       posing known rigid tile polygons against the tape in a photograph
 """
 from nff.calibration import (
     bluehill_io,
     compliance,
     ladder,
+    photo_geometry,
+    photo_rectify,
     stress_strain,
     summary_io,
 )
 
-__all__ = ["bluehill_io", "compliance", "ladder", "stress_strain", "summary_io"]
+__all__ = ["bluehill_io", "compliance", "ladder", "photo_geometry", "photo_rectify",
+           "stress_strain", "summary_io"]

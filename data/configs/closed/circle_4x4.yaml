@@ -1,0 +1,83 @@
+# Closed-state RDPQK kirigami — physics-driven inverse design toward a circle.
+#
+# Flat 4×4 closed sheet (cut grid 5×5). Stage 0 = LES builder (design vars:
+# aspect ratios r + boundary sliders). Stage 1 bypassed. Stage 2 = physics:
+# clamp the bottom row, pull the top row up; the voids open. The deployed
+# boundary is matched to the target circle (chamfer) while training r + boundary.
+#
+# Face index = col * N + row  (row 0 = bottom). For N=4:
+#   bottom row (row 0): 0, 4, 8, 12
+#   top row    (row 3): 3, 7, 11, 15
+
+tessellation:
+  tessellation_type: closed_rdpqk
+  M: 4
+  N: 4
+  r_init: 0.45
+  spacing: 1.0
+
+mapping:
+  map_type: closed_les
+
+optimization_weights:
+  validity_method: none          # bypass Stage 1 (LES output is already valid)
+
+physics:
+  use_contact: false
+  linearized_strains: true
+  incremental: true
+  num_load_steps: 10
+  solver_maxiter: 1000
+  solver_tol: 1.0e-5
+  updated_lagrangian: false
+
+material:
+  k_stretch: 1000.0              # stiff ligaments — keep hinges connected
+  k_shear: 1000.0
+  k_rot: 0.5                     # soft rotation — easy deployment
+  density: 1.0
+
+boundary_conditions:
+  clamped_faces: [0, 4, 8, 12]   # whole bottom row
+
+loads:
+  - face: [3, 7, 11, 15]         # whole top row
+    dof: 1                       # +y (upward)
+    value: 25.0
+
+target:
+  type: circle
+  center: [2.0, 3.0]
+  radius: 2.5
+
+loss_weights:
+  chamfer: 1.0
+  coverage: 0.5
+  stretching: 0.01
+  shearing: 0.01
+  bending: 0.001
+  contact: 0.0
+  material_area: 0.0
+  hinge_gap: 0.0
+  openness: 0.0
+  deformation: 0.0
+  void_closure: 0.0
+  closure_delta: 0.0
+  regularization: 1.0e-4
+
+training:
+  num_epochs: 120
+  learning_rate: 0.02
+  optimizer: adam
+  lr_schedule: cosine
+  grad_clip: 1.0
+  geometric_loss_type: boundary_vertices
+
+visualization:
+  stage0: false
+  stage1: false
+  stage2: false
+  energy_plot: false
+  animation: false
+  show_plots: false
+  save_outputs: false

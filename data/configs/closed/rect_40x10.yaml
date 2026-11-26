@@ -1,0 +1,85 @@
+# Closed-state RDPQK 40 wide x 10 high — clamp a left face, pull a right face to
+# the right (+x), match a (bigger) rectangle.
+#
+# Face index = col*N + row (N=10). Left-middle face = col0,row5 = 5.
+# Right-middle face = col39,row5 = 39*10+5 = 395. Pull it in +x (dof 0).
+
+tessellation:
+  tessellation_type: closed_rdpqk
+  M: 40
+  N: 10
+  r_init: 0.45
+  spacing: 1.0
+  hinge_margin: 0.13
+  target_radius_scale: 1.4
+
+mapping:
+  map_type: closed_les
+
+optimization_weights:
+  validity_method: none
+
+physics:
+  use_contact: false
+  linearized_strains: true
+  incremental: true
+  num_load_steps: 15
+  solver_maxiter: 1500
+  solver_tol: 1.0e-5
+  updated_lagrangian: false
+
+material:
+  k_stretch: 1000.0
+  k_shear: 1000.0
+  k_rot: 0.5
+  density: 1.0
+
+boundary_conditions:
+  clamped_faces: [5]               # left-middle face
+
+loads:
+  - face: 395                      # right-middle face
+    dof: 0                         # +x (pull to the right)
+    value: 120.0
+
+target:
+  type: rectangle                  # match a rectangle (auto-fit to the deployed extent)
+  center: [20.0, 5.0]
+  radius: 10.0
+
+loss_weights:
+  chamfer: 1.0
+  coverage: 0.5
+  stretching: 0.1
+  shearing: 0.1
+  bending: 0.0
+  contact: 0.0
+  material_area: 0.0
+  hinge_gap: 0.0
+  openness: 0.0
+  deformation: 0.0
+  void_closure: 0.0
+  closure_delta: 0.0
+  regularization: 1.0e-4
+
+training:
+  num_epochs: 120
+  learning_rate: 0.02
+  optimizer: adam
+  lr_schedule: cosine
+  grad_clip: 1.0
+  geometric_loss_type: boundary_vertices
+
+visualization:
+  stage0: true
+  stage1: false
+  stage2: true
+  energy_plot: true
+  animation: false
+  show_plots: false
+  save_outputs: true
+  show_hinges: true
+  show_hinge_indices: false
+  show_face_indices: false
+  show_external_forces: true
+  show_kinematic_blocks: true

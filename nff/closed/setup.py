@@ -12,6 +12,7 @@ per-cut aspect ratios and the boundary-slider positions through the pipeline.
 
 from types import SimpleNamespace
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -53,6 +54,19 @@ def build_closed_initial_state(config):
     # still be y-rollered — different DOFs).
     for f in topo.get('y_roller_faces', []) or []:
         tessellation.set_face_dofs(int(f), [1])
+    # x-roller: the transpose — pin x ONLY (DOF 0) so the face slides freely in y.
+    # ⚠ For the standard 1x2 sheet under a +y pull this is the WRONG anti-swing support, and the
+    # intuition that it should be the right one is a trap worth recording. Both rollers kill the
+    # swing equally well (tilt -10.2 deg -> about -1 deg either way), but the restraint costs what it
+    # BLOCKS, and what it blocks is set by the mechanism's anisotropy, not by the load direction:
+    # this sheet expands lam_x = 1.48 against lam_y = 1.10, so x is the dominant deployment axis even
+    # though the pull is along y. Measured, single-tile grip c0->p8 at 6.49 N:
+    #     y-roller  theta_max 16.90 deg,  deployed width 3.741 u
+    #     x-roller  theta_max  5.81 deg,  deployed width 3.189 u   <- 3x less opening
+    # Use the y-roller for a y-pull on an x-dominant sheet. This option exists for the transposed
+    # case (an x-pull, or a sheet whose long expansion axis is y).
+    for f in topo.get('x_roller_faces', []) or []:
+        tessellation.set_face_dofs(int(f), [0])
 
     state = CentroidalState.from_tessellation(tessellation, target_cfg=config.target)
     return state, tessellation
@@ -125,6 +139,88 @@ def _alpha_sec_bond_order(hs, perm, coords):
     return frame['alpha'][perm], frame['sec_dir'][perm]
 
 
+def hinge_cut_axis(config, state, static_features, map_params):
+    """(n_hinges, 2) per-hinge axial (secondary-cut) unit direction, in Stage-2 BOND order.
+
+    The ligament's OWN axis, in the reference configuration. Public because a diagnostic needs the
+    same frame the physics uses: ``eta_a``/``eta_s`` are read off this frame, so anything that talks
+    about "axial vs shear" and does not use it is talking about something else.
+
+    ⚠ Available for a ROM run exactly as for a surrogate one -- see :func:`build_rom_probe_fn`. It is
+    a property of the CUT GEOMETRY, not a surrogate prediction. (Not to be confused with the
+    reference bond vector Stage 2 actually integrates, which for a closed sheet is the degenerate
+    ``l0_nom`` fallback along global x for every hinge.)
+
+    ⚠ The bond-order permutation must be matched on the UNIFORM ``r_init`` design, because ``state``
+    is always the uniform sheet; matching it on a trained (or randomly initialised) design aligns
+    positions that no longer correspond. The axis itself then comes from the ACTUAL design. This
+    mirrors ``build_surrogate_energy`` exactly -- deliberately, so both read the same frame.
+    """
+    import numpy as np
+    from nff.topology.hinge_descriptor import build_hinge_descriptor_structure
+
+    topo = config.topology
+    ru = float(topo.get('r_init', 0.45))
+    hs = build_hinge_descriptor_structure(int(topo['M']), int(topo['N']), ref_r=ru)
+
+    uniform = {'z': jnp.full_like(jnp.asarray(map_params['z']),
+                                  float(np.log(ru / (1.0 - ru)))),
+               'bnd_logits': jnp.zeros_like(jnp.asarray(map_params['bnd_logits']))}
+    perm = _bond_order_perm(state, hs, _flat_coords_from_design(static_features, uniform))
+    _, sec = _alpha_sec_bond_order(hs, perm, _flat_coords_from_design(static_features, map_params))
+
+    sec = np.asarray(sec, dtype=float)
+    return sec / np.maximum(np.linalg.norm(sec, axis=-1, keepdims=True), 1e-30)
+
+
+def build_rom_probe_fn(config, state, length_scale: float):
+    """Per-hinge, per-load-step KINEMATIC readings for a ROM run: ``eta_a``, ``eta_s``, ``theta``.
+
+    The linear-spring branch has no surrogate, so it used to have no probe at all and every
+    probe-backed loss term was skipped no matter what its weight said. But axial compression is not
+    a surrogate prediction -- ``eta_a = a / w_lig`` is a pure KINEMATIC fact read off the corotated
+    local hinge frame, so it is available to the ROM exactly as it is to the surrogate, and it is
+    the quantity a compression penalty needs.
+
+    Deliberately returns ONLY the three kinematic keys. ``D`` and ``ood`` are surrogate predictions
+    with no ROM counterpart; emitting zeros for them would silently report a damage-free sheet.
+    ``nff/training/loss.py`` skips a term whose key is absent, so the omission is what disables
+    ``damage`` and ``ood`` here.
+
+    Shares ``hinge_kinematics`` with the surrogate probe and the offline path extractor, so all
+    three reduce a deployment to the same coordinates.
+
+    Args:
+        length_scale: mm per pipeline length-unit; use ``hinge_paths.resolve_length_scale``.
+
+    Returns:
+        ``probe(face_fields, centroid_node_vectors, hinge_geometry, reference_vectors) -> dict`` with
+        ``eta_a``, ``eta_s``, ``theta``, each ``(n_steps, n_hinges)``.
+    """
+    import numpy as np
+    from nff.models.hinge_surrogate import hinge_kinematics, _unit
+    from nff.utils.linalg import gather_bond_node_dofs
+
+    pairs = jnp.asarray(np.asarray(state.bond_connectivity))
+
+    def probe(face_fields, centroid_node_vectors, hinge_geometry, reference_vectors=None):
+        geo = hinge_geometry
+        sec = _unit(geo.sec_dir)
+
+        def one_step(face_disp):
+            dofs1, dofs2 = gather_bond_node_dofs(face_disp, centroid_node_vectors, pairs)
+            a, sh, dRot = hinge_kinematics((dofs1, dofs2), sec, length_scale,
+                                           reference_vector=reference_vectors)
+            return dict(eta_a=a / geo.w_lig, eta_s=sh / geo.w_lig, theta=dRot)
+
+        # A single (n_faces, 3) state is promoted to a one-step history, so callers get the same
+        # (n_steps, n_hinges) shape whether they pass one frame or the whole scan output.
+        fields = face_fields if face_fields.ndim == 3 else face_fields[None]
+        return jax.vmap(one_step)(fields)
+
+    return probe
+
+
 def build_surrogate_energy(config, static_features, state, init_map_params):
     """Config-driven Stage-2 surrogate energy with DESIGN-TRACKED hinge geometry.
 
@@ -144,7 +240,39 @@ def build_surrogate_energy(config, static_features, state, init_map_params):
     hm = getattr(config, 'hinge_model', None)
     if hm is None or getattr(hm, 'type', 'rom') != 'surrogate':
         print("[hinge_model] ROM (linear-spring ligament energy)")
-        return None, None, None, None, None
+        # The ROM has no learned energy, but the KINEMATIC probe is still available and is what a
+        # compression penalty needs. Built only when a probe-backed weight actually asks for it, so
+        # every ROM config that does not use one keeps returning (None,)*5 and is bit-identical to
+        # before this branch existed.
+        lw = getattr(getattr(config, 'training', None), 'loss_weights', None)
+        # The guard runs BEFORE the early return below. Ordering it the other way made the raise
+        # unreachable for the exact config that needs it -- damage/ood non-zero with compression
+        # zero returned (None,)*5 first, the probe stayed None, and loss.py then skipped both terms
+        # in silence.
+        for surrogate_only in ('damage', 'ood'):
+            if lw is not None and float(getattr(lw, surrogate_only, 0.0)):
+                raise ValueError(
+                    f"loss_weights.{surrogate_only} is non-zero under hinge_model.type: rom, but "
+                    f"'{surrogate_only}' is a SURROGATE prediction with no linear-spring "
+                    "counterpart. It was silently ignored before the ROM probe existed. Set it to "
+                    "0, or switch to hinge_model.type: surrogate.")
+        # Every KINEMATIC term the ROM probe can serve. `compression` reads eta_a, `shear_path`
+        # reads eta_s; both come out of the same corotated hinge frame, so one probe covers them
+        # and any future sibling only has to be named here.
+        kinematic = {name: float(getattr(lw, name, 0.0)) for name in ('compression', 'shear_path')} \
+            if lw is not None else {}
+        if not any(kinematic.values()):
+            return None, None, None, None, None
+        from nff.closed.hinge_paths import build_hinge_geometry_fn, resolve_length_scale
+        ls = resolve_length_scale(config)
+        geometry_fn = build_hinge_geometry_fn(config, static_features, state)
+        probe_fn = build_rom_probe_fn(config, state, ls)
+        n_h = np.asarray(state.bond_connectivity).shape[0]
+        active = "  ".join(f"{k}={v:g}" for k, v in kinematic.items() if v)
+        print(f"[hinge_model]   + KINEMATIC probe  {n_h} hinges  length_scale={ls:.1f}mm/u  "
+              f"w_lig={float(getattr(hm, 'w_lig_mm', 5.0)) if hm is not None else 5.0:g}mm  "
+              f"-> {active}  (eta_a, eta_s = a/w_lig, s/w_lig; path extremum)")
+        return None, probe_fn, geometry_fn, None, None
 
     from nff.models.hinge_surrogate import (load_hinge_surrogate, build_hinge_bond_energy_fn,
                                             build_hinge_probe_fn, build_hinge_damage_fn,

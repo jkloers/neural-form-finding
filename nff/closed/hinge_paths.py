@@ -42,6 +42,27 @@ from nff.models.hinge_surrogate import HingeGeometry, hinge_kinematics, DOMAIN
 from nff.stages.physics.kinematics import face_to_node_kinematics_fn
 
 
+def resolve_length_scale(config) -> float:
+    """mm per pipeline length-unit, for configs that may not declare one.
+
+    A pure GEOMETRIC bridge, so it is meaningful on the ROM branch too, where the physics never
+    reads it but ``a``/``s`` still have to come out in mm for ``eta = a / w_lig`` to match the
+    oracle's dimensionless coordinates.
+
+    Order: ``hinge_model.length_scale``, else the panel pitch implied by ``sheet_width_mm`` and the
+    grid, else 1.0. Shared by the Stage-2 probe and the offline path extractor so the two cannot
+    report different ``eta_a`` for the same deployment.
+    """
+    hm = getattr(config, 'hinge_model', None)
+    ls = float(getattr(hm, 'length_scale', 0.0) or 0.0) if hm is not None else 0.0
+    if ls > 0.0:
+        return ls
+    sheet_w = float(config.topology.get('sheet_width_mm', 0.0) or 0.0)
+    if sheet_w > 0.0:
+        return sheet_w / (int(config.topology['M']) * float(config.topology.get('spacing', 1.0)))
+    return 1.0
+
+
 # ── hinge geometry, independent of the hinge model ────────────────────────────────
 
 def build_hinge_geometry_fn(config, static_features, state, w_lig_mm: Optional[float] = None):
@@ -234,9 +255,16 @@ def path_diagnostics(paths: HingePaths, domain: dict = DOMAIN) -> dict:
     hinge_min = ea_signed.min(axis=0)                          # (n_hinges,) most-compressive value
     compressive = ea_signed < -1e-6
 
-    ea, es, th = np.abs(eta[..., 0]), np.abs(eta[..., 1]), np.abs(eta[..., 2])
-    in_box = ((eta[..., 0] >= 0.0) & (eta[..., 0] <= domain['eta_a_max']) &
-              (es <= domain['eta_s_max']) & (th <= domain['theta_max']))
+    # Two-sided, and read from ``domain`` on EVERY axis. Hard-coding the lower bounds (``eta_a >= 0``
+    # was the tension-only legacy, ``|theta| <= theta_max`` the symmetric one) makes it impossible to
+    # score a checkpoint whose box is genuinely compressive: the PET net's box is
+    # eta_a in [-0.140, +0.233], and against a hard-coded 0 floor a perfectly in-domain compressive
+    # deployment reports as massively out-of-domain. ``.get`` keeps the legacy defaults for
+    # checkpoints that carry no lower bounds, so those score bit-identically.
+    es, th = np.abs(eta[..., 1]), eta[..., 2]
+    in_box = ((eta[..., 0] >= domain.get('eta_a_min', 0.0)) & (eta[..., 0] <= domain['eta_a_max']) &
+              (es <= domain['eta_s_max']) &
+              (th >= domain.get('theta_min', -domain['theta_max'])) & (th <= domain['theta_max']))
     return {
         'n_hinges': paths.n_hinges,
         'n_steps': paths.n_steps,
@@ -294,7 +322,8 @@ def fit_deployment_rays(paths: HingePaths, n_steps: int = 20, tag_prefix: str = 
 
 # ── persistence ───────────────────────────────────────────────────────────────────
 
-def save_paths(paths: HingePaths, out_path: str, meta: Optional[dict] = None) -> dict:
+def save_paths(paths: HingePaths, out_path: str, meta: Optional[dict] = None,
+               domain: dict = DOMAIN) -> dict:
     """Write ``<out_path>.npz`` (arrays) + ``<out_path>.json`` (diagnostics + meta).
 
     Mirrors the ``nff/rve/dataset.py`` convention (compressed npz beside a human-readable json) so
@@ -305,7 +334,7 @@ def save_paths(paths: HingePaths, out_path: str, meta: Optional[dict] = None) ->
     np.savez_compressed(out_path + ".npz", u=paths.u, eta=paths.eta, w_lig=paths.w_lig,
                         alpha=paths.alpha, load_fraction=paths.load_fraction,
                         length_scale=np.asarray(paths.length_scale))
-    summary = {'diagnostics': path_diagnostics(paths),
+    summary = {'diagnostics': path_diagnostics(paths, domain),
                'length_scale_mm_per_unit': paths.length_scale,
                'w_lig_mm': [float(x) for x in paths.w_lig],
                'alpha_deg': [float(np.degrees(a)) for a in paths.alpha],

@@ -1,0 +1,106 @@
+# Closed-state RDPQK — 6x6 (36 panels), single-tile PINCH + single-tile PULL, learned S235 surrogate.
+#
+# Boundary conditions (well-posed rigid-body removal):
+#   * LEFT tile (face 3, mid-left): PINCH -> pin x,y, free rotation  (clamped_dofs [0,1]).
+#   * RIGHT tile (face 33, mid-right): x-ROLLER pull -> pin y only, x free + x-force.
+#     The right y-pin removes the sheet's rigid rotation about the left pinch (a zero-energy mode);
+#     both tiles are on row j=3 so the pull is axial.
+# Face numbering: face(i,j) = i*N + j, i in [0,M-1] columns (x), j in [0,N-1] rows (y).
+# Retune `loads.value` to set the deployment magnitude.
+
+tessellation:
+  tessellation_type: closed_rdpqk
+  M: 6
+  N: 6
+  r_init: 0.45
+  spacing: 1.0
+  hinge_margin: 0.13
+  clamped_dofs: [0, 1]        # left tile: pinch (pin translation, free rotation)
+  y_roller_faces: [33]        # right tile: pin y only -> slides in x under the pull
+  target_scale_x: 1.08        # auto-fit target = untrained-deploy bbox x this (no fixed target_half_*)
+  target_scale_y: 1.08
+
+mapping:
+  map_type: closed_les
+
+optimization_weights:
+  validity_method: none
+
+hinge_model:
+  type: surrogate
+  checkpoint: data/surrogates/hinge_surrogate_v2.pkl   # merged-dataset net (S235, w_lig[1,20], D-label)
+  material: S235
+  thickness_mm: 1.5
+  w_lig_mm: 5.0
+  calibrate: true
+  barrier: 0.05
+  # MIGRATED 2026-07-28: the w_fail/m_safe break barrier is gone (it was a second damage
+  # criterion). The single term is w_damage * mean(D^2), D = <PEEQ>_lig/eps_f. The scales are
+  # NOT equivalent -- the old barrier only bit above D=1, this bites everywhere. This config ran
+  # with w_fail: 1.0, so it DID rely on the barrier; re-tune w_damage before trusting a rerun.
+  w_damage: 1.0
+  w_ood: 1.0e-3
+  learn_w_lig: true
+
+physics:
+  use_contact: false
+  linearized_strains: true
+  incremental: true
+  num_load_steps: 6
+  solver_maxiter: 1500
+  solver_tol: 1.0e-5
+  backward_reg: 0.01
+  updated_lagrangian: false
+
+material:
+  k_stretch: 1000.0
+  k_shear: 1000.0
+  k_rot: 0.5
+  density: 1.0
+
+boundary_conditions:
+  clamped_faces: [3]          # left tile pinch
+
+loads:
+  - {face: 33, dof: 0, value: 0.3}    # right tile pulled +x (gentle: 11/60 grip fractures, reducible;
+                                       # a single-tile grip concentrates strain, so it snaps fully open
+                                       # (all 60 fracture) past F~0.8 -- distributed edge pull deploys cleaner)
+
+target:
+  type: rectangle
+  center: [3.0, 3.0]
+  radius: 6.0
+
+loss_weights:
+  chamfer: 50.0
+  coverage: 1.0
+  stretching: 0.0
+  shearing: 0.0
+  bending: 0.0
+  contact: 0.0
+  material_area: 0.0
+  hinge_gap: 0.0
+  openness: 0.0
+  deformation: 0.0
+  void_closure: 0.0
+  closure_delta: 0.0
+  regularization: 1.0e-4
+
+training:
+  num_epochs: 60
+  learning_rate: 0.01
+  optimizer: adam
+  lr_schedule: cosine
+  grad_clip: 1.0
+  geometric_loss_type: boundary_vertices
+
+visualization:
+  stage0: false
+  stage1: false
+  stage2: true
+  energy_plot: false
+  animation: false
+  show_plots: false
+  save_outputs: true
+  show_external_forces: true
+  show_kinematic_blocks: true

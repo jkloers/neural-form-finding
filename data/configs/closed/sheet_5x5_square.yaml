@@ -1,0 +1,169 @@
+# Closed-state RDPQK — SQUARE 5x5 sheet, 25 panels, 40 hinges. ROM at a CALIBRATED 45 deg.
+#
+# PURPOSE: the VALIDITY LADDER figure. Same task for every rung -- match the target, subject to the
+# flat sheet being a perfect closed cut pattern -- with only the validity mechanism varying.
+#
+# ── WHY SQUARE ────────────────────────────────────────────────────────────────────────────────
+# spacing_y = spacing = 1.0 makes the tile square, so psi_x = psi_y = 45 deg and the two axes
+# deploy IDENTICALLY: lam_max = sqrt(2) at theta = 90 deg, the classic rotating-squares result.
+# The 3x3 parent has spacing_y = 2.0, giving psi_x = 63.43 and psi_y = 26.57 -- the short axis
+# locks at 53.1 deg while the long one is still opening, which is correct but needs a paragraph to
+# explain. A square sheet needs none, and 45 deg is exactly half of full deployment.
+#
+# ── PROVENANCE ────────────────────────────────────────────────────────────────────────────────
+# Derived from the CURRENT BASELINE `sheet_4x8ft_pet_28deg.yaml`, NOT from the mis-posed 45 deg
+# parent `sheet_4x8ft_rom.yaml`. Two things change, and only two:
+#
+#   1. `hinge_model.type: surrogate -> rom`.
+#   2. `loads.value` RE-BISECTED for the ROM. The baseline's 2.50 N/tile is a SURROGATE
+#      calibration; the ROM is a different hinge law and would badly under-deploy at that value.
+#
+# ★ THE TARGET RECTANGLE CARRIES OVER UNCHANGED, and this is not laziness. The target is derived
+# from the mechanism kinematics, `lam(theta) = cos(psi - theta/2)/cos(psi)` with
+# psi_x = 63.43 deg, psi_y = 26.57 deg — pure rigid-tile geometry, INDEPENDENT OF THE HINGE MODEL.
+# Swapping the hinge law changes the load needed to reach 28 deg; it does not change the shape a
+# 28 deg deployment has. Re-derive with `diagnostics/calibrate_target.py --angle 28` if the
+# TESSELLATION changes.
+#
+# ── WHY THE ROM, AND NOT THE SURROGATE — two independent reasons ──────────────────────────────
+#   1. STRUCTURAL. `build_surrogate_energy` derives per-hinge `alpha`/`sec_dir` from
+#      `map_params['z']`/`['bnd_logits']` (nff/closed/setup.py:100-105), so a free-vertex chart has
+#      no surrogate path at all — arms B-E could not run it.
+#   2. DISTRIBUTIONAL. A torn or self-intersecting sheet is far outside the surrogate's training
+#      distribution, so its energy would be meaningless even if it could be wired.
+# The ROM is the physics HELD FIXED while only the chart varies: a control, never a yardstick.
+# Nothing here claims the ROM is right about hinge mechanics, and no conclusion depends on it —
+# a chart that tears the sheet is invalid under any hinge model.
+#
+# ⚠ NO DAMAGE UNDER THE ROM. `build_surrogate_energy` returns `(None,)*5`, so `loss_weights.damage`,
+# `.ood`, `.compression`, `fail_line` and `learn_w_lig` are ALL INERT. They are written as 0/false
+# here so the file does not imply otherwise.
+
+tessellation:
+  tessellation_type: closed_rdpqk
+  M: 5
+  N: 5
+  r_init: 0.45
+  spacing: 1.0
+  spacing_y: 1.0             # SQUARE pitch -> psi_x = psi_y = 45 deg, isotropic deployment
+  sheet_width_mm: 2032.0     # 5 panels x the 406.4 mm calibrated pitch. NOT 4 ft stock: the
+                             # pitch is fixed by the spring calibration (material: below), so a
+                             # 5x5 sheet is 2032 mm square. Changing length_scale would
+                             # invalidate k_stretch/k_shear/k_rot, which were converted with it.
+  hinge_margin: 0.13
+  clamped_dofs: [1]          # bottom edge: y only (rollers in x, free rotation)
+  y_pin_faces: [10]          # centre bottom tile also pinned in x -> no rigid translation/rotation
+  # FIXED target at theta = 28 deg. Never auto-fit: an auto-fitted target depends on the untrained
+  # deploy and therefore on the CHART, which would confound the one variable the ablation isolates.
+  # ★ DERIVED, not copied. `calibrate_target.py --angle 28` emits the ANALYTIC rectangle
+  # half_w = lam_x * 3.0/2 = 1.4541 * 1.5 = 2.1812,  half_h = lam_y * 6.0/2 = 1.0913 * 3 = 3.2738.
+  # ⚠ These differ from the surrogate baseline's 2.1138 / 3.2535, which carried ~3% EXTRA pull-in.
+  # That was right there — the surrogate can contract the sheet by shrinking `w_lig` — but the ROM
+  # is EXACTLY BLIND to w_lig, so that lever does not exist here and a tighter target would only be
+  # unreachable. Pull-in the design must supply at this size: +2.1% in x, +0.5% in y.
+  # ★ DERIVED by `calibrate_target.py --angle 45` on THIS square sheet. Isotropic, as the geometry
+  # requires: analytic lam = 1.3066 on BOTH axes at 45 deg (half of full deployment, 2*psi = 90),
+  # measured 1.3104 / 1.3053 -- agreement to 0.3%, the excess being tile corners swinging outside
+  # the pitch. half_w = half_h exactly, which the 1:2 parent could never give.
+  target_cx: 2.5157
+  target_cy: 3.0881
+  target_half_w: 3.2664
+  target_half_h: 3.2664
+
+mapping:
+  map_type: closed_les       # arm A. Arms B-E override this to `direct_vertices` in code.
+
+optimization_weights:
+  # Arm A is valid by construction, so Stage 1 is BYPASSED — correct for the closed chart, and NOT
+  # transferable to a free-vertex chart. ⚠ Carrying this setting over to arms B/C is exactly the
+  # error that produced the retracted "38x by tearing" result: it removed the chart AND Stage 1 in
+  # one step. Arms D/E override this to `alternating_projection` via `arm_validity_cfg`.
+  validity_method: none
+
+hinge_model:
+  type: rom                  # the linear-spring ligament; `material:` below is LIVE
+  w_lig_mm: 18.0             # physical standard; drives the cut geometry and the DXF export
+  length_scale: 406.4        # mm per pipeline unit = the real panel pitch
+  energy_scale: 2.4606e-3    # 1 / length_scale -> `loads.value` is in newtons
+  calibrate: false
+  learn_w_lig: false         # inert under the ROM (which is exactly blind to w_lig); off for clarity
+
+physics:
+  # Tiles cannot interpenetrate. ⚠ `min_angle` / `cutoff_angle` are DEGREES — `_parse_physics_config`
+  # multiplies by pi/180, so writing radians double-converts.
+  # ⚠ LIMITATION, load-bearing for this study: the barrier acts on BONDED pairs only. Two tiles not
+  # hinged to each other can still pass through, and the angle model cannot see it. That is why the
+  # ablation keeps an INDEPENDENT geometric overlap audit rather than trusting the contact model.
+  use_contact: true
+  k_contact: 1000000.0
+  min_angle: -2.0            # DEGREES; asymptote just below the closed state
+  cutoff_angle: 0.0          # barrier is exactly zero for every OPEN hinge
+  linearized_strains: true
+  incremental: true
+  num_load_steps: 6
+  solver_maxiter: 1500
+  solver_tol: 1.0e-5
+  backward_reg: 0.01         # ridge on the IFT adjoint
+  updated_lagrangian: false
+
+material:                    # LIVE under the ROM. Physical values from the PET hinge campaign,
+                             # t = 0.5 mm, w_lig = 18 mm, RVE half-disk r_win = 100 mm:
+                             #   k_stretch 238.1 N/mm, k_shear 127.4 N/mm, k_rot 487 N.mm/rad
+                             # converted to pipeline units by x length_scale (see the parent config).
+                             # ⚠ k_rot is the BUCKLED SECANT at 20 deg, not the elastic tangent:
+                             # 0.5 mm PET buckles immediately and the moment SATURATES.
+  k_stretch: 96763.84        # = 238.1 N/mm
+  k_shear:   51775.36        # = 127.4 N/mm
+  k_rot:         1.1983      # = 487 N.mm/rad
+  density: 1.0
+
+boundary_conditions:
+  clamped_faces: [0, 5, 10, 15, 20]   # bottom edge (j = 0) of the 5x5
+
+loads:                       # top edge (j = 2) pulled +y, distributed against the clamped bottom.
+  # ★ CALIBRATED 2026-08-04 by `calibrate_target.py --angle 45 --criterion max` on the square sheet.
+  # Measured untrained: theta max 45.03, mean 41.42, min 38.63, spread 6.41 deg.
+  # Measured untrained at this load: theta max 27.98, mean 27.39, min 25.72, spread 2.25 deg — the
+  # whole sheet opens together, so the max/mean criterion is nearly moot here (it is NOT moot for a
+  # single-tile grip). Do NOT hand-pick this value; re-bisect if the springs or tessellation change.
+  - {face: 4,  dof: 1, value: 14.51}
+  - {face: 9,  dof: 1, value: 14.51}
+  - {face: 14, dof: 1, value: 14.51}
+  - {face: 19, dof: 1, value: 14.51}
+  - {face: 24, dof: 1, value: 14.51}
+
+target:                      # fallback TargetConfig; the driver builds its own from the block above
+  type: rectangle
+  center: [2.5157, 3.0881]
+  radius: 3.2664
+
+loss_weights:
+  chamfer: 50.0
+  # coverage = 0: with only 12 boundary vertices against a 23.5-unit perimeter the coverage term has
+  # a hard floor no design can beat, and it actively fights precision. See the parent config.
+  coverage: 0.0
+  regularization: 1.0e-4     # ⚠ FORCED TO 0 by `arm_training_cfg` — it is sum(theta^2) over the RAW
+                             # parameter tree, so it means different things in different charts and
+                             # leaving it on would invalidate the ablation.
+  damage: 0.0                # inert under the ROM (no damage model)
+  ood: 0.0                   # inert under the ROM
+  compression: 0.0           # inert under the ROM (no probe => term skipped whatever the weight)
+
+training:
+  num_epochs: 200
+  learning_rate: 0.01
+  optimizer: adam
+  lr_schedule: cosine
+  grad_clip: 1.0
+  geometric_loss_type: boundary_vertices
+
+visualization:
+  stage0: true
+  stage1: false              # bypassed for arm A (validity_method: none) — the plot is empty
+  stage2: true
+  energy_plot: true          # valid here: this IS a ROM run, so the spring decomposition applies
+  animation: true
+  show_plots: false
+  save_outputs: true
+  show_external_forces: false
+  show_kinematic_blocks: true

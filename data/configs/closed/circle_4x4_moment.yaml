@@ -1,0 +1,82 @@
+# Closed-state RDPQK kirigami — moment-actuated deployment.
+#
+# Clamp ONE central face and apply a moment (dof 2) to one of its neighbors.
+# The tessellation is a 1-DOF rotating-quad mechanism, so a moment on a single
+# panel drives the global opening (voids expand around the clamped center).
+#
+# Face index = col * N + row  (row 0 = bottom). For N=4 the four central faces
+# are 5 (col1,row1), 6 (col1,row2), 9 (col2,row1), 10 (col2,row2).
+# Neighbors of face 5: 1 (left), 9 (right), 4 (below), 6 (above).
+
+tessellation:
+  tessellation_type: closed_rdpqk
+  M: 4
+  N: 4
+  r_init: 0.45
+  spacing: 1.0
+
+mapping:
+  map_type: closed_les
+
+optimization_weights:
+  validity_method: none
+
+physics:
+  use_contact: false
+  linearized_strains: true
+  incremental: true
+  num_load_steps: 12
+  solver_maxiter: 1000
+  solver_tol: 1.0e-5
+  updated_lagrangian: false
+
+material:
+  k_stretch: 1000.0
+  k_shear: 1000.0
+  k_rot: 0.5
+  density: 1.0
+
+boundary_conditions:
+  clamped_faces: [5]             # one central face
+
+loads:
+  - face: 6                      # a neighbor of face 5 (directly above)
+    dof: 2                       # moment (Mz, CCW +)
+    value: 2.0
+
+target:
+  type: circle
+  center: [2.0, 2.0]
+  radius: 2.5
+
+loss_weights:
+  chamfer: 1.0
+  coverage: 0.5
+  stretching: 0.01
+  shearing: 0.01
+  bending: 0.001
+  contact: 0.0
+  material_area: 0.0
+  hinge_gap: 0.0
+  openness: 0.0
+  deformation: 0.0
+  void_closure: 0.0
+  closure_delta: 0.0
+  regularization: 1.0e-4
+
+training:
+  num_epochs: 120
+  learning_rate: 0.02
+  optimizer: adam
+  lr_schedule: cosine
+  grad_clip: 1.0
+  geometric_loss_type: boundary_vertices
+
+visualization:
+  stage0: false
+  stage1: false
+  stage2: false
+  energy_plot: false
+  animation: false
+  show_plots: false
+  save_outputs: false
