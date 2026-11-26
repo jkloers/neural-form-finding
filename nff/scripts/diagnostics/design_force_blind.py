@@ -41,6 +41,7 @@ from nff.closed.setup import init_closed_les_params                         # no
 from nff.closed.shield_design import ShieldDesignConfig, init_params, optimize_shield  # noqa: E402
 from nff.closed.shield_kinematics import build_deploy_plan, pin_residual    # noqa: E402
 from nff.config.experiment import load_and_parse_config                     # noqa: E402
+from nff.config.targets import get_target_points                            # noqa: E402
 from nff.scripts.diagnostics.score_designs import target_cloud              # noqa: E402
 from nff.topology.closed_builder_jax import (build_boundary_edges,          # noqa: E402
                                              build_deploy_structure)
@@ -77,18 +78,20 @@ def build_design_config(config, **overrides) -> ShieldDesignConfig:
 
 
 def unit_target(config):
-    """The shared target rectangle as ``(target_unit, fixed_scale)``.
+    """The shared target as ``(target_unit, fixed_scale, spec)``.
 
-    ``build_loss`` forms ``target_unit * scale``, so normalising by the rectangle's height makes
-    ``fixed_scale`` the target height and reproduces the rectangle exactly.
+    ``build_loss`` forms ``target_unit * scale``, so normalising by the outline's y-extent makes
+    ``fixed_scale`` the target height and reproduces the target exactly. The extent is measured off
+    the sampled cloud rather than computed from the shape's parameters, so it holds for any target
+    ``get_target_points`` can draw.
     """
-    cloud, (cx, cy, hw, hh, rot) = target_cloud(config)
-    if rot:
-        raise SystemExit(f"target_rot_deg is {rot:+.2f} but this tool normalises by the rectangle's "
-                         "y-extent, which is not its height once the rectangle is rotated. Rework "
-                         "the normalisation before using a rotated target here.")
-    height = 2.0 * hh
-    return np.asarray(cloud) / height, float(height), (cx, cy, hw, hh)
+    cloud, spec = target_cloud(config)
+    if spec['type'] == 'rectangle' and spec['rot_deg']:
+        raise SystemExit(f"target_rot_deg is {spec['rot_deg']:+.2f} but this tool normalises by "
+                         "the rectangle's y-extent, which is not its height once the rectangle is "
+                         "rotated. Rework the normalisation before using a rotated target here.")
+    height = float(cloud[:, 1].max() - cloud[:, 1].min())
+    return np.asarray(cloud) / height, height, spec
 
 
 def start_params(cfg: ShieldDesignConfig, n_logits: int, seed: int, r_init: float,
@@ -113,7 +116,7 @@ def to_closed_les(result) -> dict:
             'bnd_logits': np.asarray(result['params']['bnd_logits'], dtype=float)}
 
 
-def kinematic_report(cfg: ShieldDesignConfig, result, length_scale: float, rect) -> dict:
+def kinematic_report(cfg: ShieldDesignConfig, result, length_scale: float, spec) -> dict:
     """What the geometry PROMISES: the closed-form deployment this design was chosen for."""
     plan = build_deploy_plan(build_deploy_structure(cfg.M, cfg.N), cfg.M, cfg.N,
                              cfg.spacing, cfg.spacing_y)
@@ -122,14 +125,20 @@ def kinematic_report(cfg: ShieldDesignConfig, result, length_scale: float, rect)
     lo, hi = outline.min(axis=0), outline.max(axis=0)
     residual = np.asarray(pin_residual(plan, result['forward']['deployed']))
     psi = float(result['forward']['psi'])
-    _, _, hw, hh = rect
+    if spec['type'] == 'rectangle':
+        target_w, target_h = 2 * spec['half_w'], 2 * spec['half_h']
+    else:                                   # any radial target: the ripple sets its own extents
+        tc = get_target_points(spec, n_points=480)
+        target_w = float(tc[:, 0].max() - tc[:, 0].min())
+        target_h = float(tc[:, 1].max() - tc[:, 1].min())
     return {
         'psi_deg': float(np.degrees(abs(psi))),
         'theta_deg': float(np.degrees(2.0 * abs(psi))),   # hinge angle = 2 psi
         'bbox_w': float(hi[0] - lo[0]), 'bbox_h': float(hi[1] - lo[1]),
         'bbox_w_mm': float((hi[0] - lo[0]) * length_scale),
         'bbox_h_mm': float((hi[1] - lo[1]) * length_scale),
-        'target_w_mm': float(2 * hw * length_scale), 'target_h_mm': float(2 * hh * length_scale),
+        'target_w_mm': float(target_w * length_scale),
+        'target_h_mm': float(target_h * length_scale),
         'precision_mm': float(result['metrics']['precision_mm'] * length_scale),
         'recall_mm': float(result['metrics']['recall_mm'] * length_scale),
         'worst_recall_mm': float(result['metrics']['worst_recall_mm'] * length_scale),
@@ -153,12 +162,20 @@ def main():
     ap.add_argument("--z-sigma", type=float, default=0.05)
     ap.add_argument("--theta-start-deg", type=float, default=70.0,
                     help="hinge angle the opening latent starts at (psi = theta / 2)")
+    ap.add_argument("--w-quality", type=float, default=0.0,
+                    help="one-sided quad-regularity floor. 0 is the paper's force-blind control; "
+                         "~5 keeps tiles off slivers so the control is also manufacturable")
+    ap.add_argument("--q-min", type=float, default=0.30)
+    ap.add_argument("--w-uniform", type=float, default=0.0,
+                    help="one-sided tile-area floor, as a fraction of the mean")
+    ap.add_argument("--area-frac-min", type=float, default=0.25)
     ap.add_argument("--out", default="data/outputs/kinematic_designs/figmat_geom")
     args = ap.parse_args()
 
     config = load_and_parse_config(args.config)
-    cfg = build_design_config(config)
-    tgt_unit, scale, rect = unit_target(config)
+    cfg = build_design_config(config, w_quality=args.w_quality, q_min=args.q_min,
+                              w_uniform=args.w_uniform, area_frac_min=args.area_frac_min)
+    tgt_unit, scale, spec = unit_target(config)
     cfg = ShieldDesignConfig(**{**cfg.__dict__, 'fixed_scale': scale})
 
     length_scale = resolve_length_scale(config)                   # mm per pipeline unit
@@ -169,8 +186,7 @@ def main():
     psi0 = np.radians(args.theta_start_deg) / 2.0
 
     reference, _ = init_closed_les_params(config)                 # shapes the transfer must match
-    print(f"[force-blind] sheet {cfg.M}x{cfg.N}  target {2*rect[2]:.4f} x {2*rect[3]:.4f} u  "
-          f"({2*rect[2]*length_scale:.0f} x {2*rect[3]*length_scale:.0f} mm)  "
+    print(f"[force-blind] sheet {cfg.M}x{cfg.N}  target {spec['type']}  "
           f"r_init {r_init}  psi_max {np.degrees(cfg.psi_max):.1f} deg", flush=True)
 
     runs = []
@@ -188,7 +204,7 @@ def main():
             raise SystemExit(f"design cannot enter the physics pipeline: {key} has shape {got}, "
                              f"closed_les expects {np.shape(ref)}")
 
-    report = kinematic_report(cfg, best, length_scale, rect)
+    report = kinematic_report(cfg, best, length_scale, spec)
     if report['pin_residual_max'] > 1e-8:
         raise SystemExit(f"the closed-form deployment does not close its pins "
                          f"(max residual {report['pin_residual_max']:.3e}); the design is not a "

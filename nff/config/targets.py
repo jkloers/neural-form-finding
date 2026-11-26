@@ -22,6 +22,22 @@ def get_target_points(target_params=None, n_points=200):
     if shape_type == 'circle':
         return np.column_stack([cx + scale*np.cos(t), cy + scale*np.sin(t)])
 
+    elif shape_type == 'ume':
+        # Plum-blossom outline r(t) = R (1 + eps cos(n t)): the circle carrying an n-fold ripple,
+        # so `radius` keeps its meaning as the mean radius and `eps` is the only new quantity.
+        #
+        # ★ eps CROSSES A STATED GEOMETRIC BOUNDARY, which is why the shape is parameterised this
+        # way rather than traced. A polar curve is convex where r^2 + 2 r'^2 - r r'' > 0; at the
+        # worst point (cos n t = -1) that reduces to 1 - (n^2 + 2) eps + (n^2 + 1) eps^2 > 0.
+        # That quadratic always has eps = 1 as a root, so the other is 1 / (n^2 + 1) and the
+        # outline is STRICTLY CONVEX iff eps < 1 / (n^2 + 1): 1/26 = 0.038462 at n = 5, 1/17 at
+        # n = 4, 1/65 at n = 8. A target above the threshold is re-entrant, and a rigid-panel
+        # mechanism has to work to reach one.
+        n_petals = int(target_params.get('petals', 5))
+        eps = float(target_params.get('eps', 0.0))
+        r = scale * (1.0 + eps * np.cos(n_petals * t))
+        return np.column_stack([cx + r*np.cos(t), cy + r*np.sin(t)])
+
     elif shape_type == 'rectangle':
         # Rectangle perimeter; half-extents half_w / half_h (fall back to radius if not provided),
         # optionally rotated by `rot_deg` about `center`.

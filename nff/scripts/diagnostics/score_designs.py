@@ -56,26 +56,59 @@ TARGET_POINTS = 400          # must match run_closed's own sampling of the fixed
 # The three measurement blocks
 # ══════════════════════════════════════════════════════════════════════════════
 
-def target_cloud(config, n_points: int = TARGET_POINTS):
-    """The fixed target rectangle, sampled exactly as ``run_closed`` samples it.
+def target_spec(config) -> dict:
+    """The FIXED target this config declares, as a spec ``get_target_points`` consumes.
 
-    Returns:
-        ``(cloud, (cx, cy, half_w, half_h, rot_deg))``.
+    The shape is taken from ``config.target.type`` and its extents from the ``tessellation``
+    block, which is where a fixed target has always been written (``target_half_w`` for the
+    rectangle). An auto-fitted target is refused: this tool compares designs against ONE target,
+    and a target that adapts to each deploy is not one.
     """
     topo = config.topology
+    kind = str(config.target.type).lower()
+
+    if kind == 'ume':
+        missing = [k for k in ('target_cx', 'target_cy', 'target_r') if k not in topo]
+        if missing:
+            raise KeyError(f"config declares a ume target but carries no fixed outline "
+                           f"(missing {missing})")
+        return {'type': 'ume',
+                'center': np.array([float(topo['target_cx']), float(topo['target_cy'])]),
+                'radius': float(topo['target_r']),
+                'petals': int(topo.get('target_petals', 5)),
+                'eps': float(topo.get('target_eps', 0.0))}
+
     missing = [k for k in ('target_cx', 'target_cy', 'target_half_w', 'target_half_h')
                if k not in topo]
     if missing:
         raise KeyError(f"config carries no fixed target rectangle (missing {missing}); this tool "
                        "compares designs against ONE target and cannot score an auto-fitted one")
-    cx, cy = float(topo['target_cx']), float(topo['target_cy'])
     hw, hh = float(topo['target_half_w']), float(topo['target_half_h'])
-    rot = float(topo.get('target_rot_deg', 0.0) or 0.0)
-    cloud = get_target_points({'type': 'rectangle', 'center': np.array([cx, cy]),
-                               'radius': max(hw, hh), 'half_w': hw, 'half_h': hh,
-                               'rot_deg': rot},
-                              n_points=n_points)
-    return np.asarray(cloud, dtype=float), (cx, cy, hw, hh, rot)
+    return {'type': 'rectangle',
+            'center': np.array([float(topo['target_cx']), float(topo['target_cy'])]),
+            'radius': max(hw, hh), 'half_w': hw, 'half_h': hh,
+            'rot_deg': float(topo.get('target_rot_deg', 0.0) or 0.0)}
+
+
+def target_record(spec: dict) -> dict:
+    """The target as it goes into the JSON: every field that defines it, and no invented ones."""
+    cx, cy = float(spec['center'][0]), float(spec['center'][1])
+    if spec['type'] == 'ume':
+        return {'shape': 'ume', 'cx': cx, 'cy': cy, 'radius': float(spec['radius']),
+                'petals': int(spec['petals']), 'eps': float(spec['eps'])}
+    return {'shape': 'rectangle', 'cx': cx, 'cy': cy,
+            'half_w': float(spec['half_w']), 'half_h': float(spec['half_h']),
+            'rot_deg': float(spec['rot_deg'])}
+
+
+def target_cloud(config, n_points: int = TARGET_POINTS):
+    """The fixed target, sampled exactly as ``run_closed`` samples it.
+
+    Returns:
+        ``(cloud, spec)`` with ``spec`` as returned by :func:`target_spec`.
+    """
+    spec = target_spec(config)
+    return np.asarray(get_target_points(spec, n_points=n_points), dtype=float), spec
 
 
 def shape_metrics(boundary, target, length_scale: float) -> dict:
@@ -275,7 +308,7 @@ def score(config_path: str, params_path, label: str, *, load_scale: float = 1.0,
     paths = extract_hinge_paths(results['solution'], results['valid_state'], geometry, length_scale,
                                 reference_bond_vectors=results.get('reference_bond_vectors'))
 
-    cloud, rect = target_cloud(config)
+    cloud, spec = target_cloud(config)
     boundary = _boundary_cloud(results['valid_state'], results['solution'].fields[-1])
     M, N = int(config.topology['M']), int(config.topology['N'])
     sigma = _checkerboard_signs(M, N).astype(float)
@@ -290,8 +323,7 @@ def score(config_path: str, params_path, label: str, *, load_scale: float = 1.0,
         'label': label,
         'config': config_path,
         'params': params_path or 'uniform',
-        'target': {'cx': rect[0], 'cy': rect[1], 'half_w': rect[2], 'half_h': rect[3],
-                   'rot_deg': rect[4]},
+        'target': target_record(spec),
         'length_scale_mm': float(length_scale),
         'load_scale': float(load_scale),
         'loads': list(config.topology.get('loads', [])),

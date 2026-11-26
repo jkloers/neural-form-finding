@@ -23,10 +23,36 @@ from nff.training.loss import TERMS, _softmax_max, _softmax_min  # noqa: E402
 def test_every_term_maps_to_a_real_weight():
     """A typo in a TERMS row would silently drop that term from the objective forever."""
     fields = set(LossWeights.__dataclass_fields__)
-    for name, attr, fn, needs_probe in TERMS:
+    for name, attr, fn, probe_key in TERMS:
         assert attr in fields, f"term {name!r} points at LossWeights.{attr}, which does not exist"
         assert callable(fn)
-        assert isinstance(needs_probe, bool)
+        assert probe_key is None or isinstance(probe_key, str), (
+            f"term {name!r} must declare the probe key it reads (a str) or None; got {probe_key!r}")
+
+
+def test_probe_backed_terms_name_a_key_the_probes_actually_emit():
+    """The registry's fourth field is a probe dict key, and a typo would disable the term silently.
+
+    This is the failure mode the boolean `needs_probe` could not express: `compression` must run
+    under the ROM's kinematic probe while `damage` and `ood` must not, and that distinction is
+    carried entirely by these strings matching what the two probe builders emit.
+    """
+    declared = {name: key for name, _, _, key in TERMS if key is not None}
+    assert declared == {'damage': 'D', 'compression': 'eta_a', 'shear_path': 'eta_s', 'ood': 'ood'}
+
+    # The ROM probe supplies the KINEMATIC keys only (build_rom_probe_fn returns exactly these), so
+    # the split below is what decides which terms a linear-spring run can carry. `compression` and
+    # `shear_path` read the two axes of the same (eta_a, eta_s) hinge-strain plane and both must
+    # run; `damage` and `ood` are surrogate predictions with no ROM counterpart and must not.
+    rom_keys = {'eta_a', 'eta_s', 'theta'}
+    kinematic = {'compression', 'shear_path'}
+    surrogate_only = {'damage', 'ood'}
+    assert kinematic | surrogate_only == set(declared), (
+        "a probe-backed term was added without deciding whether the ROM can serve it")
+    for name in kinematic:
+        assert declared[name] in rom_keys
+    for name in surrogate_only:
+        assert declared[name] not in rom_keys
 
 
 def test_term_names_are_unique():

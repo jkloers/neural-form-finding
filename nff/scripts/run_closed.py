@@ -188,8 +188,34 @@ def _write_loss_history(run_dir, history):
             except (TypeError, ValueError):
                 continue          # non-scalar diagnostic; the plot does not read it either
         rows.append(row)
-    with open(os.path.join(run_dir, "loss_history.json"), "w") as fh:
+    tmp = os.path.join(run_dir, "loss_history.json.tmp")
+    with open(tmp, "w") as fh:
         json.dump(rows, fh, indent=1)
+    os.replace(tmp, os.path.join(run_dir, "loss_history.json"))
+
+
+def _write_design_traj(run_dir, traj):
+    """Persist the per-epoch design trajectory so a film can be rendered without re-training.
+
+    The in-memory ``snaps`` list drives the legacy evolution GIF and is discarded with the process.
+    A closed run is hours long, so the trajectory that describes what the optimizer actually did is
+    written here instead, atomically, on the same cadence as the best-params checkpoint: a killed
+    run then still yields every epoch it reached.
+
+    Args:
+        run_dir: the run folder.
+        traj: list of ``(epoch, {leaf_name: np.ndarray})``. The design PyTree carries two or three
+            leaves depending on ``hinge_model.learn_w_lig``, so the leaves are read off the dicts
+            rather than assumed.
+    """
+    if not traj:
+        return
+    payload = {"epochs": np.asarray([ep for ep, _ in traj], dtype=np.int32)}
+    for leaf in traj[0][1]:
+        payload[leaf] = np.stack([np.asarray(p[leaf]) for _, p in traj])
+    path = os.path.join(run_dir, "design_traj.npz")
+    np.savez_compressed(path + ".tmp.npz", **payload)
+    os.replace(path + ".tmp.npz", path)
 
 
 def main():
@@ -197,6 +223,14 @@ def main():
     ap.add_argument("--config-dir", default="closed")
     ap.add_argument("--config-name", default="circle_chamfer_10x10_best")
     ap.add_argument("--every", type=int, default=6)
+    ap.add_argument("--traj-every", type=int, default=1,
+                    help="cadence (epochs) of the DISK design trajectory written to "
+                         "design_traj.npz, which the training film replays. Independent of "
+                         "--every, which drives the in-memory evolution GIF: that one re-runs the "
+                         "physics once per snapshot after training, so it cannot be set to 1.")
+    ap.add_argument("--no-evolution-gif", action="store_true",
+                    help="skip the post-training evolution GIF, whose cost is one forward_pipeline "
+                         "per --every snapshot. The training film supersedes it.")
     ap.add_argument("--init-noise", type=float, default=None,
                     help="Gaussian sigma (LOGIT units) on the starting design; overrides the "
                          "config. Perturbs z and bnd_logits, i.e. the Stage-0 DESIGN -- the "
@@ -252,8 +286,10 @@ def main():
     # FIXED target (circle or rectangle) sized to the untrained physics deploy,
     # matched with the bidirectional (reciprocal) chamfer. ──
     rect_mode = config.target.type == 'rectangle'
+    ume_mode = config.target.type == 'ume'
     target_cloud_override = None
     rect_geom = None
+    ume_geom = None
     res0 = None                 # untrained deploy; stays None under circle_fit, which skips it
     if circle_fit:
         target_eff = config.target
@@ -301,6 +337,25 @@ def main():
             print(f"  fixed target RECTANGLE: center=({cen0[0]:.2f}, {cen0[1]:.2f})  "
                   f"half_w={hw:.2f} half_h={hh:.2f}"
                   + (f"  rot={rot:+.2f}deg" if rot else ""))
+        elif ume_mode:
+            # FIXED blossom straight from config, like the fixed rectangle above and unlike the
+            # circle below: it does NOT adapt to the deploy. A target that resizes itself to each
+            # design cannot be the one target two designs are compared on.
+            cen0 = np.array([float(config.topology.get('target_cx', config.target.center[0])),
+                             float(config.topology.get('target_cy', config.target.center[1]))])
+            radius = float(config.topology.get('target_r', config.target.radius)) * sc
+            petals = int(config.topology.get('target_petals', 5))
+            eps = float(config.topology.get('target_eps', 0.0))
+            ume_geom = (cen0, radius, petals, eps)
+            target_cloud_override = get_target_points(
+                {'type': 'ume', 'center': cen0, 'radius': radius, 'petals': petals, 'eps': eps},
+                n_points=400)
+            target_eff = TargetConfig(type='ume', center=(float(cen0[0]), float(cen0[1])),
+                                      radius=float(radius))
+            eps_star = 1.0 / (petals ** 2 + 1.0)
+            print(f"  fixed target UME: center=({cen0[0]:.2f}, {cen0[1]:.2f})  mean radius={radius:.4f}"
+                  f"  petals={petals}  eps={eps:.4f}"
+                  f"  ({'convex' if eps < eps_star else 're-entrant'}, threshold {eps_star:.4f})")
         else:
             cen0, rad0 = _fit_circle(cl0)
             rad0 *= sc
@@ -317,7 +372,8 @@ def main():
         hinge_probe_fn=hinge_probe_fn, hinge_geometry_fn=geometry_fn)
     state = TrainState(params=params, opt_state=optimizer.init(params), rng=jax.random.PRNGKey(0))
 
-    history, snaps = [], [(0, {k: np.asarray(v) for k, v in state.params.items()})]
+    _p0 = {k: np.asarray(v) for k, v in state.params.items()}
+    history, snaps, traj = [], [(0, _p0)], [(0, _p0)]
     # Selection is on the TOTAL loss, not chamfer alone: with damage/compression switched on, a
     # chamfer-only rule would happily return the shape-best design that tore or buckled its hinges.
     # The consequence to keep in mind is that the ranking moves whenever a weight is retuned, so
@@ -337,6 +393,9 @@ def main():
         if (epoch + 1) % args.every == 0 or epoch == config.training.num_epochs - 1:
             # numpy, so the snapshot list does not pin one device copy of the design per snapshot
             snaps.append((epoch + 1, {k: np.asarray(v) for k, v in state.params.items()}))
+        if args.traj_every > 0 and ((epoch + 1) % args.traj_every == 0
+                                    or epoch == config.training.num_epochs - 1):
+            traj.append((epoch + 1, {k: np.asarray(v) for k, v in state.params.items()}))
         if epoch % 25 == 0 or epoch == config.training.num_epochs - 1:
             # Checkpoint the running best. A closed run is hours long, and until this existed a kill
             # at any point -- an OS memory kill, a sleep, a stray Ctrl-C -- discarded the whole run,
@@ -346,6 +405,10 @@ def main():
             with open(_ck + ".tmp", "wb") as _pf:
                 pickle.dump({k: np.asarray(v) for k, v in best[1].items()}, _pf)
             os.replace(_ck + ".tmp", _ck)
+            # Same reasoning as the checkpoint above, for the two artefacts the film reads: both
+            # were written only after the loop, so a kill discarded every metric and every design.
+            _write_design_traj(run_dir, traj)
+            _write_loss_history(run_dir, history)
             msg = f"  epoch {epoch:3d}  loss={tot:.4e}  chamfer={ch:.4e}"
             if aux.get('hinge_max_D') is not None:    # surrogate damage metrics, when tracked
                 msg += (f"  maxD={float(aux['hinge_max_D']):.3g} meanD={float(aux['hinge_mean_D']):.3g}"
@@ -360,6 +423,7 @@ def main():
     best_params = best[1]
     print(f"  best loss={best[0]:.4e}  (chamfer there={best[2]:.4e})")
     _write_loss_history(run_dir, history)
+    _write_design_traj(run_dir, traj)
     with open(os.path.join(run_dir, "best_params.pkl"), "wb") as _pf:
         pickle.dump({k: np.asarray(v) for k, v in best_params.items()}, _pf)  # trained design, for analysis
     geom_best = _geom_at(best_params)                         # final design's HingeGeometry
@@ -392,6 +456,10 @@ def main():
         target_params = {'type': 'rectangle', 'center': [float(cen0[0]), float(cen0[1])],
                          'radius': float(max(hw, hh)), 'half_w': float(hw), 'half_h': float(hh),
                          'rot_deg': float(rot)}
+    elif ume_mode:
+        cen0, radius, petals, eps = ume_geom
+        target_params = {'type': 'ume', 'center': [float(cen0[0]), float(cen0[1])],
+                         'radius': float(radius), 'petals': int(petals), 'eps': float(eps)}
     else:
         target_params = {'type': 'circle', 'center': target_eff.center, 'radius': target_eff.radius}
 
@@ -475,6 +543,9 @@ def main():
                             res0, result, run_dir)
 
     # ── Training-evolution animation. ──
+    if args.no_evolution_gif:
+        print(f"\nAll visuals written to {run_dir}")
+        return
     frames = []
     for ep, p in snaps:
         geom_p = _geom_at(p)
@@ -504,6 +575,11 @@ def main():
             ax.add_patch(Rectangle((cen0[0] - hw, cen0[1] - hh), 2 * hw, 2 * hh,
                                    angle=rot, rotation_point='center',
                                    fill=False, edgecolor="#D62828", lw=2.0, ls="--"))
+        elif ume_mode:
+            cen0, radius, petals, eps = ume_geom
+            pts = get_target_points({'type': 'ume', 'center': cen0, 'radius': radius,
+                                     'petals': petals, 'eps': eps}, n_points=400)
+            ax.plot(pts[:, 0], pts[:, 1], color="#D62828", lw=2.0, ls="--")
         else:
             ax.add_patch(Circle(target_eff.center, target_eff.radius,
                                 fill=False, edgecolor="#D62828", lw=2.0, ls="--"))
