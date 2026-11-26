@@ -1,0 +1,73 @@
+# Architecture: 2×2 RDQK_D grid + hinge-based MPNN
+#
+# The GNN predicts per-face vertex displacements. Hinge positions are the
+# average of the two adjacent face predictions, so hinge gap = 0 by construction.
+# No hinge_gap loss term needed.
+#
+# Mirrored from mpnn_base.yaml for direct comparison.
+
+tessellation:
+  width: 2
+  height: 2
+  pattern: "unit_RDQK_D"
+  total_area: 3.0
+
+target:
+  type: "circle"
+  center: [0.0, 0.0]
+  radius: 1.0
+
+mapping:
+  map_type: gnn_hinge
+  domain_restriction: 1.0
+  use_shirley_chiu: false
+  strict_boundary_fit: false
+  learn_global_scale: false
+  map_params:
+    hidden_dim: 32
+    num_layers: 4
+    seed: 0
+
+optimization_weights:
+  validity_method: none
+  connectivity: 3000.0
+  non_intersection: 0
+  target: 0
+  arm_symmetry: 0
+  void_length: 500.0
+  void_collinear: 500.0
+  boundary_rigidity: 0
+  face_area: 100.0
+  anchoring: 300.0
+
+training:
+  num_epochs: 500
+  learning_rate: 0.01
+  optimizer: "adam"
+  lr_schedule: "cosine"
+  geometric_loss_type: "boundary_vertices"
+  grad_clip: 1.0
+
+loss_weights:
+  chamfer: 5000.0
+  material_area: 0.0
+  stretching: 1.0
+  shearing: 10.0
+  bending: 0.0
+  contact: 1.0
+  regularization: 0.0001
+  coverage: 1.0
+  hinge_gap: 0.0
+
+visualization:
+  stage0: false
+  stage1: false
+  stage2: true
+  energy_plot: true
+  animation: false
+  show_plots: false
+  save_outputs: true
+  show_hinges: true
+  show_hinge_indices: false
+  show_external_forces: true
+  show_kinematic_blocks: true

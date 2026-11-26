@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "neural-form-finding"
-version = "0.1.0"
-description = "Differentiable kirigami form-finding via GNN-driven geometric mapping and JAX physics."
+version = "0.2.0"
+description = "Differentiable inverse design of closed kirigami sheets: cut pattern -> physics deployment -> target shape, with a learned CalculiX hinge-energy surrogate."
 requires-python = ">=3.10"
 dependencies = [
     "numpy",
@@ -13,22 +13,35 @@ dependencies = [
     "matplotlib",
     "shapely",
     "pyyaml",
+    "pillow",
     "jax",
     "jaxlib",
+    "jax-md",
     "optax",
     "jaxopt",
-    "jraph",
     "equinox",
     "jaxtyping",
-    "flax",
 ]
+
+[project.optional-dependencies]
+# Cut-file export and the CalculiX hinge oracle's meshing.
+fabrication = ["ezdxf", "gmsh"]
+# The archived GNN pipeline in legacy/gnn (run it from tag pre-cleanup-2026-11).
+legacy = ["jraph", "flax"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["nff*"]
+include = ["nff*", "nff_paper*"]
 
 [tool.setuptools.package-dir]
 "" = "."
 
 [project.scripts]
-nff-train = "nff.scripts.train:main"
+nff-closed = "nff.scripts.run_closed:main"
+nff-train-surrogate = "nff.scripts.train_hinge_surrogate:main"
+nff-hinge-dataset = "nff.scripts.generate_hinge_dataset:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# `test_*.py` only: diagnostics such as taylor_test.py are scripts, not test modules.
+python_files = ["test_*.py"]

@@ -1,0 +1,67 @@
+# egnn_quick — egnn_optimal with 1000 epochs for quick test runs
+# See egnn_optimal.yaml for full hyperparameter rationale.
+
+tessellation:
+  width: 2
+  height: 2
+  pattern: "unit_RDQK_D"
+  total_area: 3.0
+
+target:
+  type: "circle"
+  center: [0.0, 0.0]
+  radius: 1.0
+
+mapping:
+  map_type: gnn_egnn
+  domain_restriction: 1.0
+  use_shirley_chiu: false
+  strict_boundary_fit: false
+  learn_global_scale: false
+  map_params:
+    hidden_dim: 32
+    num_layers: 4
+    seed: 2
+
+optimization_weights:
+  connectivity:      600.0
+  non_intersection:  0
+  target:            0
+  arm_symmetry:      0
+  void_length:       100.0
+  void_collinear:    100.0
+  boundary_rigidity: 0
+  face_area:         10.0
+  anchoring:         500.0
+
+training:
+  num_epochs: 1000
+  learning_rate: 0.015
+  optimizer: "adam"
+  lr_schedule: "cosine"
+  geometric_loss_type: "boundary_vertices"
+  grad_clip: 7.0
+
+loss_weights:
+  chamfer:        100.0
+  material_area:  0.0
+  stretching:     100.0
+  shearing:       100.0
+  bending:        0.0
+  contact:        2.0
+  regularization: 0.0001
+  coverage:       100
+  hinge_gap:      1000
+
+visualization:
+  stage0: true
+  stage1: true
+  stage2: true
+  energy_plot: true
+  animation: false
+  show_plots: false
+  save_outputs: true
+  show_hinges: true
+  show_hinge_indices: false
+  show_external_forces: true
+  show_kinematic_blocks: true

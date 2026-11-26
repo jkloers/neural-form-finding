@@ -36,7 +36,7 @@ energy **2.65% val / 1.70% test**, force 11.93/14.00% (per-component), damage 12
 
 ### 1.2 Architecture — swept, and the answer is "keep it big"
 
-`nff/scripts/diagnostics/sweep_surrogate_capacity.py` (new). 10 arms budget-matched via
+`nff/scripts/surrogate/sweep_surrogate_capacity.py` (new). 10 arms budget-matched via
 `--min-updates`, plus a 4-arm × 5-seed study.
 
 | arm | energy params | hvp | test E | test F (5-seed) |
@@ -58,7 +58,7 @@ energy **2.65% val / 1.70% test**, force 11.93/14.00% (per-component), damage 12
   `f128x128` 11.71%, **`f256x256` 10.46%**.
 
 Details: `memory/project_surrogate_architecture.md`. Figure:
-`nff/scripts/figures/plot_surrogate_capacity.py`.
+`legacy/experiments/figures/plot_surrogate_capacity.py`.
 
 ### 1.3 The pipeline runs
 
@@ -95,7 +95,7 @@ Box-exceedance against `stats["domain"]` is a **weak** diagnostic: that box is o
 axis-aligned marginal hull of the training rows, and being inside it does not mean being near data
 (the ridden set is a thin curved sheet, not a filled box). **Use nearest-neighbour distance in the
 net's whitened feature space instead**, with held-out rows as the yardstick for healthy
-interpolation. **Implemented** in `nff/scripts/diagnostics/score_deployment_ood.py` — pass `--data`
+interpolation. **Implemented** in `nff/scripts/surrogate/score_deployment_ood.py` — pass `--data`
 to enable it (it rebuilds the checkpoint's own train/held-out split so the yardstick is the data the
 net was actually validated on).
 
@@ -200,7 +200,7 @@ and may sit better on both axes.
 
 Two more, inherited:
 
-5. `nff/scripts/diagnostics/extract_hinge_paths.py` reports in-domain against the **hard-coded
+5. `nff/scripts/surrogate/extract_hinge_paths.py` reports in-domain against the **hard-coded
    fallback `DOMAIN`** (η_a 0…1, θ ≤ 37.8°), not the loaded checkpoint's `stats["domain"]`. Its
    "3.7% in domain" is not the checkpoint's number. Worth fixing.
 6. `memory/project_surrogate_pet_retrain.md` used to conclude "5% is not reachable by retraining this
@@ -213,8 +213,8 @@ Two more, inherited:
 
 ```bash
 # capacity sweep (10 arms, ~25 min) and the seed study (20 runs, ~35 min)
-JAX_PLATFORMS=cpu conda run -n kgnn_mac python -m nff.scripts.diagnostics.sweep_surrogate_capacity
-JAX_PLATFORMS=cpu conda run -n kgnn_mac python -m nff.scripts.diagnostics.sweep_surrogate_capacity \
+JAX_PLATFORMS=cpu conda run -n kgnn_mac python -m nff.scripts.surrogate.sweep_surrogate_capacity
+JAX_PLATFORMS=cpu conda run -n kgnn_mac python -m nff.scripts.surrogate.sweep_surrogate_capacity \
     --arms h64x64_m32,h256x256x256_m128 --seeds 0,1,2,3,4 --out-dir data/surrogates/capacity_seeds
 # damage head, on the winning trunk
 ... --stage fail --hidden 256,256,256 --m-out 128 --w-damage 0.5 --out-dir data/surrogates/capacity_fail
@@ -222,9 +222,9 @@ JAX_PLATFORMS=cpu conda run -n kgnn_mac python -m nff.scripts.diagnostics.sweep_
 # deployment + its error bar
 JAX_PLATFORMS=cpu conda run -n kgnn_mac python nff/scripts/run_closed.py --config-name sheet_4x8ft_pet
 JAX_PLATFORMS=cpu PYTHONPATH=$(pwd) conda run -n kgnn_mac python \
-    nff/scripts/diagnostics/extract_hinge_paths.py --config data/configs/closed/sheet_4x8ft_pet.yaml \
+    nff/scripts/surrogate/extract_hinge_paths.py --config data/configs/closed/sheet_4x8ft_pet.yaml \
     --params <run_dir>/best_params.pkl --steps 40 --out data/outputs/hinge_paths/pet_trained_deploy
-JAX_PLATFORMS=cpu conda run -n kgnn_mac python -m nff.scripts.diagnostics.score_deployment_ood \
+JAX_PLATFORMS=cpu conda run -n kgnn_mac python -m nff.scripts.surrogate.score_deployment_ood \
     --paths data/outputs/hinge_paths/pet_trained_deploy/hinge_paths \
     --surrogate data/surrogates/hinge_surrogate_pet_v3
 ```

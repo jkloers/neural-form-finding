@@ -1,0 +1,86 @@
+# Config minimale pour valider le flux de gradients à travers le dummy GNN.
+# Objectif : vérifier que jax.value_and_grad remonte correctement depuis
+# la loss Chamfer jusqu'aux poids W_enc / W_msg / W_out / b_out.
+
+tessellation:
+  width: 2
+  height: 2
+  pattern: "unit_RDQK_D"
+  total_area: 4.0
+
+target:
+  type: "circle"
+  center: [0.0, 0.0]
+  radius: 1.0
+
+mapping:
+  map_type: gnn_dummy
+  domain_restriction: 1.0
+  use_shirley_chiu: false
+  strict_boundary_fit: false
+  learn_global_scale: false
+  # Ces paramètres servent uniquement à l'initialisation du réseau,
+  # ils ne sont PAS entraînés directement par le config parser.
+  map_params:
+    hidden_dim: 16
+    seed: 0
+
+optimization_weights:
+  connectivity: 100.0
+  non_intersection: 0.0
+  target: 0.0
+  arm_symmetry: 0.0
+  void_length: 100.0
+  void_collinear: 100.0
+  boundary_rigidity: 0.0
+  face_area: 1.0
+
+physics:
+  use_contact: false
+  linearized_strains: true
+  k_contact: 0.0
+  min_angle: 1.0
+  cutoff_angle: 10.0
+  incremental: false
+  num_load_steps: 1
+  solver_maxiter: 100
+  solver_tol: 1e-4
+
+material:
+  k_stretch: 18750.0
+  k_shear: 6250.0
+  k_rot: 10.0
+  density: 1.2
+
+boundary_conditions:
+  clamped_faces: "boundary"
+
+loads: []
+
+training:
+  num_epochs: 5
+  learning_rate: 0.001
+  optimizer: adam
+  geometric_loss_type: boundary_vertices
+
+loss_weights:
+  chamfer: 1.0
+  material_area: 0.0   # Pas de contrainte d'aire pour le GNN dummy
+  stretching: 0.0
+  shearing: 0.0
+  bending: 0.0
+  contact: 0.0
+  regularization: 0.0   # Pas de régularisation pour voir le gradient brut
+  coverage: 1.0
+
+visualization:
+  stage0: false
+  stage1: false
+  stage2: false
+  energy_plot: false
+  animation: false
+  show_plots: false
+  save_outputs: false
+  show_hinges: false
+  show_hinge_indices: false
+  show_face_indices: false

@@ -65,7 +65,7 @@ The three published families, with their gains:
 
 ## 3. The corpus, and one gate that failed
 
-`nff/scripts/diagnostics/cell_family_corpus.py` re-solves each design from `config.yaml` +
+`nff_paper/analysis/cell_family_corpus.py` re-solves each design from `config.yaml` +
 `best_params.pkl` and writes one row per (design, unit cell): the cell's geometry, its family, and
 the response of the four panels and four hinges it owns.
 
@@ -242,9 +242,9 @@ point in its favour).
 
 ```bash
 JAX_PLATFORMS=cpu conda run -n kgnn_mac python \
-    nff/scripts/diagnostics/cell_family_corpus.py --figmat --grips
+    nff_paper/analysis/cell_family_corpus.py --figmat --grips
 JAX_PLATFORMS=cpu conda run -n kgnn_mac python \
-    nff/scripts/diagnostics/cell_family_map.py --n-perm 20000
+    legacy/experiments/diagnostics/cell_family_map.py --n-perm 20000
 JAX_PLATFORMS=cpu conda run -n kgnn_mac python -m pytest tests/test_cell_families.py -q
 ```
 
@@ -372,7 +372,7 @@ nu_21 = - (d ln lambda_2 / d psi) / (d ln lambda_1 / d psi)
 with `lambda_1, lambda_2` the stretches along the two cell-lattice axes, the whole quantity follows
 from `jax.grad` through the exact rigid kinematics (`shield_kinematics.deploy_tiles`, already
 differentiable in `psi`). `alpha` and `beta` are then read back from Eq. 4. Physics-free: a sheet
-needs only `config.yaml` and `best_params.pkl`. Module `nff/closed/effective_medium.py`.
+needs only `config.yaml` and `best_params.pkl`. Module `nff_paper/closed_support/effective_medium.py`.
 
 ⚠ The cell frame comes from **cell-lattice vectors**, never the void's sides: those two lengths are
 deployment-invariant and in the flat sheet the void is a collapsed slit whose edges are parallel.
@@ -511,7 +511,7 @@ not a change: `paper/` is untouched.
 
 ```bash
 JAX_PLATFORMS=cpu conda run -n kgnn_mac python \
-    nff/scripts/diagnostics/cell_regime_map.py
+    legacy/experiments/diagnostics/cell_regime_map.py
 JAX_PLATFORMS=cpu conda run -n kgnn_mac python -m pytest tests/test_effective_medium.py -q
 ```
 
@@ -526,7 +526,7 @@ Outputs `data/outputs/cell_families/regime.json`. The rotating-squares gate is
 appears and where the tension routes run. Parts I and II do **not** answer it: they reduce force
 onto each cell individually, and a family *region* can coincide with a *route* while no single
 cell's geometry predicts what that cell carries. This is a spatial-overlap question and it needed
-its own measurement. `nff/scripts/diagnostics/route_family_overlap.py`; no solve, the five runs
+its own measurement. `nff_paper/analysis/route_family_overlap.py`; no solve, the five runs
 store their force field and the routes are the same objects the plate draws.
 
 **The null.** Shuffling family labels would destroy the region structure and make a contiguous route
@@ -562,4 +562,4 @@ statement is that a correspondence is present and is not a simple preference: it
 with how the sheet is driven. That is what goes in the paper, and it is why the question is open
 rather than answered.
 
-Reproduce: `JAX_PLATFORMS=cpu conda run -n kgnn_mac python nff/scripts/diagnostics/route_family_overlap.py`
+Reproduce: `JAX_PLATFORMS=cpu conda run -n kgnn_mac python nff_paper/analysis/route_family_overlap.py`

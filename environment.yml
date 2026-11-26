@@ -1,3 +1,6 @@
+# The working kgnn_mac env as it was built. flax, jraph, e3nn-jax and wandb are only used by the
+# archived GNN pipeline (legacy/gnn); pruning them is roadmap session 4 (docs/cleanup_roadmap.md),
+# tested in a fresh env first. ezdxf (cut DXF) and pillow come in through pip on this machine.
 name: kgnn_mac
 channels:
   - conda-forge

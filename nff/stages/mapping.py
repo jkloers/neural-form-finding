@@ -1,21 +1,15 @@
 """
 Stage 0 — Initial mapping in centroidal coordinates.
 
-Two mapping engines are available:
+Mapping engines, all pure JAX with the interface CentroidalState -> CentroidalState:
 
-1. Analytical (apply_mapping):
-   Continuous parametric functions (conformal polynomials, asymmetric roots, …).
-   Centroids are displaced by the map; CNVs are deformed by its exact Jacobian
-   computed via jax.jacfwd. The Jacobian is fully differentiable.
+1. Closed chart (apply_closed_les_mapping) — the main pipeline.
+   Per-cut aspect ratios r = sigmoid(z) and ordered boundary sliders are solved through the
+   collinearity LES into a flat closed sheet; valid by construction, so Stage 1 is bypassed.
 
-2. GNN (apply_gnn_mapping):
-   A graph neural network (EGNN, MPNN, or other) predicts new centroid positions
-   and a per-face 2×2 local transformation matrix. No Jacobian is involved;
-   the network has full control over local geometry.
-
-Both engines share the same interface: CentroidalState → CentroidalState, pure JAX.
-Adding a new mapping engine means implementing a new branch inside apply_gnn_mapping
-or a new factory in build_mapping_fn — nothing else in the pipeline needs to change.
+2. Analytical (apply_mapping) and direct (apply_direct_mapping, apply_direct_transform_mapping).
+   Open-pattern maps kept for the validity-ladder ablation (nff/closed/chart_ablation.py);
+   they need Stage-1 repair. The GNN engines that used to live here are in legacy/gnn/.
 """
 import jax
 import jax.numpy as jnp
@@ -259,75 +253,6 @@ def parse_map_params(raw_params: Union[Dict, jnp.ndarray, list]) -> Union[Dict, 
             for k, v in raw_params.items()
         }
     return jnp.array(raw_params, dtype=float)
-
-
-def apply_gnn_mapping(
-        state: CentroidalState,
-        gnn_params: dict,
-        static_features: dict,
-        map_type: str = 'gnn_dummy',
-) -> CentroidalState:
-    """Apply a GNN-based mapping to a CentroidalState.
-
-    Unlike the analytical mapping (which uses an explicit Jacobian), the GNN
-    directly controls the full geometry. It predicts:
-      1. New centroid positions (x, y).
-      2. A full 2×2 per-face transformation matrix.
-
-    The CNVs are transformed by this matrix, allowing the network to stretch and
-    shear tiles asymmetrically to close gaps.
-
-    Args:
-        state:           Flat CentroidalState (initial tessellation).
-        gnn_params:      GNN weight dict PyTree.
-        static_features: Dict returned by build_static_graph_features.
-        map_type:        'gnn_dummy', 'gnn_egnn', or 'gnn_mpnn'.
-
-    Returns:
-        CentroidalState with updated face_centroids and centroid_node_vectors.
-    """
-    from nff.models.graph_builder import state_to_graph
-
-    graph = state_to_graph(state, static_features)
-    h = graph.nodes['h']
-    x = graph.nodes['x']
-    senders_np   = static_features['senders']
-    receivers_np = static_features['receivers']
-    n_faces      = static_features['n_nodes']
-
-    if map_type == 'gnn_egnn':
-        from nff.models.egnn import apply_egnn
-        num_layers = static_features.get('num_layers') or sum(
-            1 for k in gnn_params if k.endswith('_phi_x_W'))
-        new_centroids, _, local_transform = apply_egnn(
-            gnn_params, h, x, senders_np, receivers_np, n_faces, num_layers)
-    elif map_type == 'gnn_mpnn':
-        from nff.models.mpnn import apply_mpnn
-        num_layers  = static_features.get('num_layers') or sum(
-            1 for k in gnn_params if k.endswith('_phi_e_W1'))
-        inner_depth = static_features.get('inner_depth', 2)
-        new_centroids, _, local_transform = apply_mpnn(
-            gnn_params, h, x, senders_np, receivers_np, n_faces, num_layers, inner_depth)
-    else:  # gnn_dummy (default) — identity-like pass-through
-        from nff.models.dummy import apply_dummy_gnn
-        new_centroids = apply_dummy_gnn(
-            gnn_params,
-            h=h,
-            x=x,
-            edges=graph.edges,
-            senders_np=senders_np,
-            receivers_np=receivers_np,
-            n_faces=n_faces,
-        )
-        return state._replace(face_centroids=new_centroids)
-
-    # ── CNV (Centroid Node Vector) transformation ─────────────────────────────────
-    # The GNN directly predicts the 2x2 transformation matrix for each face, covering rotation,
-    # asymmetric scale and shear. At initialization it is the identity, so tiles start undeformed.
-    cnvs = state.centroid_node_vectors  # (n_faces, max_nodes, 2)
-    new_cnvs = jnp.einsum('fab,fnb->fna', local_transform, cnvs)
-
-    return state._replace(face_centroids=new_centroids, centroid_node_vectors=new_cnvs)
 
 
 def apply_direct_transform_mapping(state: CentroidalState, map_params: dict) -> CentroidalState:

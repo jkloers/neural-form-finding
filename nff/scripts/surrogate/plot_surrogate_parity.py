@@ -1,0 +1,211 @@
+"""Predicted-vs-true parity plot for the condensed hinge-energy surrogate.
+
+Scientifically-honest generalization view: the surrogate is scored on the SAME held-out
+split it was validated on -- geometries (jobs) never seen in training, split_by_job(seed=0,
+val_frac=0.15) -- so no ray-correlated leakage inflates the fit. Three parity panels:
+
+    energy  W(u; g)            [N.mm]
+    force   dW/du = (F_a, F_s, M_theta)   [N, N, N.mm]  (envelope theorem)
+    damage  D(u; g)            [-]        (ductile-failure head)
+
+Each panel: held-out points colored (density via alpha), the faint training cloud behind
+for context, the y=x identity line, and a corner box with R^2 and relative RMSE. Per the
+project viz charter -- no values in titles, Princeton palette, minimal chrome.
+
+    JAX_PLATFORMS=cpu conda run -n kgnn_mac python nff/scripts/surrogate/plot_surrogate_parity.py \
+        --surrogate data/surrogates/hinge_surrogate_pet_v2 \
+        --data data/fea/hinge_dataset_pet_v2 --out data/surrogates/parity_pet_v2.png
+
+``--w-lig-max`` must match the value the checkpoint was trained with, or the plot scores the
+surrogate on geometries it was deliberately never shown.
+"""
+
+import argparse
+
+import numpy as np
+import jax
+jax.config.update("jax_enable_x64", True)
+import jax.numpy as jnp
+import matplotlib.pyplot as plt
+
+from nff.models.hinge_surrogate import (load_hinge_surrogate, apply_hinge_energy,
+    apply_hinge_force, apply_hinge_failure)
+from nff.scripts.train_hinge_surrogate import (load_dataset, split_by_job, check_force_sign,
+                                               converged_mask)
+from nff.utils.routes import route_family_mask
+
+# ── project charter (Princeton palette) ─────────────────────────────────────────
+from nff.utils.figstyle import ORANGE, TEAL, RED, GREY, INK, TRAIN, apply_charter
+
+
+
+
+def _r2(true, pred):
+    ss_res = np.sum((true - pred) ** 2)
+    ss_tot = np.sum((true - np.mean(true)) ** 2) + 1e-30
+    return 1.0 - ss_res / ss_tot
+
+
+def _rel_rmse(true, pred):
+    return np.sqrt(np.mean((pred - true) ** 2)) / (np.sqrt(np.mean(true ** 2)) + 1e-12)
+
+
+def _finite(*arrs):
+    """Common finite mask across all arrays (drops NaN/Inf targets, e.g. undefined damage labels)."""
+    m = np.ones(len(arrs[0]), bool)
+    for a in arrs:
+        m &= np.isfinite(a)
+    return m
+
+
+def parity_panel(ax, true_tr, pred_tr, true_va, pred_va, color, xlabel, ylabel):
+    """One parity panel: faint train cloud, colored held-out cloud, identity line, metric box."""
+    mtr, mva = _finite(true_tr, pred_tr), _finite(true_va, pred_va)
+    true_tr, pred_tr = true_tr[mtr], pred_tr[mtr]
+    true_va, pred_va = true_va[mva], pred_va[mva]
+    lo = min(true_tr.min(), true_va.min(), pred_va.min())
+    hi = max(true_tr.max(), true_va.max(), pred_va.max())
+    pad = 0.03 * (hi - lo + 1e-12)
+    lims = (lo - pad, hi + pad)
+
+    ax.plot(lims, lims, color=INK, lw=1.1, ls="--", zorder=1, alpha=0.8)
+    ax.scatter(true_tr, pred_tr, s=4, c=TRAIN, alpha=0.30, linewidths=0, zorder=2,
+               rasterized=True, label="train")
+    ax.scatter(true_va, pred_va, s=6, c=color, alpha=0.35, linewidths=0, zorder=3,
+               rasterized=True, label="held-out")
+
+    ax.set_xlim(lims); ax.set_ylim(lims)
+    ax.set_aspect("equal", "box")
+    ax.set_xlabel(xlabel); ax.set_ylabel(ylabel)
+
+    r2, rr = _r2(true_va, pred_va), _rel_rmse(true_va, pred_va)
+    ax.text(0.045, 0.955, f"$R^2 = {r2:.4f}$\nrel. RMSE $= {rr*100:.2f}\\%$\n$n = {len(true_va):,}$",
+            transform=ax.transAxes, va="top", ha="left", fontsize=9.5, color=INK,
+            bbox=dict(boxstyle="round,pad=0.4", fc="white", ec="#D3D6DB", lw=0.9, alpha=0.92))
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--surrogate", default="data/surrogates/hinge_surrogate_pet_v2")
+    ap.add_argument("--data", default="data/fea/hinge_dataset_pet_v2")
+    ap.add_argument("--out", default="data/surrogates/parity.png")
+    ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--val-frac", dest="val_frac", type=float, default=0.15)
+    ap.add_argument("--test-frac", dest="test_frac", type=float, default=0.15,
+                    help="must match the trainer, or the scored group is not the untouched one")
+    ap.add_argument("--w-lig-max", dest="w_lig_max", type=float, default=25.0,
+                    help="must match the value the checkpoint was trained with")
+    ap.add_argument("--exclude-unconverged", dest="exclude_unconverged", default=None,
+                    choices=["none", "eval", "both"],
+                    help="default: follow the checkpoint's own `meta.exclude_unconverged`")
+    args = ap.parse_args()
+
+    params, stats, _ = load_hinge_surrogate(args.surrogate + ".pkl")
+    data, _, _ = load_dataset(args.data, w_lig_max=args.w_lig_max)
+    # Score the checkpoint on the route family it was TRAINED on. A checkpoint fitted to origin rays
+    # scored across free-DOF paths is being asked about a different target -- W is a path functional,
+    # so the two families disagree at the same state by construction.
+    _meta = {}
+    try:
+        import pickle
+        with open(args.surrogate + ".pkl", "rb") as f:
+            _meta = pickle.load(f).get("meta", {}) or {}
+    except Exception:
+        pass
+    _fam = _meta.get("route_family", "all")
+    if _fam != "all":
+        keep = route_family_mask(data["u"][:, 0], data["u"][:, 1], data["u"][:, 2],
+                                 data["g"][:, 0], data["job_id"], _fam)
+        data = {k: (v[keep] if getattr(v, "shape", (0,))[:1] == keep.shape else v)
+                for k, v in data.items()}
+        print(f"route family '{_fam}' (from checkpoint meta): {int(keep.sum())} rows kept")
+    # reproduce the training force-sign convention so the force parity is apples-to-apples
+    sign, _, _ = check_force_sign(data)
+    data["F"] *= sign
+    # THREE-way, as the trainer split. A two-way split would score the VALIDATION group, which
+    # model selection already ranked every eval_every epochs, and would draw the untouched test
+    # rows as part of the faint "train" cloud. `va` below is therefore the TEST mask.
+    tr, _val, va = split_by_job(data, args.val_frac, args.seed, test_frac=args.test_frac)
+    # Score the checkpoint on the SAME rows it was trained against. Reading the policy off the
+    # checkpoint (rather than defaulting) stops the figure from quietly scoring a quarantined model
+    # on unconverged rows it was never shown -- which reads as a much worse fit than it is.
+    policy = args.exclude_unconverged
+    if policy is None:
+        try:
+            import pickle
+            with open(args.surrogate + ".pkl", "rb") as f:
+                policy = pickle.load(f).get("meta", {}).get("exclude_unconverged", "none")
+        except Exception:
+            policy = "none"
+    if policy != "none":
+        conv = converged_mask(data)
+        va = va & conv
+        if policy == "both":
+            tr = tr & conv
+        print(f"quarantine ({policy}): {int((~conv).sum())} unconverged rows excluded")
+    print(f"loaded {args.surrogate} | train {int(tr.sum())} / held-out {int(va.sum())} "
+          f"({len(np.unique(data['job_id'][va]))} unseen jobs)")
+
+    u, g = jnp.asarray(data["u"]), jnp.asarray(data["g"])
+    W_pred = np.asarray(apply_hinge_energy(params, u, g, stats))
+    F_pred = np.asarray(apply_hinge_force(params, u, g, stats))
+    D_pred = np.asarray(apply_hinge_failure(params, u, g, stats))
+    W_true, F_true, D_true = data["W"], data["F"], data["margin"]
+
+    apply_charter()
+    fig, axes = plt.subplots(1, 3, figsize=(15.0, 5.2))
+
+    # energy
+    parity_panel(axes[0], W_true[tr], W_pred[tr], W_true[va], W_pred[va], ORANGE,
+                 r"true energy  $W$  [N$\cdot$mm]", r"predicted  $\widehat{W}$  [N$\cdot$mm]")
+    axes[0].set_title("Stored energy", pad=10, fontsize=13, color=INK)
+
+    # force: F_a, F_s (N) and M_theta (N.mm) live on different scales, so each component is
+    # normalized by its own true-RMS -> one dimensionless parity where all three fits are visible
+    # on equal footing (identity still means pred=true). Per-component R^2 goes in the legend.
+    Fc = [(0, TEAL, r"$F_a$"), (1, RED, r"$F_s$"), (2, GREY, r"$M_\theta$")]
+    rms = np.sqrt(np.mean(F_true[va] ** 2, axis=0)) + 1e-12          # (3,) per-component scale
+    Ft, Fp = F_true[va] / rms, F_pred[va] / rms
+    lo = min(Ft.min(), Fp.min()); hi = max(Ft.max(), Fp.max())
+    pad = 0.03 * (hi - lo); lims = (lo - pad, hi + pad)
+    axes[1].plot(lims, lims, color=INK, lw=1.1, ls="--", zorder=1, alpha=0.8)
+    for j, col, lab in Fc:
+        r2j = _r2(Ft[:, j], Fp[:, j])
+        axes[1].scatter(Ft[:, j], Fp[:, j], s=6, c=col, alpha=0.35, linewidths=0,
+                        rasterized=True, label=f"{lab}  ($R^2\\!=\\!{r2j:.3f}$)", zorder=3)
+    axes[1].set_xlim(lims); axes[1].set_ylim(lims); axes[1].set_aspect("equal", "box")
+    axes[1].set_xlabel(r"true force / component RMS")
+    axes[1].set_ylabel(r"predicted force / component RMS")
+    # Both pooled statistics on the SAME normalization; a raw-unit relRMSE beside an RMS-normalized
+    # R^2 describes two different quantities and is dominated by the moment.
+    rr = _rel_rmse(Ft.ravel(), Fp.ravel())
+    axes[1].text(0.045, 0.955, f"$R^2 = {_r2(Ft.ravel(), Fp.ravel()):.4f}$\nrel. RMSE $= {rr*100:.2f}\\%$",
+                 transform=axes[1].transAxes, va="top", ha="left", fontsize=9.5, color=INK,
+                 bbox=dict(boxstyle="round,pad=0.4", fc="white", ec="#D3D6DB", lw=0.9, alpha=0.92))
+    axes[1].legend(loc="lower right", fontsize=9.0, handletextpad=0.3, borderpad=0.5, markerscale=1.6)
+    axes[1].set_title(r"Internal force  $\partial W/\partial u$", pad=10, fontsize=13, color=INK)
+
+    # damage
+    parity_panel(axes[2], D_true[tr], D_pred[tr], D_true[va], D_pred[va], ORANGE,
+                 r"true damage  $D$", r"predicted  $\widehat{D}$")
+    axes[2].set_title("Ductile-failure head", pad=10, fontsize=13, color=INK)
+
+    axes[0].legend(loc="lower right", fontsize=9.5, handletextpad=0.3, borderpad=0.5,
+                   markerscale=2.2)
+
+    fig.tight_layout(w_pad=2.4)
+    fig.savefig(args.out, dpi=300, bbox_inches="tight")
+    print(f"saved -> {args.out}")
+    print(f"  energy  R2={_r2(W_true[va],W_pred[va]):.4f}  relRMSE={_rel_rmse(W_true[va],W_pred[va])*100:.2f}%")
+    # Ft/Fp, not the raw components: a raw pooled force metric is dominated by M_theta, whose RMS is
+    # an order of magnitude above the two forces, so it reports the moment and calls it the force.
+    print(f"  force   R2={_r2(Ft.ravel(),Fp.ravel()):.4f}  "
+          f"relRMSE={_rel_rmse(Ft.ravel(),Fp.ravel())*100:.2f}%  "
+          f"(per component {' / '.join(f'{_rel_rmse(F_true[va][:,j],F_pred[va][:,j])*100:.1f}%' for j in range(3))})")
+    dm = _finite(D_true[va], D_pred[va])
+    print(f"  damage  R2={_r2(D_true[va][dm],D_pred[va][dm]):.4f}  "
+          f"relRMSE={_rel_rmse(D_true[va][dm],D_pred[va][dm])*100:.2f}%  (n={int(dm.sum()):,})")
+
+
+if __name__ == "__main__":
+    main()

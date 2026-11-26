@@ -1,0 +1,83 @@
+# Architecture: egnn_optimal — derived from 120-sample random search on mid_clamp_3moment
+#
+# Key findings from search (data/outputs/param_search_20260521_140452.csv):
+#
+#   STRONG  coverage_w = 0.3    3.53x enrichment in top-20; coverage=1.0 is 3x worse
+#   STRONG  anchoring  = 5000   1.86x; high anchoring keeps Stage 1 local
+#   MOD.    chamfer_w  = 15000  1.55x; monotonically better with more pressure
+#   MOD.    grad_clip  = 7.0    1.50x; clip=20 is clearly bad (0.38x)
+#   WEAK    contact_w  = 2.0    1.40x borderline
+#   WEAK    connectivity= 6000  avoid 3000 (0.48x worst)
+#   NOISY   lr / h / L          < 1.35x; #1 winner guides these picks
+#
+# Best observed chamfer: 3.874e-03  (vs 1.3e-02 baseline — 3.4x improvement)
+# Best stable  chamfer: 4.108e-03  (3 explosions only)
+#
+# Fixed throughout search:
+#   target (optimization_weights) = 0
+#   void_length = void_collinear  = connectivity / 6
+
+tessellation:
+  width: 2
+  height: 2
+  pattern: "unit_RDQK_D"
+  total_area: 3.0
+
+target:
+  type: "circle"
+  center: [0.0, 0.0]
+  radius: 1.0
+
+mapping:
+  map_type: gnn_egnn
+  domain_restriction: 1.0
+  use_shirley_chiu: false
+  strict_boundary_fit: false
+  learn_global_scale: false
+  map_params:
+    hidden_dim: 32
+    num_layers: 2
+    seed: 2
+
+optimization_weights:
+  connectivity:     60.0
+  non_intersection: 0
+  target:           0
+  arm_symmetry:     0
+  void_length:      10.0
+  void_collinear:   10.0
+  boundary_rigidity: 0
+  face_area:        1.0
+  anchoring:        50.0
+
+training:
+  num_epochs: 500
+  learning_rate: 0.015
+  optimizer: "adam"
+  lr_schedule: "cosine"
+  geometric_loss_type: "boundary_vertices"
+  grad_clip: 7.0
+
+loss_weights:
+  chamfer:        100.0
+  material_area:  0.0
+  stretching:     100.0
+  shearing:       100.0
+  bending:        0.0
+  contact:        2.0
+  regularization: 0.0001
+  coverage:       100
+  hinge_gap:      1000
+
+visualization:
+  stage0: true
+  stage1: true
+  stage2: true
+  energy_plot: true
+  animation: false
+  show_plots: false
+  save_outputs: true
+  show_hinges: true
+  show_hinge_indices: false
+  show_external_forces: true
+  show_kinematic_blocks: true

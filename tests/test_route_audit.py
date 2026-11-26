@@ -14,7 +14,7 @@ the three things that decision rests on:
 import numpy as np
 import pytest
 
-from nff.scripts.diagnostics.surrogate_route_audit import (
+from nff.scripts.surrogate.surrogate_route_audit import (
     FREE_PATH, ORIGIN_RAY, _nonproportionality, classify_jobs, manifest_families,
     sigma_pair_by_family)
 

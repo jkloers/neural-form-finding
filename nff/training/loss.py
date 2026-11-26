@@ -228,13 +228,11 @@ def _term_material_area(ctx: LossContext):
     """Hold the mapped sheet's total area at the flat reference area.
 
     Only meaningful when the global scale is NOT learnable -- otherwise the scale absorbs the
-    constraint. GNN maps move centroids without transforming the CNVs, so their Stage-0 area is
-    unchanged by construction and the Stage-1 output is what carries the real distortion.
+    constraint.
     """
     if ctx.learn_global_scale:
         return jnp.asarray(0.0, dtype=jnp.float64), {'area_deviation': 0.0}
-    source = 'valid_state' if ctx.map_type.startswith('gnn_') else 'mapped_state'
-    mapped_area = compute_total_area(ctx.results[source].centroid_node_vectors)
+    mapped_area = compute_total_area(ctx.results['mapped_state'].centroid_node_vectors)
     deviation = mapped_area - jnp.sum(ctx.initial_state.initial_face_areas)
     return deviation ** 2, {'area_deviation': deviation}
 

@@ -6,7 +6,7 @@ to drag the whole training stack in, and a script that reads a raw ``.npz`` coul
 an environment without them. It is six lines of numpy; it belongs where anything can import it.
 
 The trainer re-exports it, so ``from nff.scripts.train_hinge_surrogate import split_by_job``
-(``nff/scripts/figures/plot_surrogate_parity.py``) keeps working unchanged.
+(``nff/scripts/surrogate/plot_surrogate_parity.py``) keeps working unchanged.
 """
 
 import numpy as np

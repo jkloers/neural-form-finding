@@ -9,7 +9,7 @@ after minus before:
 
 Lives in ``nff/closed/`` rather than beside the other figure scripts because ``run_closed`` emits it
 as part of every run, and ``nff/closed/`` may not import ``nff/scripts/``. The CLI wrapper is
-``nff/scripts/figures/plot_compression_shift.py``.
+``legacy/experiments/figures/plot_compression_shift.py``.
 
 The one-panel form is deliberate. A before/after pair asks the reader to subtract two dense clouds
 by eye, which is what makes such a comparison unreadable; binning both on a single grid and drawing

@@ -118,20 +118,9 @@ def create_train_step(
         optax.adam(learning_rate=lr),
     )
 
-    # Static features precomputed BEFORE the JIT boundary.
-    # For GNN types: build_static_features() calls non-JAX numpy ops that would
-    # crash the Metal backend if traced. Capturing the result here makes it an
-    # XLA compile-time constant — correct and efficient.
-    # If caller provides static_features (e.g. with inner_depth, num_layers already
-    # set), use it directly — this preserves GNN-config metadata like inner_depth
-    # that is not recoverable from the initial_state alone.
-    if static_features is not None:
-        _static_features = static_features
-    elif map_type.startswith('gnn_'):
-        from nff.models.graph_builder import build_static_features
-        _static_features = build_static_features(initial_state, map_type)
-    else:
-        _static_features = None
+    # Static features are precomputed by the caller BEFORE the JIT boundary (closed_les passes
+    # its chart topology here), so they are closed over as an XLA compile-time constant.
+    _static_features = static_features
 
     # Target cloud precomputed BEFORE the JIT boundary.
     # Without this, get_target_points() would run at every JAX trace and its

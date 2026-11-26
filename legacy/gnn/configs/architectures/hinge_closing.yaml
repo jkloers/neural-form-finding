@@ -1,0 +1,87 @@
+# Architecture: hinge-MPNN optimized for kirigami closing
+#
+# Key differences from hinge_base:
+#   - Shallow GNN (2 layers vs 4) — sufficient for single-target 2×2 grid
+#   - No hinge_gap loss — not needed, gap=0 by construction
+#   - High stretching/shearing penalties prevent energy divergence on hard problems
+#   - Deformation + openness rewards guide the optimizer toward large closing motions
+#   - Animation enabled (requires incremental physics from the suite)
+#   - 1000 epochs with cosine LR for stable convergence
+#   - Higher grad_clip to survive early chamfer-dominated gradient bursts
+
+tessellation:
+  width: 2
+  height: 2
+  pattern: "unit_RDQK_D"
+  total_area: 3.0
+
+target:
+  type: "circle"
+  center: [0.0, 0.0]
+  radius: 1.0
+
+mapping:
+  map_type: gnn_hinge
+  domain_restriction: 1.0
+  use_shirley_chiu: false
+  strict_boundary_fit: false
+  learn_global_scale: false
+  map_params:
+    hidden_dim: 32
+    num_layers: 2
+    seed: 0
+
+# Stage 1 does ONE thing: enforce parallelogram voids + preserve face area.
+# face_area keeps the gradient channel open without distorting the GNN output.
+# Everything else is zeroed — the GNN handles geometry, Stage 2 handles physics.
+optimization_weights:
+  connectivity: 0
+  non_intersection: 0
+  target: 0
+  arm_symmetry: 0
+  void_length: 500.0
+  void_collinear: 500.0
+  boundary_rigidity: 0
+  face_area: 0
+  anchoring: 100.0   # must be non-zero: only term creating gradient path from Stage1 back to Stage0
+  face_inversion: 0
+
+training:
+  num_epochs: 1000
+  learning_rate: 0.01
+  optimizer: "adam"
+  lr_schedule: "cosine"
+  geometric_loss_type: "boundary_vertices"
+  grad_clip: 2.0
+
+loss_weights:
+  chamfer: 5000.0
+  material_area: 0.0
+  # Stretch/shear — match mpnn_closing_gentle baseline
+  stretching: 100.0
+  shearing: 100.0
+  bending: 0.0
+  contact: 1.0
+  regularization: 0.0001
+  coverage: 1.0
+  hinge_gap: 0.0
+  # Mild closing guidance (~5-8% of chamfer at saturation — bias without dominating)
+  openness: 5.0
+  deformation: 5.0
+  # Face orientation: penalize inverted faces. Moderate weight — GNN learns to avoid them.
+  face_inversion: 2000.0
+  void_length: 0.0
+  void_collinear: 0.0
+
+visualization:
+  stage0: false
+  stage1: false
+  stage2: true
+  energy_plot: true
+  animation: true
+  show_plots: false
+  save_outputs: true
+  show_hinges: true
+  show_hinge_indices: false
+  show_external_forces: true
+  show_kinematic_blocks: true

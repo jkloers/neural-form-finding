@@ -21,7 +21,7 @@
 
 Publication-quality figures are a first-class, recurring deliverable of this program (not an
 afterthought). Every figure:
-- uses the **project charter** (palette from `nff/scripts/diagnostics/validate_hinge.py` —
+- uses the **project charter** (palette from `nff/scripts/surrogate/validate_hinge.py` —
   orange `#F58025` / teal `#2A9D8F` / red `#D62828` / grey `#6C757D` / ink `#1A1A1A`; clean 1×N;
   recessive axes; **never** numeric values in titles; no hardcoded fonts),
 - follows the **dataviz skill** method (pick the form; assign color by job; **run the palette
@@ -29,7 +29,7 @@ afterthought). Every figure:
 - is **rendered and eyeballed, then iterated** (open the PNG, fix collisions / scale / geometry —
   do not ship the first render),
 - lives in `nff/scripts/figures/plot_*.py`, modular (separable fit / bin / plot helpers).
-- Reference implementation: `nff/scripts/figures/plot_hinge_energy_regimes.py`.
+- Reference implementation: `legacy/experiments/figures/plot_hinge_energy_regimes.py`.
 
 ## Environment split (no import coupling)
 

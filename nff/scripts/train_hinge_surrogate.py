@@ -41,7 +41,7 @@ from nff.models.hinge_surrogate import (init_hinge_surrogate, compute_norm_stats
 from nff.rve.hinge_function import STOP_UNCONVERGED, STOP_UNKNOWN, stop_code
 # Re-exported, not redefined: diagnostics that only need the split must not have to import JAX to
 # get it (see nff/utils/splits.py). Existing `from ...train_hinge_surrogate import split_by_job`
-# call sites -- nff/scripts/figures/plot_surrogate_parity.py -- keep working.
+# call sites -- nff/scripts/surrogate/plot_surrogate_parity.py -- keep working.
 from nff.utils.splits import split_by_job  # noqa: F401
 from nff.utils.routes import FREE_PATH, ORIGIN_RAY, route_family_mask
 
