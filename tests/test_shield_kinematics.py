@@ -109,3 +109,91 @@ def test_deployed_outline_is_simple_and_encloses_the_tiles():
     hull = abs(float(polygon_area(outline)))
     material = float(jnp.sum(jnp.abs(tile_areas(deployed))))
     assert hull > material
+
+
+@pytest.mark.parametrize("ease", ["linear", "smoothstep"])
+def test_animation_sweep_is_valid_and_hits_both_endpoints(ease):
+    """The frame schedule starts closed, ends open, and stays kinematically valid.
+
+    The animation camera is fixed once, on the open state and the artwork outline, so it
+    is only correct if every intermediate state stays inside that window.
+    """
+    from nff.closed.shield_render import _ease_fractions, _fixed_camera
+
+    psi = -0.45
+    plan, flat_tiles, _ = _design(12, 17, 0)
+    deployed = deploy_tiles(plan, flat_tiles, psi)
+    flat_area = float(jnp.sum(jnp.abs(tile_areas(flat_tiles))))
+
+    fractions = _ease_fractions(24, ease)
+    assert fractions[0] == 0.0 and fractions[-1] == 1.0
+
+    for f in fractions:
+        state = deploy_tiles(plan, flat_tiles, float(f) * psi)
+        assert float(jnp.max(jnp.abs(pin_residual(plan, state)))) < 1e-9
+        assert abs(float(jnp.sum(jnp.abs(tile_areas(state)))) - flat_area) / flat_area < 1e-9
+
+    # Eased endpoints are exact, so the sweep reproduces both reference states.
+    assert np.allclose(np.asarray(deploy_tiles(plan, flat_tiles, 0.0)),
+                       np.asarray(flat_tiles), atol=1e-12)
+    assert np.allclose(np.asarray(deploy_tiles(plan, flat_tiles, float(fractions[-1]) * psi)),
+                       np.asarray(deployed), atol=1e-12)
+
+    # A target outline reaching past the tiles is the case the camera has to cover.
+    target_mm = np.asarray(deployed).reshape(-1, 2) * 1.05
+    centre, half = _fixed_camera(deployed, target_mm, (5.4, 6.5))
+    lo, hi = centre - half, centre + half
+    for f in fractions:
+        pts = np.asarray(deploy_tiles(plan, flat_tiles, float(f) * psi)).reshape(-1, 2)
+        assert np.all(pts >= lo) and np.all(pts <= hi)
+    assert np.all(target_mm >= lo) and np.all(target_mm <= hi)
+
+
+def test_animation_schedule_wipes_after_the_sheet_opens():
+    """The front only starts once the sheet is fully open, and it finishes the job."""
+    from nff.closed.shield_render import _animation_schedule
+
+    schedule = _animation_schedule(-0.45, n_frames=10, wipe_frames=6, hold_closed=2,
+                                   hold_open=2, hold_logo=3)
+    assert len(schedule) == 2 + 10 + 2 + 6 + 3
+
+    kinds = [k for k, _, _ in schedule]
+    assert set(kinds) == {"tiles", "wipe"}
+    assert kinds.index("wipe") > max(i for i, k in enumerate(kinds) if k == "tiles")
+
+    tiles = [a for k, a, _ in schedule if k == "tiles"]
+    assert tiles[0] == 0.0 and tiles[-1] == -0.45
+
+    wipe = [a for k, a, _ in schedule if k == "wipe"]
+    assert wipe[0] == 0.0 and wipe[-1] == 1.0
+    assert all(b >= a for a, b in zip(wipe, wipe[1:]))
+
+
+def test_wipe_mask_is_monotone_and_saturates():
+    """Fully behind the front the frame is the finished shield, so no spill survives it."""
+    from nff.closed.shield_render import _wipe_mask
+
+    dist = np.linspace(0.0, 400.0, 401)
+    mask = _wipe_mask(dist, radius_px=200.0, feather_px=40.0)[:, 0]
+
+    assert np.all(np.diff(mask) <= 1e-12)          # never sharpens back up with distance
+    assert mask[0] == 1.0 and mask[-1] == 0.0
+    assert 0.0 < mask[200] < 1.0                   # the front itself is soft
+
+    # Past the end of the sweep the mask must saturate EVERYWHERE, or stray tile pixels
+    # outlive the animation. This is the property the ending depends on.
+    reach, feather = 300.0, 40.0
+    full = _wipe_mask(dist, radius_px=reach + 1.5 * feather, feather_px=feather)[:, 0]
+    assert np.all(full[dist <= reach + feather] == 1.0)
+
+
+def test_animation_schedule_fade_style_never_cross_fades():
+    """The retained fade style still never washes the overlap out."""
+    from nff.closed.shield_render import _animation_schedule
+
+    schedule = _animation_schedule(-0.45, n_frames=10, wipe_frames=5, hold_closed=2,
+                                   hold_open=2, clean_frames=4, hold_logo=3, style="fade")
+    for kind, a, b in schedule:
+        if kind == "fade":
+            assert a >= 1.0 or b >= 1.0
+    assert schedule[-1][1] == 1.0 and schedule[-1][2] == 0.0

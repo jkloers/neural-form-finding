@@ -146,7 +146,7 @@ def render_texture_deployed(ax, deployed, rgb, extent, target_unit, scale, shift
 
 def render_texture_at(ax, tiles_state, deployed, rgb, extent, target_unit, scale, shift,
                       outline_offset, sigma, psi_state, psi_deployed, *,
-                      edge=None, lw=0.1, fit=True):
+                      edge=None, lw=0.1, fit=True, alpha: float = 1.0):
     """Print each tile's artwork fragment at an arbitrary deployment state.
 
     Each tile carries the fragment it covers when deployed. Because the motion is
@@ -178,9 +178,12 @@ def render_texture_at(ax, tiles_state, deployed, rgb, extent, target_unit, scale
         im = ax.imshow(sub, extent=sub_extent, origin="upper", transform=tr,
                        interpolation="bilinear", zorder=2)
         im.set_clip_path(patch)
+        if alpha < 1.0:
+            im.set_alpha(alpha)
         if edge is not None:
             ax.add_patch(MplPolygon(state[k], closed=True, facecolor="none",
-                                    edgecolor=edge, linewidth=lw, zorder=3))
+                                    edgecolor=edge, linewidth=lw, zorder=3,
+                                    alpha=alpha))
     if fit:
         _fit(ax, state)
     return ax
@@ -200,7 +203,8 @@ def target_polygon_mm(target_unit, scale, shift, outline_offset):
 
 
 def render_reference(ax, rgb, extent, target_unit, scale, shift, outline_offset,
-                     ref_rgb=None, ref_extent=None):
+                     ref_rgb=None, ref_extent=None, *, alpha: float = 1.0,
+                     zorder: int = 2):
     """Undeformed reference artwork, clipped to its silhouette, at deployed scale.
 
     Drawn in the same millimetre frame as the deployed panels, so it reads as a
@@ -213,8 +217,10 @@ def render_reference(ax, rgb, extent, target_unit, scale, shift, outline_offset,
     im = ax.imshow(rgb if ref_rgb is None else ref_rgb,
                    extent=extent if ref_extent is None else ref_extent, origin="upper",
                    transform=_unit_to_mm(target_unit, scale, shift, outline_offset) + ax.transData,
-                   interpolation="bilinear", zorder=2)
+                   interpolation="bilinear", zorder=zorder)
     im.set_clip_path(patch)
+    if alpha < 1.0:
+        im.set_alpha(alpha)
     return target_mm
 
 
@@ -310,8 +316,10 @@ def render_deployment_strip(plan, flat_tiles, deployed, rgb, extent, target_unit
 
 
 def _frame(ax, centre, half):
-    ax.set_xlim(centre[0] - half, centre[0] + half)
-    ax.set_ylim(centre[1] - half, centre[1] + half)
+    """Fix the window on ``centre``. ``half`` is a scalar or a per-axis pair."""
+    hx, hy = np.broadcast_to(np.asarray(half, dtype=float), (2,))
+    ax.set_xlim(centre[0] - hx, centre[0] + hx)
+    ax.set_ylim(centre[1] - hy, centre[1] + hy)
     ax.set_aspect("equal")
     ax.axis("off")
 
@@ -371,11 +379,355 @@ def render_frames(plan, flat_tiles, psi_star, colours, out_dir, *, n_frames=48,
     return paths
 
 
-def _write_gif(frame_paths, out_gif, duration_ms: int = 70):
-    """Ping-pong GIF via PIL, so the sheet opens and closes."""
+def _write_gif(frame_paths, out_gif, duration_ms: float = 70, *, pingpong: bool = True,
+               loop: int = 0):
+    """GIF via PIL. Ping-pong by default, so the sheet opens and closes.
+
+    Each frame is quantised to its own adaptive palette. That is invisible on flat tile
+    colours and visible as flicker on a photographic texture, so a textured sequence
+    wants few frames and a modest resolution.
+    """
     from PIL import Image
     frames = [Image.open(p).convert("P", palette=Image.ADAPTIVE) for p in frame_paths]
-    sequence = frames + frames[-2:0:-1]
-    frames[0].save(out_gif, save_all=True, append_images=sequence[1:],
-                   duration=duration_ms, loop=0, optimize=True)
+    sequence = frames + frames[-2:0:-1] if pingpong else frames
+
+    # PIL merges consecutive identical frames and loses part of their duration, which
+    # shortens every hold. Collapse them here instead and carry the time explicitly.
+    kept, durations = [], []
+    for frame in sequence:
+        if kept and frame.tobytes() == kept[-1].tobytes():
+            durations[-1] += duration_ms
+        else:
+            kept.append(frame)
+            durations.append(duration_ms)
+
+    # GIF stores delays in centiseconds, so rounding each frame on its own drifts the
+    # whole clip. Rounding the running total keeps the duration matched to the movie's.
+    elapsed, durations = 0.0, list(durations)
+    for i, d in enumerate(durations):
+        start = round(elapsed / 10.0) * 10
+        elapsed += d
+        durations[i] = max(10, round(elapsed / 10.0) * 10 - start)
+
+    kept[0].save(out_gif, save_all=True, append_images=kept[1:],
+                 duration=durations, loop=loop, optimize=True)
     return out_gif
+
+
+def _ease_fractions(n: int, ease: str = "smoothstep") -> Float[np.ndarray, "n"]:
+    """Deployment fractions in [0, 1], eased or uniform.
+
+    Smoothstep is exact at both ends, so the swept endpoints stay bit-identical to the
+    closed sheet and to the reference deployed state.
+    """
+    if n < 1:
+        return np.zeros(0)
+    if n == 1:
+        return np.ones(1)
+    t = np.linspace(0.0, 1.0, n)
+    if ease == "linear":
+        return t
+    if ease == "smoothstep":
+        return t * t * (3.0 - 2.0 * t)
+    raise ValueError(f"unknown ease {ease!r}; expected 'smoothstep' or 'linear'")
+
+
+def motto_centre_mm(rgb, extent, target_unit, scale, shift, outline_offset,
+                    threshold: int = 200):
+    """Centre of the motto, in deployed millimetres.
+
+    The book is the only white inside the seal: the upper band is black and the lower
+    field is orange and black. Its two pages label as separate regions, each sitting off
+    to one side, so the centroid is taken over all enclosed white at once rather than
+    over the largest piece.
+    """
+    from matplotlib.path import Path as MplPath
+
+    rgb = np.asarray(rgb)
+    H, W = rgb.shape[:2]
+    x_min, x_max, y_min, y_max = extent
+    us = np.linspace(x_min, x_max, W)
+    vs = np.linspace(y_max, y_min, H)           # rasters are drawn origin="upper"
+    U, V = np.meshgrid(us, vs)
+
+    seal_unit = to_artwork_frame(target_polygon_mm(target_unit, scale, shift, outline_offset),
+                                 target_unit, scale, shift, outline_offset)
+    inside = MplPath(seal_unit).contains_points(
+        np.column_stack([U.ravel(), V.ravel()])).reshape(H, W)
+    white = (rgb > threshold).all(axis=2) & inside
+    if not white.any():
+        raise ValueError("no enclosed white found -- is this the seal artwork?")
+
+    rows, cols = np.where(white)
+    unit_to_mm = _unit_to_mm(target_unit, scale, shift, outline_offset)
+    return np.asarray(unit_to_mm.transform_point(
+        (us[int(round(cols.mean()))], vs[int(round(rows.mean()))])), dtype=float)
+
+
+def _animation_schedule(psi: float, *, n_frames: int = 120, wipe_frames: int = 36,
+                        hold_closed: int = 6, hold_open: int = 12, hold_logo: int = 24,
+                        ease: str = "smoothstep", style: str = "wipe",
+                        clean_frames: int = 12):
+    """One ``(kind, a, b)`` triple per frame.
+
+    ``("tiles", psi_state, _)`` draws the sheet at that opening angle. The ending then
+    differs by style. Under ``wipe`` the finished shield spreads outward from the motto as
+    ``("wipe", progress, _)``: behind the front the voids are already filled and the sheet
+    spilling past the silhouette is already gone, so nothing is left to tidy afterwards.
+    Under ``fade`` the artwork instead fades in everywhere at once and the sheet fades out
+    after it, which leaves that spill standing until a second, separate beat removes it.
+    """
+    psi = float(psi)
+    schedule = [("tiles", 0.0, 1.0)] * int(hold_closed)
+    schedule += [("tiles", float(f) * psi, 1.0) for f in _ease_fractions(n_frames, ease)]
+    schedule += [("tiles", psi, 1.0)] * int(hold_open)
+
+    if style == "wipe":
+        schedule += [("wipe", float(a), 0.0) for a in _ease_fractions(wipe_frames, "linear")]
+        schedule += [("wipe", 1.0, 0.0)] * int(hold_logo)
+    elif style == "fade":
+        schedule += [("fade", float(a), 1.0) for a in _ease_fractions(wipe_frames, ease)]
+        schedule += [("fade", 1.0, float(1.0 - a)) for a in _ease_fractions(clean_frames, ease)]
+        schedule += [("fade", 1.0, 0.0)] * int(hold_logo)
+    else:
+        raise ValueError(f"unknown style {style!r}; expected 'wipe' or 'fade'")
+    return schedule
+
+
+def _wipe_mask(dist_px, radius_px: float, feather_px: float):
+    """Soft radial front: 1 behind it, 0 ahead of it."""
+    t = np.clip((radius_px - np.asarray(dist_px)) / max(feather_px, 1e-6) + 0.5, 0.0, 1.0)
+    return (t * t * (3.0 - 2.0 * t))[..., None]
+
+
+def _pixel_of(point_mm, centre, half, width_px: int, height_px: int):
+    """Data millimetres to pixel coordinates within the rendered canvas."""
+    x = (float(point_mm[0]) - (centre[0] - half[0])) / (2.0 * half[0]) * width_px
+    y = ((centre[1] + half[1]) - float(point_mm[1])) / (2.0 * half[1]) * height_px
+    return np.array([x, y], dtype=float)
+
+
+def _fixed_camera(deployed, target_mm, figsize, margin: float = 0.03):
+    """Window covering the open state and the artwork, at the canvas aspect.
+
+    The artwork outline reaches past the deployed tiles, so a window sized on the tiles
+    alone clips the seal once it fades in. Every intermediate state sits inside the open
+    state's own box, which makes this the union over the whole sweep.
+    """
+    pts = np.concatenate([np.asarray(deployed).reshape(-1, 2),
+                          np.asarray(target_mm).reshape(-1, 2)], axis=0)
+    lo, hi = pts.min(axis=0), pts.max(axis=0)
+    centre = 0.5 * (lo + hi)
+    half = 0.5 * (hi - lo) * (1.0 + margin)
+
+    aspect = float(figsize[0]) / float(figsize[1])
+    if half[0] / half[1] < aspect:
+        half[0] = half[1] * aspect
+    else:
+        half[1] = half[0] / aspect
+    return centre, half
+
+
+def _write_mp4(out_dir, out_mp4, *, fps: int = 30, crf: int = 18, stem: str = "frame"):
+    """H.264 encode of the PNG sequence, playable outside a browser.
+
+    ``yuv420p`` and even dimensions are what QuickTime, Keynote and PowerPoint require;
+    the scale filter supplies the parity the canvas size does not guarantee.
+    """
+    import shutil
+    import subprocess
+
+    if shutil.which("ffmpeg") is None:
+        raise RuntimeError("ffmpeg not found on PATH -- `brew install ffmpeg`, "
+                           "or ask for the GIF instead")
+    cmd = ["ffmpeg", "-y", "-v", "error",
+           "-framerate", str(fps), "-start_number", "0",
+           "-i", os.path.join(out_dir, f"{stem}_%04d.png"),
+           "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=lanczos,format=yuv420p",
+           "-c:v", "libx264", "-preset", "slow", "-crf", str(crf),
+           "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-r", str(fps),
+           out_mp4]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(f"ffmpeg failed ({exc.returncode}):\n{exc.stderr[-2000:]}") from exc
+    return out_mp4
+
+
+def render_deploy_animation(plan, flat_tiles, deployed, rgb, extent, target_unit, scale,
+                            shift, outline_offset, psi, out_dir, *, n_frames: int = 120,
+                            wipe_frames: int = 36, hold_closed: int = 6,
+                            hold_open: int = 12, hold_logo: int = 24,
+                            clean_frames: int = 12, style: str = "wipe",
+                            wipe_centre="motto", wipe_feather: float = 25.0,
+                            wipe_rate: str = "area",
+                            ease: str = "smoothstep", dpi: int = 150,
+                            figsize=(5.4, 6.5), margin: float = 0.03, edge=None,
+                            lw: float = 0.06, background: str = "white",
+                            stem: str = "deploy", mp4: bool = True, gif: bool = False,
+                            fps: int = 30, crf: int = 18, keep_frames: bool = True,
+                            progress: bool = True) -> dict:
+    """Textured deployment sweep that resolves into the undeformed artwork.
+
+    The camera is fixed on the open state and the artwork together, so the sheet grows in
+    place, the last frame registers with the artwork, and every PNG carries identical
+    pixel dimensions -- which ffmpeg and ``animategraphics`` both require.
+
+    Under the default ``wipe`` style the finished shield spreads outward from the motto.
+    Behind the front the artwork is already whole and the sheet is already gone, so the
+    tiles reaching past the silhouette are swallowed as the front passes them instead of
+    being cleared afterwards. The front only chooses which of two fixed images wins at
+    each pixel, so it costs two renders and a per-frame blend rather than a render a frame.
+    """
+    import shutil
+
+    import matplotlib.pyplot as plt
+    from PIL import Image
+
+    os.makedirs(out_dir, exist_ok=True)
+    schedule = _animation_schedule(float(psi), n_frames=n_frames, wipe_frames=wipe_frames,
+                                   hold_closed=hold_closed, hold_open=hold_open,
+                                   hold_logo=hold_logo, ease=ease, style=style,
+                                   clean_frames=clean_frames)
+    if len(schedule) > 9999:
+        raise ValueError(f"{len(schedule)} frames exceeds the %04d naming; ask for fewer")
+
+    target_mm = target_polygon_mm(target_unit, scale, shift, outline_offset)
+    centre, half = _fixed_camera(deployed, target_mm, figsize, margin=margin)
+    sigma = np.asarray(plan["sigma"])
+
+    if isinstance(wipe_centre, str) and wipe_centre == "motto":
+        origin_mm = motto_centre_mm(rgb, extent, target_unit, scale, shift, outline_offset)
+    elif isinstance(wipe_centre, str) and wipe_centre == "shield":
+        origin_mm = np.asarray(centre, dtype=float)
+    else:
+        origin_mm = np.asarray(wipe_centre, dtype=float)
+
+    def _draw_tiles(psi_state, alpha=1.0):
+        state = np.asarray(deploy_tiles(plan, flat_tiles, float(psi_state)))
+        render_texture_at(ax, state, deployed, rgb, extent, target_unit, scale, shift,
+                          outline_offset, sigma, float(psi_state), float(psi),
+                          edge=edge, lw=lw, fit=False, alpha=alpha)
+
+    paths, drawn = [], {}
+    pattern_path, blend = None, None
+    fig, ax = plt.subplots(figsize=figsize)
+    try:
+        fig.patch.set_facecolor(background)
+        fig.subplots_adjust(left=0.0, right=1.0, bottom=0.0, top=1.0)
+        for i, entry in enumerate(schedule):
+            path = os.path.join(out_dir, f"frame_{i:04d}.png")
+            key = tuple(entry[:1]) + tuple(round(float(v), 12) for v in entry[1:])
+            if key in drawn:                      # a hold repeats a frame already drawn
+                shutil.copyfile(drawn[key], path)
+                paths.append(path)
+                continue
+            if progress and (i % 20 == 0 or i == len(schedule) - 1):
+                print(f"  frame {i + 1}/{len(schedule)}", flush=True)
+
+            kind, a, b = entry
+            if kind == "wipe":
+                if blend is None:
+                    blend = _prepare_wipe(fig, ax, out_dir, pattern_path, rgb, extent,
+                                          target_unit, scale, shift, outline_offset,
+                                          deployed, origin_mm, centre, half, wipe_feather,
+                                          dpi, background)
+                Image.fromarray(_blend_wipe(blend, a, wipe_rate)).save(path)
+            else:
+                ax.clear()
+                if kind == "tiles" or b > 0.0:
+                    _draw_tiles(psi if kind == "fade" else a, alpha=b)
+                if kind == "fade" and a > 0.0:
+                    render_reference(ax, rgb, extent, target_unit, scale, shift,
+                                     outline_offset, alpha=a, zorder=5)
+                _frame(ax, centre, half)
+                fig.savefig(path, dpi=dpi, facecolor=background)
+                if kind == "tiles":
+                    pattern_path = path
+            drawn[key] = path
+            paths.append(path)
+    finally:
+        plt.close(fig)
+
+    out_mp4 = out_gif = None
+    if mp4:
+        out_mp4 = _write_mp4(out_dir, os.path.join(out_dir, f"{stem}.mp4"),
+                             fps=fps, crf=crf, stem="frame")
+    if gif:
+        out_gif = _write_gif(paths, os.path.join(out_dir, f"{stem}.gif"),
+                             duration_ms=1000.0 / fps, pingpong=False, loop=0)
+    if blend is not None and not keep_frames:
+        os.remove(blend["path"])
+    if not keep_frames:
+        for p in paths:
+            os.remove(p)
+        paths = []
+
+    return {"frames": paths, "mp4": out_mp4, "gif": out_gif, "centre": centre,
+            "half": half, "schedule": schedule, "origin_mm": origin_mm}
+
+
+def _prepare_wipe(fig, ax, out_dir, pattern_path, rgb, extent, target_unit, scale, shift,
+                  outline_offset, deployed, origin_mm, centre, half, feather_mm, dpi,
+                  background):
+    """The two images the front selects between, and the distances that drive it.
+
+    ``pattern`` is the open sheet, already on disk as the last frame drawn before the
+    front starts; only the finished artwork has to be rendered here.
+    """
+    from PIL import Image
+
+    ax.clear()
+    render_reference(ax, rgb, extent, target_unit, scale, shift, outline_offset,
+                     alpha=1.0, zorder=5)
+    _frame(ax, centre, half)
+    perfect_path = os.path.join(out_dir, "_perfect.png")
+    fig.savefig(perfect_path, dpi=dpi, facecolor=background)
+
+    pattern = np.asarray(Image.open(pattern_path).convert("RGB"), dtype=float)
+    perfect = np.asarray(Image.open(perfect_path).convert("RGB"), dtype=float)
+    height_px, width_px = perfect.shape[:2]
+
+    origin_px = _pixel_of(origin_mm, centre, half, width_px, height_px)
+    yy, xx = np.mgrid[0:height_px, 0:width_px]
+    dist = np.hypot(xx - origin_px[0], yy - origin_px[1])
+
+    mm_per_px = 2.0 * half[0] / width_px
+    reach_mm = float(np.max(np.hypot(*(np.asarray(deployed).reshape(-1, 2) - origin_mm).T)))
+    return {"pattern": pattern, "perfect": perfect, "dist": dist,
+            "reach_px": reach_mm / mm_per_px, "feather_px": feather_mm / mm_per_px,
+            "path": perfect_path}
+
+
+def _blend_wipe(blend, fraction: float, rate: str = "area"):
+    """The frame at one position of the front, composited in float to avoid banding.
+
+    The front sweeps a radius but reveals an area, which grows as its square. Advancing
+    the radius uniformly would therefore uncover the shield ever faster; ``area`` holds
+    the revealed area to a steady rate instead, which matters here because the motto sits
+    high in the seal and the outline is 3.6x further away at the bottom point than at the
+    top.
+    """
+    fraction = float(fraction)
+    if rate == "area":
+        fraction = np.sqrt(fraction)
+    elif rate == "smoothstep":
+        fraction = fraction * fraction * (3.0 - 2.0 * fraction)
+    elif rate != "linear":
+        raise ValueError(f"unknown rate {rate!r}; expected 'area', 'linear' or 'smoothstep'")
+
+    # The front must finish a clear feather PAST the outermost tile vertex: ink is
+    # antialiased a little beyond it, and the mask only saturates behind the trailing
+    # edge. Stopping exactly on the vertex leaves a few stray pixels alive forever.
+    span = blend["reach_px"] + 2.0 * blend["feather_px"]
+    radius = -0.5 * blend["feather_px"] + fraction * span
+    mask = _wipe_mask(blend["dist"], radius, blend["feather_px"])
+    out = mask * blend["perfect"] + (1.0 - mask) * blend["pattern"]
+    return np.clip(out + 0.5, 0, 255).astype(np.uint8)
+
+
+# ── Public names for the two helpers that carry no shield-specific state. ──────────────────
+# Both are generic enough that a second animation (the training film) reuses them verbatim;
+# exporting them here keeps that import off a private name.
+write_mp4 = _write_mp4
+ease_fractions = _ease_fractions
