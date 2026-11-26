@@ -1,0 +1,128 @@
+# Closed-state RDPQK -- SQUARE 11x11 sheet, 121 panels, 220 hinges. ROM.
+#
+# PURPOSE: the FORCE POCKET study. A local, self-equilibrated probe in the middle of a large sheet,
+# read far from anything that holds the sheet. This file is the smallest rung of the domain ladder
+# 11 -> 15 -> 21; the three differ ONLY in M, N, sheet_width_mm and the background moment.
+#
+# ── WHY r_init = 0.5 ──────────────────────────────────────────────────────────────────────────
+# Measured on the 15x10 sheet: at r = 0.5 every panel side is 1.000000 (spread 1e-14), every corner
+# angle is 90.00000 deg, every area is 1.0, and the LES stays well conditioned (cond 58 -- it is NOT
+# singular at this value). That makes the sheet HOMOGENEOUS and the medium isotropic, which is what
+# "infinite tessellation" has to mean before a pocket radius is a property of the material rather
+# than of the particular tiling. The shipped design value 0.45 gives sides 0.867-1.136 and would
+# put a spatial pattern into the answer.
+#
+# ── WHY ODD x ODD ─────────────────────────────────────────────────────────────────────────────
+# An even grid has no tile at the sheet centre. Face id = col * N + row, so 11x11 puts the centre at
+# face 60 = (5.5, 5.5) exactly, and the probe sits on the four-fold symmetry point. Probing half a
+# pitch off centre breaks that symmetry and the measured pocket ANGLE would be reading the offset.
+# ⚠ An odd tile count makes the checkerboard unbalanced (61 vs 60); `one_dof.fit_one_dof` handles
+# that with a least-squares path rather than the closed form.
+#
+# ── WHY ONE CORNER TILE IS THE WHOLE BOUNDARY CONDITION ───────────────────────────────────────
+# Nothing in the solver checks that the three rigid-body modes are removed -- `kinematics.py`
+# eliminates constrained DOFs and never counts them, and `backward_reg` touches only the adjoint.
+# One tile clamped on all three DOFs removes exactly three modes and nothing more. It is a GAUGE,
+# not a support: the probe is self-equilibrated, so the reaction here is statically determinate and
+# equal to the negated load resultant, i.e. exactly zero. `probe_pocket.py` verifies it rather than
+# trusting it.
+# ⚠ Do NOT add `clamped_dofs` here. It REPLACES the DOF list (nff/closed/setup.py:43-47), so
+# writing it would silently demote this clamp and leave rigid-body modes floating.
+# ⚠ Do NOT delete the `boundary_conditions:` block. `clamped_faces` defaults to the STRING
+# "boundary" (nff/config/experiment.py:612), which clamps every boundary face -- a completely
+# different problem that would look plausible.
+
+tessellation:
+  tessellation_type: closed_rdpqk
+  M: 11
+  N: 11
+  r_init: 0.5
+  spacing: 1.0
+  spacing_y: 1.0             # SQUARE pitch -> psi_x = psi_y = 45 deg, isotropic deployment
+  sheet_width_mm: 4470.4     # 11 panels x the 406.4 mm calibrated pitch
+  hinge_margin: 0.13         # DRAWING/EXPORT only; it never enters the mechanics
+  init_noise: 0.0
+  init_seed: 0
+  target_cx: 5.5
+  target_cy: 5.5
+  target_r: 6.0              # nominal; this study never evaluates a shape loss
+
+mapping:
+  map_type: closed_les
+
+optimization_weights:
+  validity_method: none      # valid by construction (Tutte embedding), so Stage 1 is bypassed
+
+hinge_model:
+  type: rom                  # the linear-spring ligament; `material:` below is LIVE
+  w_lig_mm: 18.0
+  length_scale: 406.4        # mm per pipeline unit = the real panel pitch
+  energy_scale: 2.4606e-3    # 1 / length_scale -> `loads.value` is in newtons
+  calibrate: false
+  learn_w_lig: false
+
+physics:
+  use_contact: true
+  k_contact: 1000000.0
+  min_angle: -2.0            # DEGREES; `_parse_physics_config` converts
+  cutoff_angle: 0.0
+  linearized_strains: true
+  incremental: true
+  num_load_steps: 24
+  solver_maxiter: 20000
+  # ★ 1e-8, NOT the usual 1e-5. `solver_tol` is an ABSOLUTE gradient tolerance, and the pocket is a
+  # DIFFERENCE of two solves. At 1e-5 that difference is dominated by how far each solve stopped
+  # short of its own equilibrium, not by the probe. Measured elsewhere on this sheet family: at low
+  # load 1e-5 leaves a residual of 2.26e-05 and reports `converged: False` while 1e-8 reaches
+  # 7.5e-10, at 1.8x the cost. `probe_pocket.py --tol-check` halves this and confirms the radius.
+  solver_tol: 1.0e-8
+  backward_reg: 0.01         # inert: this study never differentiates through the solve
+  updated_lagrangian: false
+
+material:                    # PET hinge campaign, t = 0.5 mm, w_lig = 18 mm, r_win = 100 mm:
+                             #   k_stretch 238.1 N/mm, k_shear 127.4 N/mm, k_rot 487 N.mm/rad
+  k_stretch: 96763.84
+  k_shear:   51775.36
+  k_rot:         1.1983
+  density: 1.0
+
+boundary_conditions:
+  clamped_faces: [0]         # corner tile, all three DOFs. The GAUGE. See the banner.
+
+loads:
+  # ⚠⚠ THIS BLOCK IS THE COMPARISON ARM, NOT THE DEFAULT. `probe_pocket.py` deploys the sheet with
+  # `--bg-mode checkerboard`, an alternating moment on EVERY tile, built in the driver and centred
+  # so its net moment is exactly zero. This single-moment version is reached with `--bg-mode point`.
+  #
+  # ★ WHY THE POINT ACTUATOR WAS ABANDONED, measured on this sheet. One moment does deploy the
+  # whole sheet -- it is a one-DOF mechanism, so every hinge moves in lockstep -- but it leaves a
+  # stress concentration at the actuator. The pocket is a DIFFERENCE of two states, and a probe
+  # changes the deployment slightly, so that concentration reappears in the difference scaled by the
+  # change. Measured: the disturbance attributed to a CENTRAL probe peaked at the actuator corner
+  # (tile 1) and stayed there until six modes had been removed by hand, and it was identical for
+  # every probe direction. With the checkerboard drive the peak lands on the probe tile immediately.
+  #   point drive:        theta 40.49..46.98 deg, uniformity 0.862, 1-DOF r2 0.998974
+  #   checkerboard drive: theta 44.96..44.99 deg, uniformity 0.999, 1-DOF r2 1.000000
+  # ⚠ The SIGN selects opening or closing. The closing sign is stopped dead by the contact barrier
+  # at theta = 0, where every magnitude returns theta = 0.000 and looks like a solver failure.
+  # ★ theta is linear in the per-tile moment: -1 -> 13.15 deg, -3 -> 39.44, -6 -> 78.89. The shipped
+  # default `--bg-moment -3.42` puts the sheet at 45 deg, inside the band where the 1-DOF
+  # description costs under 1% of the work.
+  - {face: 1, dof: 2, value: 205.0}     # point arm: measured theta mean 43.7 deg on this sheet
+
+target:                      # never evaluated; present so the config parses
+  type: circle
+  center: [5.5, 5.5]
+  radius: 6.0
+
+loss_weights:
+  chamfer: 0.0
+
+training:
+  num_epochs: 0              # forward-only study; nothing is trained
+  learning_rate: 0.0
+  optimizer: adam
+
+visualization:
+  save_outputs: false
+  show_plots: false

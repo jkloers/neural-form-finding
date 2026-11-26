@@ -1,0 +1,81 @@
+# Closed-state RDPQK 10x10 — moment-actuated deployment toward a size-free circle.
+#
+# Face index = col*N + row (N=10). Central face = col5,row5 = 55; neighbor above = 56.
+# Larger moment to drive deployment of the bigger sheet.
+
+tessellation:
+  tessellation_type: closed_rdpqk
+  M: 10
+  N: 10
+  r_init: 0.45
+  spacing: 1.0
+
+mapping:
+  map_type: closed_les
+
+optimization_weights:
+  validity_method: none
+
+physics:
+  use_contact: false
+  linearized_strains: true
+  incremental: true
+  num_load_steps: 15
+  solver_maxiter: 1500
+  solver_tol: 1.0e-5
+  updated_lagrangian: false
+
+material:
+  k_stretch: 1000.0
+  k_shear: 1000.0
+  k_rot: 0.5
+  density: 1.0
+
+boundary_conditions:
+  clamped_faces: [55]          # central face
+
+loads:
+  - face: 56                   # neighbor above
+    dof: 2                     # moment
+    value: 30.0                # larger -> deploy the 10x10
+
+target:
+  type: circle
+  center: [5.0, 5.0]
+  radius: 5.0
+
+loss_weights:
+  chamfer: 1.0
+  coverage: 0.5
+  stretching: 0.1
+  shearing: 0.1
+  bending: 0.001
+  contact: 0.0
+  material_area: 0.0
+  hinge_gap: 0.0
+  openness: 0.0
+  deformation: 0.0
+  void_closure: 0.0
+  closure_delta: 0.0
+  regularization: 1.0e-4
+
+training:
+  num_epochs: 150
+  learning_rate: 0.02
+  optimizer: adam
+  lr_schedule: cosine
+  grad_clip: 1.0
+  geometric_loss_type: circle_fit
+
+visualization:
+  stage0: true
+  stage1: false
+  stage2: true
+  energy_plot: true
+  animation: true
+  show_plots: false
+  save_outputs: true
+  show_hinges: true
+  show_hinge_indices: false
+  show_face_indices: false
+  show_external_forces: true

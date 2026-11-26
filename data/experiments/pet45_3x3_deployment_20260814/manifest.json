@@ -1,0 +1,32 @@
+{
+  "experiment": "pet45_3x3_deployment",
+  "date": "2026-08-14",
+  "operator_notes": [
+    "Tile 3 was HELD and tile 5 was ACTIVATED with a force at its centroid, which IS the boundary condition the design was optimised under (bc_clamped [3], load on face 5).",
+    "The cutting drawing's HOLD mark was known to be misplaced and was NOT followed; the correct tile was held.",
+    "The closed sheet is essentially perfectly closed and is a true 4 ft x 8 ft rectangle.",
+    "The red target rectangle was taped on the floor by hand and is the less precise of the two objects."
+  ],
+  "design_run": "data/outputs/runs/run_20260813_151917_pet45_3x3_mid_phys",
+  "sheet_mm": [1219.2, 2438.4],
+  "sheet_is_metric_standard": true,
+  "target_design_mm": [1739.798, 2714.264],
+  "target_design_angle_deg": -15.3868,
+  "target_design_centre_mm": [789.032, 1312.266],
+  "clamp_face": 3,
+  "pull_face": 5,
+  "material": "PET, t = 0.5 mm",
+  "pitch_mm": 406.4,
+  "tape": {
+    "orange": "tile edges (every cut line and the stock boundary)",
+    "green": "hinge ligaments",
+    "red": "target rectangle, on the floor, static across the series"
+  },
+  "photos": {
+    "Closed":    {"sha256_16": "1a50c6049cb7de9f", "px": [4032, 3024]},
+    "Deploying": {"sha256_16": "1fd651c14e058a58", "px": [4032, 3024]},
+    "Deployed":  {"sha256_16": "f58512e49d2ee9e8", "px": [4032, 3024]}
+  },
+  "camera": "handheld, from above, one homography per frame",
+  "corner_source": "auto (4-line total least squares on the tape mask)"
+}

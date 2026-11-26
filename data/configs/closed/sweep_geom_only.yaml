@@ -1,0 +1,108 @@
+# SWEEP sweep_geom_only: GEOMETRY-ONLY control (no damage/OOD), same tiles as r1 (pinch face 9, pull face 96, F=1.0)
+#
+# EXPERIMENT (2026-07-07): deploy HARD (target ~50-60deg hinges) and MEASURE damage, rather than avoid
+# fracture. The damage loss is now the continuous PRIMARY term w_damage*mean(D^2) over ALL hinges (no
+# failure threshold in the gradient); fail_line is a REPORTING overlay only -> calibrate real failure
+# from the printed A4 experiment. See feedback_closed_run_protocol.
+#
+# BCs (well-posed rigid-body removal, single grip each side):
+#   * mid-LEFT tile (face 5): PINCH -> pin x,y, free rotation (clamped_dofs [0,1]).
+#   * mid-RIGHT tile (face 94): x-ROLLER pull -> pin y only + x-force (removes the sheet rotation mode).
+# Face numbering: face(i,j)=i*N+j; left column 0-9, right column 90-99.
+# target_half_* frozen from the calibrated-force untrained deploy (fixed, realistic; not auto-fit).
+
+tessellation:
+  tessellation_type: closed_rdpqk
+  M: 10
+  N: 10
+  r_init: 0.45
+  spacing: 1.0
+  hinge_margin: 0.13
+  clamped_dofs: [0, 1]         # left tile: pinch (pin translation, free rotation)
+  y_roller_faces: [96]         # right tile: pin y only -> slides in x under the pull
+  # FIXED target: SMALLER shape = bbox of the untrained F=1.0 deploy (gentler, more printable damage).
+  target_scale_x: 1.08
+  target_scale_y: 1.08
+
+mapping:
+  map_type: closed_les
+
+optimization_weights:
+  validity_method: none
+
+hinge_model:
+  type: surrogate
+  checkpoint: data/surrogates/hinge_surrogate_v2.pkl   # merged-dataset net (S235, w_lig[1,20], D-label)
+  material: S235
+  thickness_mm: 1.5
+  w_lig_mm: 5.0
+  calibrate: true
+  barrier: 0.05
+  w_damage: 0.0           # PRIMARY: continuous mean(D^2) over all hinges (deploy-dominant weight)
+  w_fail: 0.0             # legacy break barrier OFF
+  w_ood: 0.0
+  m_safe: 1.0
+  fail_line: 1.0          # reporting overlay only (count of hinges past model fracture-initiation)
+  learn_w_lig: true
+
+physics:
+  use_contact: false
+  linearized_strains: true
+  incremental: true
+  num_load_steps: 6
+  solver_maxiter: 1500
+  solver_tol: 1.0e-5
+  backward_reg: 0.01
+  updated_lagrangian: false
+
+material:
+  k_stretch: 1000.0
+  k_shear: 1000.0
+  k_rot: 0.5
+  density: 1.0
+
+boundary_conditions:
+  clamped_faces: [9]           # left tile pinch
+
+loads:
+  - {face: 96, dof: 0, value: 1.0}    # right tile pulled +x (gentler: ~27deg max hinge, meanD~1.6;
+                                       # smaller-target regime where damage is reducible toward D<1)
+
+target:
+  type: rectangle
+  center: [5.0, 5.0]
+  radius: 8.0
+
+loss_weights:
+  chamfer: 50.0
+  coverage: 1.0
+  stretching: 0.0
+  shearing: 0.0
+  bending: 0.0
+  contact: 0.0
+  material_area: 0.0
+  hinge_gap: 0.0
+  openness: 0.0
+  deformation: 0.0
+  void_closure: 0.0
+  closure_delta: 0.0
+  regularization: 1.0e-4
+
+training:
+  num_epochs: 100
+  learning_rate: 0.01
+  optimizer: adam
+  lr_schedule: cosine
+  grad_clip: 1.0
+  geometric_loss_type: boundary_vertices
+
+visualization:
+  stage0: false
+  stage1: false
+  stage2: true
+  energy_plot: false
+  animation: false
+  show_plots: false
+  save_outputs: true
+  show_external_forces: true
+  show_kinematic_blocks: true

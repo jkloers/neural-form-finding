@@ -1185,3 +1185,46 @@ cited to none of the papers that make it, it was referenced by nothing outside t
 Discussion's own preamble, and at 1073 words plus a full-width plate it was the most
 expensive item in Section 4. The measurements were sound and the data and scripts remain
 on disk.
+
+---
+
+## 2026-08-17 — bibliography pruned to the cited set
+
+`paper/sn-bibliography.bib` held 67 entries against 54 cited keys. It now holds exactly the 51
+entries the document cites. Twenty entries were removed. **This section is the record; the
+entries themselves are recoverable from
+`docs/paper_backup/sn-bibliography.pre-refbalance-20260817-1327.bib`.**
+
+**Removed because never cited** (13). Several were earlier deliberate removals recorded above,
+and the instruction not to reintroduce them still stands, in particular `schenk_origami_2011`
+and `filipov_bar_2017` (wrong source for `eq:rom`; see the entry above), plus
+`lavin_simulation_2021`, `temko_kirigami_1962` and `lobkovsky1996`:
+
+`bendsoe_generating_1988`, `deng_nonlinear_2021`, `filipov_bar_2017`, `grima_connectivity_2005`,
+`hong_boundary_2022`, `lavin_simulation_2021`, `li_visualizing_2018`, `liu_nonlinear_2017`,
+`lobkovsky1995`, `lobkovsky1996`, `schenk_origami_2011`, `suh_differentiable_2022`,
+`temko_kirigami_1962`.
+
+**Removed with the citation-balance pass** (7). Each was used exactly once, supporting an aside
+the paper never returned to. Cut to concentrate the reference list on load-bearing sources:
+
+| key | what it supported |
+|---|---|
+| `dias_kirigami_2017` | actuators exemplar, applications list |
+| `babaee_kirigami_2021` | stents exemplar, applications list |
+| `wu_modular_2024` | second soft-robot ref beside `zhao_modular_2025` |
+| `grima_triangles_2006` | "rotating triangles on a triangular grid" sentence |
+| `liu_quasicrystal_2022` | aperiodic-patterns sentence |
+| `chaudhary_geometric_2023` | same sentence |
+| `peters_characterization_2005` | second granular-contact ref beside `majmudar_contact_2005` |
+
+⚠ `deoliveira_experimental_2023` and `pastrana_realtime_2025` were on the proposed cut list and
+were **kept at the author's instruction** (2026-08-17). Do not re-propose them.
+
+**Added** (4), each a standard method the manuscript uses that carried no attribution:
+`liu_limited_1989` (L-BFGS, the forward solver), `hartley_multiple_2004` (planar homography and
+rectification, Sec. 4.1, which previously had zero citations), `hill_elastic_1963` (the
+representative volume element), `astm_d882` (the coupon standard the appendix names).
+
+⚠ `paper/Article Primary sources.bib` is a five-entry orphan that the document does not load; all
+five keys are duplicated in `sn-bibliography.bib`. Do not add references to it.

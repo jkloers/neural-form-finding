@@ -1,0 +1,111 @@
+{
+  "experiment": "pet45_3x3_hinge_closeup",
+  "date": "2026-08-16",
+  "source_archive": "~/Downloads/Photos-1-001.zip (6 Apple Live Photos)",
+  "camera": "iPhone 12, 4032x3024 stills; Live Photo clips 1920x1440 at 60 fps, 61-84 frames",
+  "exif_note": "focal length varies per shot (digital zoom); f_px = f35/36 * 4032, principal point at centre",
+  "subject": {
+    "hinge_index": 3,
+    "face_pair": [
+      2,
+      1
+    ],
+    "tiles": "1 and 2",
+    "hole": "H11",
+    "w_lig_mm": 22.334,
+    "alpha_deg": 76.742,
+    "thickness_mm": 0.5,
+    "r_win_mm": 100.0,
+    "design_run": "data/outputs/runs/run_20260813_151917_pet45_3x3_mid_phys"
+  },
+  "opening_deg": {
+    "measured": 16.58,
+    "simulated": 17.25,
+    "source": "pet45_3x3_deployment_20260814/derived/metrics.json"
+  },
+  "shots": {
+    "IMG_3742": {
+      "tape": "on",
+      "role": "metric oblique: the strip measurement is made here",
+      "f35_mm": 46,
+      "note": "full-resolution original of the frame first supplied as a screenshot",
+      "sha256_16_heic": "87fce7f59336716d",
+      "sha256_16_mp4": "bc3c4b6c679ac936",
+      "f_px": 5152
+    },
+    "IMG_3743": {
+      "tape": "on",
+      "role": "near-nadir plan view, clearest floor tile grid",
+      "f35_mm": 46,
+      "sha256_16_heic": "ac17652b8c5bc137",
+      "sha256_16_mp4": "f6ff3e0f31f84a7e",
+      "f_px": 5152
+    },
+    "IMG_3744": {
+      "tape": "on",
+      "role": "near-nadir, rotated; stress whitening visible at the ligament",
+      "f35_mm": 46,
+      "sha256_16_heic": "128c536a07f7d638",
+      "sha256_16_mp4": "8d6142c3700536d8",
+      "f_px": 5152
+    },
+    "IMG_3745": {
+      "tape": "off",
+      "role": "bare close-up, no floor context",
+      "f35_mm": 81,
+      "sha256_16_heic": "81eacff99aa653bb",
+      "sha256_16_mp4": "47e7979ebbda5ade",
+      "f_px": 9072
+    },
+    "IMG_3746": {
+      "tape": "off",
+      "role": "HERO: bare PET, low oblique, dome over the slit",
+      "f35_mm": 74,
+      "sha256_16_heic": "0cfb5842dd33e506",
+      "sha256_16_mp4": "e92a1df92af45019",
+      "f_px": 8288
+    },
+    "IMG_3747": {
+      "tape": "off",
+      "role": "bare oblique, wider, floor grid visible",
+      "f35_mm": 74,
+      "sha256_16_heic": "dbfef5b956d0cba3",
+      "sha256_16_mp4": "c9ac6ce830a12e15",
+      "f_px": 8288
+    }
+  },
+  "measurement": {
+    "assumption_free": [
+      "strip length 381 mm against a 406.4 mm panel pitch",
+      "chord bow 4.4 percent of the strip length, a single arch",
+      "face turn 59 deg maximum, a twist about the strip tangent"
+    ],
+    "assumption_dependent": {
+      "uz_mm": [
+        19,
+        34
+      ],
+      "needs": "camera elevation, taken as 45 +- 15 deg"
+    },
+    "rejected_routes": {
+      "floor tile grid vanishing points": "a rotation fitted to the two Hough line families converges to degenerate near-edge-on solutions (6 deg on a visibly near-nadir frame)",
+      "relief-hole ellipse": "the 7.15 mm hole sits at the crest, the most deformed material on the sheet, so its circularity is not safe",
+      "arc-length deficit": "the strip in-plane shortfall is a few mm, under the 7.6 mm floor the whole-sheet rectification established"
+    }
+  },
+  "oracle": {
+    "frames": "data/outputs/hinge_frames_pet_pet45_3x3_mid_phys_h3.npz",
+    "stop": "completed",
+    "n_frames": 40,
+    "uz_max_mm": 23.71,
+    "uz_over_t": 47.4,
+    "theta_deg": 16.54,
+    "peak_peeq": 0.0141,
+    "damage": 1.8e-05,
+    "drive": "path replay of the ligament measured (a, s, theta) route"
+  },
+  "outputs": [
+    "data/outputs/hinge_buckle_demo.png",
+    "data/outputs/hinge_buckle_demo.json"
+  ]
+}

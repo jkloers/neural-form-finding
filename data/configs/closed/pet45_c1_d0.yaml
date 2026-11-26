@@ -1,0 +1,349 @@
+# ── PET 4ft x 8ft, 9 TILES, PET SURROGATE, theta_deploy 45 deg — ARM: B compression only -- isolates it from damage.
+#
+# THE QUESTION. At a normal deployment this sheet drives hinges into axial COMPRESSION (eta_a < 0):
+# a ligament SQUEEZED rather than pivoted, which does no opening work and is exactly where the
+# surrogate is least trustworthy. Do `compression` + `damage` reroute those paths into a favourable,
+# in-envelope deployment? Arms differ ONLY in those two weights, so the answer is attributable.
+#
+# Forked from sheet_4x8ft_pet_28deg.yaml — THE validated baseline (97.8% in-box, boundary 5.68 mm).
+# ⚠ NOT from sheet_4x8ft_pet.yaml, the 45-deg parent, which memory records as MIS-POSED.
+#
+# ★★★ WHY 45 deg IS OK HERE, WHEN THE PARENT'S 45 deg WAS NOT. The parent's alarming numbers
+# (36.4% in-box, eta_a -1.76, one hinge snapping 7.4 -> 73.75 mm) came from applying a ROM-MAGNITUDE
+# LOAD (55.85 N/tile) to SURROGATE physics. That overshot to 52.8-56 deg — past the 53.1 deg
+# KINEMATIC LOCK (psi_y = 26.57 deg, lock at 2*psi_y), where hinges stop rotating and can only
+# translate. Calibrated against the surrogate itself the load is 5.91 N/tile — 0.106x the
+# parent's — and the measured trade curve at barrier 0.5 puts this deployment near 82% in-box.
+# calibrate_target.py now RAISES if a surrogate config would deploy on springs, so the bug that
+# produced the parent cannot recur silently.
+#
+# CALIBRATED 2026-08-04:
+#   calibrate_target.py --config <this> --angle 45 --shape-angle 40 --steps 6
+#   -> load x2.3627 = 5.91 N/tile;  theta max 45.00, mean 43.96, min 42.08, spread 2.93 deg
+#   -> deployed 5.1842 x 6.7443 u, measured lam 1.7281 / 1.1240 (analytic 1.6892 / 1.1152)
+#   -> target sized at 40 deg: the design must PULL IN +6.0% x, +1.2% y — the direction hinge
+#      stiffness controls, which is the whole point of sizing the target BELOW the deploy angle.
+#
+# ⚠ THE SURROGATE IS ORIGIN_RAY-ONLY. It was trained on prescribed proportional rays; the deployed
+# sheet rides solver-chosen paths. Report score_deployment_ood.py (in-box %, NN p50/p90 against the
+# held-out yardstick 0.345 / 0.688) alongside any result from this config. The claim is only as
+# good as the coverage.
+
+tessellation:
+  tessellation_type: closed_rdpqk
+  M: 3
+  N: 3
+  r_init: 0.45
+  spacing: 1.0
+  spacing_y: 2.0             # elongated panels -> 1:2 sheet from a 3x3 grid
+  sheet_width_mm: 1219.2     # 4 ft of stock across M panels -> cut pattern exports at true size
+  hinge_margin: 0.13
+  clamped_dofs: [1]          # bottom edge: y only (rollers in x, free rotation)
+  y_pin_faces: [3]           # centre bottom tile also pinned in x -> no rigid translation/rotation
+  # ── FIXED target, CALIBRATED TO A 28 deg DEPLOY / 25 deg SHAPE (2026-08-01) ──────────────────
+  # Never auto-fit. Derived by
+  #     calibrate_target.py --config <this file> --angle 28 --shape-angle 25
+  #
+  # ★★ THE RECIPE — target shape, tile size and force are ONE coupled calibration, ceiling-first:
+  #
+  #   1. theta_ceiling = 45 deg, set by what the SURROGATE DATABASE actually covers. Measured on the
+  #      11 571 rows / 964 jobs the shipping checkpoint trained on (origin_ray, converged, PET):
+  #      83.8% of rows sit below 45 deg, and 45 deg is where job support crosses half (471/964).
+  #      Beyond it the tail thins fast (199 jobs reach 60-70 deg, 85 reach 70-90).
+  #      ⚠ The checkpoint's own box reports theta_max = 1.2542 rad = 71.9 deg, but that is a P99 —
+  #      it admits the sparse tail and is far too permissive as an operating limit. Use 45, not 71.9.
+  #
+  #   2. theta_deploy = 28 deg, from the MINIMUM force that reaches it and no more (2.50 N/tile).
+  #      Why so far below the ceiling: `learn_w_lig` makes the deployment angle a RANGE, not a
+  #      number. At this load, sweeping w_lig over its whole [5, 25] mm box gives
+  #          w_lig  5 mm -> theta_max 44.3 deg   (in-box 44.5%)
+  #          w_lig 18 mm -> theta_max 28.2 deg   (in-box 97.0%)
+  #          w_lig 25 mm -> theta_max 22.3 deg   (in-box 100%)
+  #      so 2.50 N is the load at which the ENTIRE design space stays under the 45 deg ceiling. Set
+  #      it by the init design alone and the optimizer can walk out of the envelope by narrowing the
+  #      ligaments — which is exactly how the parent run went from 45.5% in-box to 36.4% DURING
+  #      training. ⚠ Note narrow ligaments are the OOD risk, not large theta: eta = a/w_lig, so the
+  #      same physical motion is 3.6x more out-of-domain at 5 mm than at 18 mm.
+  #
+  #   3. theta_shape = 25 deg, deliberately SMALLER than theta_deploy. The sheet can open to 28 deg
+  #      but is asked to match a 25 deg shape, so matching requires the design to PULL IN (+4.7% in
+  #      x, +1.0% in y) — the direction hinge stiffness controls, since a wider ligament is stiffer
+  #      and opens less. Measured leverage at fixed load: w_lig spans theta from 44.3 down to 22.3
+  #      deg, and the target width 4.2276 u sits BETWEEN the w_lig=25 deploy (4.1576) and the
+  #      w_lig=18 deploy (4.4423), so the optimum is INTERIOR (w_lig ~ 22 mm), not pinned at a bound.
+  #      A target sized at the edge of reachability instead saturates the optimizer against the
+  #      kinematic limit and `learn_w_lig` gets no leverage at all.
+  #
+  # Re-run the tool whenever the tessellation, the checkpoint, or the hinge model changes.
+  #
+  # THE LAW. Two rigid tiles hinged at a shared CORNER: the hinge is offset from the
+  # centre-to-centre line by an angle psi, and opening the pair by a relative angle theta swings it
+  # toward that line, so the panel pitch grows as
+  #     lam(theta) = cos(psi - theta/2) / cos(psi),   maximal at FULL deployment theta = 2*psi,
+  #     lam_max = 1/cos(psi).
+  # A SQUARE tile has psi = 45 deg -> lam_max = sqrt(2) at theta = 90 deg, the familiar
+  # rotating-squares result. ⚠ THIS SHEET IS NOT SQUARE: pitch 1 x 2 gives
+  #     psi_x = 63.43 deg  ->  lam_max 2.2361, full deployment at 126.9 deg
+  #     psi_y = 26.57 deg  ->  lam_max 1.1180, full deployment at  53.1 deg
+  # so deployment is strongly ANISOTROPIC and the y axis LOCKS at 53.1 deg — which is exactly the
+  # saturation seen in the load sweep. Applying sqrt(2)-at-90 here would be wrong by ~25%.
+  #
+  # At theta_shape = 25 deg:  lam_x = 1.4092,  lam_y = 1.0845  on a flat 3.0 x 6.0 sheet
+  #   -> half_w = 1.4092 * 3.0 / 2 = 2.1138      half_h = 1.0845 * 6.0 / 2 = 3.2535
+  # The 28 deg deployed bbox is 4.4348 x 6.5700, so the target is 4.7% / 1.0% inside it — that gap
+  # IS the design headroom of step 3 above. Anchored with its bottom edge ON the deployed bottom
+  # edge (y_lo = -0.1032): the clamped tiles cannot leave it, so a target floating above or below
+  # would put the clamp permanently outside and make its chamfer error unfixable.
+  target_cx: 1.5355
+  target_cy: 3.1956
+  target_half_w: 2.4356
+  target_half_h: 3.3321
+
+mapping:
+  map_type: closed_les
+
+optimization_weights:
+  validity_method: none
+
+hinge_model:
+  # Under `type: surrogate` every field here is LIVE. `material` / `thickness_mm` are checked against
+  # the checkpoint's own `meta` by `load_hinge_surrogate`, which WARNS rather than raises — a
+  # provenance warning on startup means this block and the checkpoint disagree, and the energies are
+  # then meaningless. Treat that warning as an error.
+  type: surrogate
+  checkpoint: data/surrogates/hinge_surrogate_pet_v3.pkl
+  material: PET              # matches meta.material of the PET campaign checkpoint
+  thickness_mm: 0.5          # PET stock, the standard sheet gauge; matches the campaign
+  w_lig_mm: 18.0             # ligament width [mm]; the physical standard. ★ Unlike the steel net
+                             # (trained on [1, 20] while W_LIG_BOUNDS is (5, 25), so `learn_w_lig`
+                             # extrapolated past 20), the PET campaign spans [5.01, 24.97] — the
+                             # bounds and the training window now AGREE, so a learned per-hinge
+                             # width is finally a legitimate design variable rather than an
+                             # excursion outside the data.
+  calibrate: false
+  length_scale: 406.4        # mm per pipeline unit = the real panel pitch
+  energy_scale: 2.4606e-3    # 1 / length_scale -> load values are newtons (see banner: NOT a
+                             # checkpoint property, do not rescale it when swapping checkpoints)
+  barrier: 0.5               # cubic OOD penalty. ★ RAISED 10x from 0.05 (2026-08-01) — 0.05 is not
+                             # merely conservative, it is too weak to hold the solve. Measured
+                             # dW/da at w_lig=18mm, alpha=95deg, in physical N: the axial force
+                             # PEAKS at +286 N near a = 2.5 mm and then SOFTENS toward zero (+51 N
+                             # at 10 mm, +19 N at 20 mm, +6.9 N at 40 mm) because W saturates
+                             # through its tanh outside the data. A descending branch is unstable,
+                             # and the barrier at 0.05 contributes only ~2-13 N there, so nothing
+                             # arrests a hinge once it passes the peak: the parent run snapped one
+                             # hinge from a = 7.4 mm to 69.5 mm in a single load step at load
+                             # fraction ~0.85, with theta unchanged. Measured cure, untrained design:
+                             #     barrier   0.05    0.5    5.0    50.0
+                             #     max a mm  73.75   8.72   7.80   6.04
+                             #     theta_max 56.3   56.0   55.5    55.0
+                             # 0.5 removes the runaway at essentially no kinematic cost. It does NOT
+                             # fix domain coverage on its own (in-box 45.5 -> 45.7% at the old load)
+                             # — that is the LOAD's job, above.
+  fail_line: 1.0             # reporting overlay only. ⚠ under this checkpoint D is NORMALIZED by
+                             # stats["D_scale"] (the steel net carries none, so its D was a raw
+                             # softplus), i.e. 1.0 now means "one RMS training damage", NOT fracture.
+  learn_w_lig: true
+
+physics:
+  # ── CONTACT: tiles CANNOT interpenetrate, and nothing else changes (2026-07-27) ───────────────
+  # `void_angles` returns TWO numbers per hinge: void_B is exactly the relative hinge rotation
+  # (0 = closed, > 0 = open, < 0 = one tile rotated INTO the other) and void_A = 180 - void_B.
+  # `contact_energy` is a one-sided ~1/x barrier with an asymptote at `min_angle`, and it is
+  # IDENTICALLY ZERO for any void angle >= `cutoff_angle`. So:
+  #   cutoff_angle: 0.0   -> the barrier vanishes the instant a hinge is open at all, which is why
+  #                          an open deployment is untouched (measured: vertices move 3e-9..5e-8).
+  #   min_angle: -2.0     -> asymptote 2 deg below closure; a hinge cannot rotate past it.
+  # ⚠ UNITS: `min_angle` and `cutoff_angle` are DEGREES here. `_parse_physics_config` multiplies
+  # both by pi/180 (nff/config/experiment.py), so writing radians double-converts them.
+  # void_A never contributes: it is >= 0 while open, and once void_B wraps it falls below
+  # min_angle into the "already escaped" branch, which is also zero.
+  # ⚠ WHY THIS MATTERS: with contact off, 71.7% of randomly harvested deployments had at least one
+  # hinge at negative theta, i.e. overlapping tiles (median 0.83%, max 6.1% of face area). EVERY
+  # example with >0.1% overlap had a negative-theta hinge. Those deployments are not physical and
+  # must never reach the surrogate. Measured with this block on: overlap 0.0000%, and the offending
+  # case moves from theta_min = -9.50 deg to +21.94 deg.
+  # k = 1e6, NOT 1e3. On easy cases every k in 1e3..1e9 is identical, but across a random harvest
+  # k=1e3 lets hinges slide to theta = -1 deg (0.32% overlap) while k=1e6 pins them at -0.00 deg.
+  # ⚠ STALE EVIDENCE: the min_angle sweep recorded here ("-2 deg gave 0.03% vs -0.1 deg 3.29%")
+  # predates the units fix above. The run labelled "-2 deg" was written as -0.0349 and therefore
+  # ran at -0.035 deg, so the comparison is not what it claims. k=1e6 is unaffected and still
+  # holds. Re-run the min_angle sweep before treating any value here as tuned.
+  # ⚠ LIMITATION: this barrier acts on BONDED pairs only. Two tiles that are not hinged to each
+  # other can still pass through, and the angle model cannot see it. That is the source of the
+  # ~0.03% residual overlap seen even when every hinge sits at theta >= 0, and it is why the
+  # harvest keeps an independent geometric gate rather than trusting the contact model alone.
+  use_contact: true
+  k_contact: 1000000.0
+  min_angle: -2.0            # DEGREES; asymptote just below the closed state
+  cutoff_angle: 0.0          # barrier is exactly zero for every OPEN hinge
+  linearized_strains: true
+  incremental: true
+  # ★★ 40, NOT 6 — the compression term reads the PATH, and incremental loading solves a SEQUENCE
+  # of equilibria whose route between them depends on the stepping. Measured on the 15x10 ROM: at 6
+  # steps the penalty scored 4.2x its converged value, because the coarse solve OVERSHOOTS between
+  # equilibria and the term scores that artefact rather than the physics. Converged by 40. The
+  # ENDPOINT angle is insensitive to this; the path is not. 12 hinges makes it cheap.
+  num_load_steps: 40
+  solver_maxiter: 20000      # ★★ NOT 1500. At the cap Stage-2 L-BFGS stops on the ITERATION COUNT,
+                             # so the returned state is a function of that count and jumps
+                             # discontinuously with the design — measured 122x gradient error on the
+                             # 15x10 ROM. Chamfer hid it (coarse geometric measure); per-hinge path
+                             # quantities do not.
+  solver_tol: 1.0e-5
+  backward_reg: 0.01         # ridge on the IFT adjoint (plastic softening makes the Hessian indefinite)
+  updated_lagrangian: false
+
+material:                    # LIVE under the ROM (inert with the surrogate + calibrate:false)
+  # ── CALIBRATED SPRINGS (2026-07-27) ───────────────────────────────────────────────────────────
+  # Physical values from the FEA hinge-condensation campaign, PET t = 0.5 mm, w_lig = 18 mm,
+  # RVE half-disk r_win = 100 mm:
+  #     k_stretch = 238.1  N/mm
+  #     k_shear   = 127.4  N/mm      (seeded cross-check still running — treat as provisional)
+  #     k_rot     = 487    N.mm/rad  ← the BUCKLED SECANT at 20 deg, not the pre-buckling tangent.
+  # k_rot deliberately does NOT use the elastic tangent (34231 N.mm/rad, or 19534 about the elastic
+  # centre): 0.5 mm PET buckles out of plane immediately (uz ~ 4t by 0.25 deg) and the moment
+  # SATURATES, so the pre-buckling number describes a hinge that does not exist at deployment
+  # rotations. 487 is the secant that actually carries the sheet at ~20 deg. A single quadratic
+  # spring is still the wrong functional form for a saturating moment — that is precisely the gap
+  # the learned surrogate exists to close; this is the best one-number stand-in.
+  #
+  # ── UNIT CONVERSION (N/mm -> pipeline) ────────────────────────────────────────────────────────
+  # `ligament_energy_linearized` evaluates k * (displacement in PIPELINE length units)^2 / 2, and
+  # that displacement is exactly the surrogate's `a` before its x length_scale. So the Gap-2
+  # matching relation of `hinge_surrogate.py::calibrate_scales` applies verbatim, inverted:
+  #     k_stretch_pipe = energy_scale * length_scale^2 * k_phys = 406.4 * 238.1 = 96763.84
+  #     k_shear_pipe   = energy_scale * length_scale^2 * k_phys = 406.4 * 127.4 = 51775.36
+  #     k_rot_pipe     = energy_scale               * k_phys    =   487 / 406.4 =     1.1983
+  # with length_scale = 406.4 mm/u (the real panel pitch) and energy_scale = 1/length_scale.
+  # That choice of energy_scale is what makes `loads.value` newtons: pipeline work = energy_scale *
+  # F[N] * length_scale * u_pipe = F[N] * u_pipe.
+  k_stretch: 96763.84         # = 238.1 N/mm
+  k_shear:   51775.36         # = 127.4 N/mm
+  k_rot:         1.1983       # = 487 N.mm/rad
+  density: 1.0
+
+boundary_conditions:
+  clamped_faces: [0, 3, 6]   # bottom edge (j = 0)
+
+loads:                       # top edge (j = 2) pulled +y — distributed, not a single grip. The
+                             # clamp is the opposite (bottom) edge: pull one side against the other.
+  # ★ 55.33 N/tile PUTS THE WORST HINGE AT 45 deg. The deployment angle is a CEILING the material
+  # imposes, not a value every hinge must hit, so the load is calibrated on theta_MAX
+  # (`calibrate_target.py --criterion max`, the default). Measured here: max 44.96, mean 44.35,
+  # min 42.67 — spread 2.29 deg, i.e. the whole sheet opens together, so mean and max barely
+  # differ and the criterion is nearly moot. It is NOT moot for a single-tile grip: see
+  # `sheet_4x8ft_rom_1tile.yaml`, where bisecting on the mean demands 172 kN and drives the worst
+  # hinge to 82 deg. (Bisecting on the mean here would give 59.60 N and theta_max 45.6.)
+  # Angle vs load (untrained, MEAN relative hinge rotation):
+  #     15 N -> 29.0 deg | 30 -> 37.9 | 60 -> 45.0 | 120 -> 49.0 | 600 -> 52.3 | 6000 -> 53.0
+  # It SATURATES at 53.1 deg = 2*psi_y, the kinematic lock of the short axis — not a spring effect,
+  # and no load can pass it. The 40-45 deg band is therefore F in [35, 60] N/tile.
+  # ⚠⚠ EVERYTHING ABOVE THIS LINE IS A **ROM** NUMBER — inherited from the parent config and kept
+  # only because it documents the mechanism (the 53.1 deg lock is real and hinge-model independent).
+  # The parent's claim that `--angle 45` "against THIS config gives 55.85 N" for the surrogate, and
+  # that the two hinge models are therefore "essentially the same" initial stiffness, is RETRACTED:
+  # `calibrate_target.py::deploy` never passed `bond_energy_fn`, so it deployed on the springs and
+  # calibrated the ROM whatever the config said. See the banner at the top of this file.
+  #
+  # ★★ ACTUALLY CALIBRATED FOR THE SURROGATE (2026-08-01, with the fixed tool):
+  #     calibrate_target.py --config <this file> --angle 28 --shape-angle 25
+  #   -> x0.0448 of the parent's 55.85 N = **2.50 N/tile**, theta max 28.04, mean 27.16, min 25.32
+  #      (spread 2.72 deg — the distributed 3-tile grip still opens the sheet nearly uniformly, so
+  #      the max/mean criterion distinction stays nearly moot here).
+  # The surrogate is roughly an ORDER OF MAGNITUDE softer in rotation than the calibrated springs,
+  # because it reproduces the saturating buckled hinge moment that one quadratic k_rot cannot. That
+  # softness is the point of the surrogate, not a defect — but it means a ROM load over-drives it by
+  # ~22x and pushes it through the 53.1 deg lock.
+  # ⚠ The parent's warning below is still correct and now has a cause: do NOT read a TRAINED run's
+  # deployment angle as evidence about load calibration — the optimizer moves the design, and with
+  # `learn_w_lig` on it moves the STIFFNESS too, so the angle is a design output, not a load readout.
+  - {face: 2, dof: 1, value: 5.91}
+  - {face: 5, dof: 1, value: 5.91}
+  - {face: 8, dof: 1, value: 5.91}
+
+target:                      # fallback TargetConfig; run_closed overrides it with the rectangle above
+  type: rectangle
+  center: [1.5433, 3.2086]
+  radius: 3.3457
+
+loss_weights:
+  # ── hinge health (LIVE here; inert in the ROM twin, which has no damage model) ────────────────
+  # ⚠ These three weights are NOT carried over from sheet_4x8ft.yaml (damage 10.0, ood 0.001). That
+  # file's steel checkpoint has no `D_scale`, so its `damage` acted on a raw softplus; here the
+  # probe divides by D_scale and `D` is in multiples of RMS training damage. The quantity changed
+  # meaning, so the weight has to be re-tuned on this config rather than inherited. Start at 0 to
+  # get a clean physics-only baseline, then raise damage until it visibly trades against chamfer.
+  damage: 0         # path-max D over the load steps, mean(D**2). Still 0: establish the physics
+                      # baseline first, then raise it and watch it trade against chamfer.
+  ood: 0.001          # design-side trust-box barrier (twin of hinge_model.barrier).
+                      # ⚠ WEAK BY CONSTRUCTION: `_term_ood` scores `ood[-1]`, the FINAL load step
+                      # only, while _term_damage is path-max and _term_compression path-min. The
+                      # optimizer duly drove this term down 20x (ood_raw 178 -> 8.8) while the PATH
+                      # went further out of domain. Do not read a low ood_raw as "in domain".
+  # ★★ AXIAL COMPRESSION (eta_a < 0) at ANY load step — THE most effective lever measured
+  # (2026-08-01). Once the checkpoint's box is itself compressive (eta_a_min = -0.140) the OOD
+  # barrier sees no violation, so this is the only handle. Measured, 200 epochs each, NN distance to
+  # training data in feature-std (held-out yardstick p90 = 0.688):
+  #     weight | boundary | hinge spread | in-box | NN p50 | NN p90 | NN max
+  #        0.0 |  9.04 mm |      16.10 deg |  36.4% |   2.00 |  19.02 |  28.44
+  #        0.1 |  6.73 mm |      10.31 deg |  42.1% |   1.95 |  10.28 |  20.16
+  #        1.0 |  7.67 mm |       1.84 deg |  46.7% |   1.31 |   3.25 |   8.15
+  #     ROM    |  5.46 mm |       2.18 deg |     -- |     -- |     -- |     --
+  # ★ There is NO trade-off between coverage and accuracy here: 1.0 cuts extrapolation 5.9x, matches
+  # the ROM's hinge-angle discipline, AND beats weight 0.0 on boundary match. Reading (UNVERIFIED):
+  # the surrogate is too soft where it never sampled, the optimizer exploits that fictitious
+  # compliance, and forbidding it recovers both. 1.0 is the default for that reason; 0.1 buys ~0.9 mm
+  # of boundary for 3x the extrapolation. Anything between them is unexplored.
+  # ⚠ PROVENANCE: that table was measured on the 45-deg parent, i.e. on the OVER-DRIVEN problem
+  # (55.85 N, a ROM load), where compression was doing double duty as a substitute for the load
+  # calibration this file now applies. With the load corrected the compressive exposure is far
+  # smaller to begin with (worst eta_a -0.180 at 31 deg vs -1.76 there), so 1.0 may now be stronger
+  # than needed. Re-run the 0.1 / 1.0 comparison here before treating 1.0 as tuned for THIS problem.
+  compression: 1
+  chamfer: 50.0
+  # ★ coverage = 0 (was 1.0). `chamfer_loss = precision + coverage * coverage_loss`, where
+  # `precision` = each deployed BOUNDARY VERTEX to its nearest target point (the thing we want) and
+  # `coverage` = each of the 400 sampled TARGET points to its nearest boundary vertex. This sheet
+  # has only 12 boundary vertices against a 23.5-unit perimeter, so the coverage term has a hard
+  # floor of ~(perimeter/12)^2/12 = 0.32 that NO design can beat -- 77% of the old "best chamfer"
+  # 0.416 was that floor. Worse, it actively fought precision: minimizing it spreads the 12 vertices
+  # out, which pushed the boundary error UP (18.3mm untrained -> 29.5mm trained) and dragged the
+  # deployment angle from 45 to 62.7 deg. Measured, 12 boundary vertices vs the target perimeter:
+  #     coverage   1.0      0.1     0.01     0.0
+  #     mean       16.8mm   8.8mm   6.3mm    5.7mm
+  #     max        54.3mm  18.5mm  14.9mm   14.1mm
+  #     theta      47.6deg 46.5deg 45.3deg  45.6deg
+  # At 0 the angle HOLDS ITSELF at 45 deg — a boundary that matches a 45-deg-derived rectangle IS a
+  # 45-deg deployment, so no angle constraint is needed. Coverage exists to stop a collapse to a
+  # point; that cannot happen here (fixed target + rigid connected tiles + physics-bounded deploy),
+  # verified stable to 600 epochs. Raise it to ~0.01 if a future target ever does collapse.
+  # ⚠ side benefit: at 0, `chamfer_total` IS the precision term, so it reads cleanly; run_closed's best-checkpoint now ranks on TOTAL loss, and
+  # selection ranks by the metric we actually care about instead of by the floor.
+  coverage: 0.0
+  regularization: 1.0e-4
+
+training:
+  num_epochs: 200
+  learning_rate: 0.01
+  optimizer: adam
+  lr_schedule: cosine
+  grad_clip: 1.0
+  geometric_loss_type: boundary_vertices
+
+visualization:
+  stage0: true               # flat trained sheet (the design the map produced)
+  stage1: false              # Stage 1 is BYPASSED here (validity_method: none) — the plot is empty
+  stage2: true               # deployed equilibrium + target
+  energy_plot: false         # ⚠ OFF because this IS a surrogate run: the
+                             # decomposition (build_decompose_energy_fn) is hard-wired to the
+                             # linear-spring ligament and has no bond_energy_fn hook, so it reports
+                             # U_int from springs this solve never used (~0 here, since closed hinges
+                             # have ~zero reference bond length) and the balance Sigma≈0 fails by
+                             # construction. `work` is derived from that same U_int, so it is off too.
+                             # The solver's own total potential (solution.energies) IS correct.
+  animation: true            # deployment animation over the load steps
+  show_plots: false
+  save_outputs: true
+  show_external_forces: false   # per-face arrows are clutter; the loading diagram carries the BCs
+  show_kinematic_blocks: true

@@ -1,0 +1,106 @@
+# Closed-state RDPQK — half-tile A4 beam (17 wide x 12 high = 204 panels, ≈√2:1).
+# Variant of rect_a4_beam_half_f50: vertical (cantilever) force -100, shearing weight 0.
+# Same edge-pull experiment (clamp the whole LEFT edge in x, pull the whole RIGHT
+# edge +x), PLUS a downward vertical force on the top-right tile (face 203).
+# Same FROZEN target box as f50 so results stay comparable.
+#
+# Face index = col*N + row (N=12). Left edge (col0) = 0..11. Right edge (col16) = 192..203.
+
+tessellation:
+  tessellation_type: closed_rdpqk
+  M: 17
+  N: 12
+  r_init: 0.45
+  spacing: 1.0
+  hinge_margin: 0.13
+  target_scale_x: 1.0
+  target_scale_y: 0.95
+  clamped_dofs: [0]        # left edge: x only
+  y_pin_faces: [11]        # also pin y on the TOP-left tile (col0, top row)
+  # FIXED target rectangle (frozen from the untrained deploy bbox of rect_a4_beam_half).
+  # Presence of target_half_w/h routes run_closed.py to the non-adaptive branch.
+  target_cx: 12.16
+  target_cy: 3.45
+  target_half_w: 12.43
+  target_half_h: 8.34
+
+mapping:
+  map_type: closed_les
+
+optimization_weights:
+  validity_method: none
+
+physics:
+  use_contact: false
+  linearized_strains: true
+  incremental: true
+  num_load_steps: 15
+  solver_maxiter: 1500
+  solver_tol: 1.0e-5
+  updated_lagrangian: false
+
+material:
+  k_stretch: 1000.0
+  k_shear: 1000.0
+  k_rot: 0.5
+  density: 1.0
+
+boundary_conditions:
+  clamped_faces: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+
+loads:
+  - {face: 192, dof: 0, value: 40.0}
+  - {face: 193, dof: 0, value: 40.0}
+  - {face: 194, dof: 0, value: 40.0}
+  - {face: 195, dof: 0, value: 40.0}
+  - {face: 196, dof: 0, value: 40.0}
+  - {face: 197, dof: 0, value: 40.0}
+  - {face: 198, dof: 0, value: 40.0}
+  - {face: 199, dof: 0, value: 40.0}
+  - {face: 200, dof: 0, value: 40.0}
+  - {face: 201, dof: 0, value: 40.0}
+  - {face: 202, dof: 0, value: 40.0}
+  - {face: 203, dof: 0, value: 40.0}
+  - {face: 203, dof: 1, value: -100.0}
+
+target:
+  type: rectangle
+  center: [11.0, 6.0]
+  radius: 12.0
+
+loss_weights:
+  chamfer: 50.0          # primary objective — shape match dominates
+  coverage: 0.5
+  stretching: 0.0
+  shearing: 0.0         # no shear penalty
+  bending: 0.0
+  contact: 0.0
+  material_area: 0.0
+  hinge_gap: 0.0
+  openness: 0.0
+  deformation: 0.0
+  void_closure: 0.0
+  closure_delta: 0.0
+  regularization: 1.0e-4
+
+training:
+  num_epochs: 200
+  learning_rate: 0.02
+  optimizer: adam
+  lr_schedule: cosine
+  grad_clip: 1.0
+  geometric_loss_type: boundary_vertices
+
+visualization:
+  stage0: true
+  stage1: false
+  stage2: true
+  energy_plot: true
+  animation: true
+  show_plots: false
+  save_outputs: true
+  show_hinges: false
+  show_hinge_indices: false
+  show_face_indices: false
+  show_external_forces: true
+  show_kinematic_blocks: true
