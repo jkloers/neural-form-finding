@@ -77,14 +77,19 @@ from nff.utils.figstyle import (FS_ANNOT, INK, ORANGE, TEAL, TEXT_W_BP, apply_ch
                                 printed_pt, save_paper_figure, use_agg)
 use_agg()
 import matplotlib.pyplot as plt                                    # noqa: E402
-from matplotlib.colors import LinearSegmentedColormap  # noqa: E402
+from matplotlib.collections import PolyCollection                  # noqa: E402
+from matplotlib.cm import ScalarMappable                           # noqa: E402
+from matplotlib.colors import LinearSegmentedColormap, Normalize   # noqa: E402
 from matplotlib.lines import Line2D                                # noqa: E402
 from matplotlib.patches import Patch                               # noqa: E402
+from shapely.geometry import Point as SPoint, Polygon as SPoly     # noqa: E402
+from shapely.ops import unary_union                                # noqa: E402
 
 from nff.closed.hinge_paths import load_paths                      # noqa: E402
 from nff.closed.load_paths import load_field, interface_decomposition  # noqa: E402
 from nff.closed.load_path_viz import (draw_load_path, zone_colours, MODE_COLOUR,  # noqa: E402
-                                      CLAMP_FILL)
+                                      CLAMP_FILL, draw_hinge_marks,
+                                      draw_supports_and_loads_safe, _fit_axes)
 from nff.closed.hinge_path_binning import PROJECTIONS, densify, trajectories  # noqa: E402
 from nff.models.hinge_surrogate import (load_hinge_surrogate, apply_hinge_failure,  # noqa: E402
                                         _geom_vector)
@@ -226,6 +231,157 @@ def path_damage(paths, surrogate) -> np.ndarray:
 def most_damaged_hinge(paths, surrogate) -> int:
     """Index of the ligament the surrogate scores as most damaged over its whole path."""
     return int(np.argmax(path_damage(paths, surrogate)))
+
+
+# ---------------------------------------------------------------------------------------------
+# LIGAMENT ACTIVATION -- the alternative left column.
+#
+# The load-transmission panel answers "how does force cross the sheet". The activation panel answers
+# "how hard is each ligament worked", which is the SAME quantity the right column plots, read on the
+# sheet instead of in the (eta_a, eta_s) plane. Ligament k therefore appears twice in a row: as a
+# coloured bar at its place in the tessellation, and as a trajectory. That is the pairing the
+# monitored ring already makes for one ligament, extended to all forty.
+ACTIVATION_LABEL = {
+    "theta": r"deployed hinge rotation  $\vartheta$  (deg)",
+    "damage": r"predicted damage over the path  $D/D_{\mathrm{s}}$",
+    "compression": r"deepest axial compression  $-\min\,\eta_a$",
+    "shear": r"peak shear  $\max\,|\eta_s|$",
+}
+# ★ THE SAME TEAL THE HINGE WINDOW IS DRAWN IN IN fig:hinge-layout. The glyph on this sheet is that
+# figure's window, at its true radius, so it has to carry that figure's colour or the reader has no
+# reason to read the two as one object. Saturation, not hue, carries the activation.
+#
+# ⚠ It collides with the row-2 trajectory colour by construction. That is tolerable ONLY because the
+# columns are different drawings: no teal appears in the strain panel's sheet and no window appears
+# in the trajectory panel. Do not spend teal on anything else here.
+# ⚠ THE PALE END IS A TINTED TEAL, NOT WHITE. The scale is clipped to the data, so the quietest
+# hinge in the pair sits exactly on the floor of the ramp -- on a white floor it would print as an
+# empty outline and read as a hinge with no reading rather than as the least worked one.
+ACTIVATION_RAMP = ("#DDF0EB", "#B9E2DA", "#8FD1C5", "#5FBAAB", "#2F9F8D", "#0F7867")
+PANEL_FILL = "#F4F5F7"
+R_WIN_MM = 100.0        # the RVE domain radius -- see memory/project_rve_domain_radius.md
+
+
+def activation_values(paths, kind, surrogate=None) -> np.ndarray:
+    """(n_hinges,) the scalar each ligament is coloured by on the sheet panel.
+
+    Every option is read over the WHOLE path, not at the deployed state alone, except ``theta`` --
+    rotation is monotone in these deployments, so its endpoint is its maximum, while both strains
+    turn around mid-deployment and an endpoint reading misses the excursion the objective acts on.
+
+    Args:
+        kind: ``'theta'`` deployed hinge rotation in degrees; ``'damage'`` the surrogate's
+            path-maximum damage in multiples of the RMS training damage; ``'compression'`` the depth
+            of the deepest axial squeeze, zero for a ligament that never goes compressive;
+            ``'shear'`` the peak shear magnitude.
+        surrogate: required for ``kind='damage'``.
+    """
+    eta = np.asarray(paths.eta)
+    if kind == "theta":
+        return np.degrees(np.abs(eta[-1, :, 2]))
+    if kind == "compression":
+        return -np.minimum(eta[..., 0].min(axis=0), 0.0)
+    if kind == "shear":
+        return np.abs(eta[..., 1]).max(axis=0)
+    if kind == "damage":
+        if surrogate is None:
+            raise ValueError("--activation damage needs the surrogate checkpoint")
+        return path_damage(paths, surrogate)
+    raise ValueError(f"unknown activation field {kind!r}")
+
+
+def draw_activation_sheet(ax, field, values, *, vlim, cmap, r_win, config=None, tessellation=None,
+                          monitored=None, weight_scale=1.0) -> dict:
+    """Draw one deployed sheet with every hinge window shaded by how hard that hinge is worked.
+
+    The glyph is the HINGE WINDOW of ``fig:hinge-layout``, built the way that figure builds it
+    (``nff.utils.visualization.hinge_strip_polygon``): the disc of radius ``r_win`` about the
+    pivot, intersected with the material. Nothing is oriented. The half-disc read is EMERGENT --
+    the tile boundaries and the cuts bound the disc -- which is why the window cannot be
+    misaligned, and why it is safe to draw at its TRUE radius, showing what that figure asserts:
+    neighbouring windows are disjoint.
+
+    Args:
+        field:  the extracted ``ForceField``, used here only for its GEOMETRY -- the deployed tile
+                polygons, the hinge midpoints and the corotated secondary-cut axes. No force is
+                read, so this panel says nothing about transmission.
+        values: (n_hinges,) the activation scalar, in ``bond_connectivity`` order.
+        vlim:   ``(lo, hi)`` colour limits, SHARED across the rows. Per-row autoscaling would make
+                two different activations print the same colour, which is the one thing a paired
+                figure must not do.
+        r_win:  window radius in SHEET units, i.e. ``r_win_mm / length_scale``. Passing a made-up
+                radius would draw a window the RVE does not have.
+        config: the run's config, for the clamp fill and the load arrow. The grip IS the problem
+                statement; omit it and the two sheets read as unloaded geometry.
+        monitored: ligament index to ring, pairing this panel with the trajectory beside it.
+    """
+    ax.set_aspect('equal')
+    ax.axis('off')
+
+    nodes = list(field.face_nodes)
+    ax.add_collection(PolyCollection(nodes, facecolors=PANEL_FILL, edgecolors='#9CA3AB',
+                                     linewidths=0.7 * weight_scale, zorder=2))
+    # ⚠ THE CLAMPED PANEL IS HATCHED HERE, NOT FILLED. On the load-transmission sheet a flat fill
+    # is unambiguous, because nothing else on that drawing is a tile colour. Here the ligament ramp
+    # runs through the same slate family, so a filled support tile reads as a tile carrying a
+    # VALUE. A hatch is categorically not a colour, and it is the structural convention besides.
+    clamped = ([int(i) for i in (config.topology.get('bc_clamped')
+                                 or config.topology.get('clamped_faces') or [])]
+               if config is not None else [])
+    clamped = [i for i in clamped if 0 <= i < len(nodes)]
+    if clamped:
+        with plt.rc_context({'hatch.linewidth': 0.8 * weight_scale}):
+            ax.add_collection(PolyCollection([nodes[i] for i in clamped], facecolors='#E2E5EA',
+                                             edgecolors='#5A626B', hatch='///',
+                                             linewidths=0.9 * weight_scale, zorder=3))
+
+    xy = np.asarray(field.hinge_xy)
+    poly = np.asarray(field.face_nodes)
+    pairs = np.asarray(field.face_pairs)
+    norm = Normalize(*vlim)
+    face_rgba = cmap(norm(np.asarray(values)))
+
+    # ★ THE WINDOW IS A BOOLEAN, NOT AN ORIENTED PATCH. This mirrors
+    # ``nff.utils.visualization.hinge_strip_polygon``, which draws the windows of fig:hinge-layout:
+    # a FULL disc about the pivot, intersected with the two panels the hinge joins. There is no
+    # diameter direction and no bulge side to get wrong -- the material decides the shape. An
+    # earlier version placed a 180-deg wedge on the corotated cut axis and chose its side from the
+    # panel centroids; both are guesses, and both were visibly wrong on the deployed sheet.
+    # Deployed, the cut voids have already opened between the tiles, so the union IS the material
+    # and the reference's void subtractions have nothing left to remove.
+    for h in range(xy.shape[0]):
+        tiles = unary_union([SPoly(poly[pairs[h][0]]), SPoly(poly[pairs[h][1]])])
+        win = tiles.intersection(SPoint(*xy[h]).buffer(r_win, resolution=64))
+        for pg in ([win] if win.geom_type == "Polygon" else list(win.geoms)):
+            if pg.is_empty:
+                continue
+            xs, ys = pg.exterior.xy
+            ax.fill(xs, ys, facecolor=face_rgba[h], edgecolor="#2E8B7C",
+                    linewidth=0.45 * weight_scale, zorder=12)
+
+    reach = np.zeros((0, 2))
+    if config is not None and tessellation is not None:
+        topo = config.topology
+        x0, y0, x1, y1, span = draw_supports_and_loads_safe(
+            ax, tessellation, [], topo.get('loads'), clamped_dofs=topo.get('clamped_dofs'),
+            y_roller_faces=topo.get('y_roller_faces'), x_roller_faces=topo.get('x_roller_faces'),
+            weight_scale=weight_scale)
+        # A SMALLER pad than the load-transmission sheet takes. There the padding also has to clear
+        # the tension ribbons and the shear marks, which reach past the tiles; here nothing is drawn
+        # outside the tessellation but the load arrow, whose own extent is already in the reach box.
+        # At 0.18 the wasted band below the sheet cost the windows about a fifth of their diameter.
+        pad = 0.05 * span
+        reach = np.array([[x0 - pad, y0 - pad], [x1 + pad, y1 + pad]])
+
+    box = ax.get_window_extent()
+    _fit_axes(ax, field, reach, float(box.width / max(box.height, 1e-30)))
+
+    if monitored is not None:
+        draw_hinge_marks(ax, field, monitored, colour=INK)
+
+    v = np.asarray(values)
+    return {'activation_min': float(v.min()), 'activation_max': float(v.max()),
+            'activation_mean': float(v.mean())}
 
 
 def traj_theta(paths, hinge) -> float:
@@ -450,10 +606,11 @@ def _trim(img, tol=0.004, pad=2):
 
 
 def _stack_views(tiles, gap=10):
-    """One tall strip: the oblique view on top, then the plan and the elevation beneath it.
+    """Stack the views into one strip, trimmed and rescaled to a common width.
 
-    Each tile is trimmed and rescaled to a common width so the three read as one object seen three
-    ways rather than three separate pictures at three separate scales.
+    A single view passes through trimmed, which is what the hinge inset now asks for; the stacking
+    survives because a caller that wants a second projection should get it at the first one's scale
+    rather than at its own.
     """
     cut = [_trim(t) for t in tiles]
     W = max(c.shape[1] for c in cut)
@@ -484,6 +641,19 @@ def valid_frames(frames):
     Two independent tests, because either can fire alone: a non-finite field, and an out-of-family
     jump in the buckle amplitude. Everything after the first bad increment is dropped too -- a solve
     does not recover once it has diverged.
+
+    ★★ A BUCKLE SNAP IS NOT A DIVERGENCE, and the amplitude test alone cannot tell them apart.
+    A ligament driven into axial compression buckles suddenly: on the 3x3 pair, ligament 3 creeps to
+    ``uz`` 3.5 mm over seventeen frames and then snaps to 25.6 mm in one. That step is far out of
+    family, yet every field stays finite and the solve goes on for twenty-three further frames that
+    grow smoothly and monotonically to the deployed state. Truncating there keeps only the
+    PRE-buckle half and renders an undeformed hinge -- the opposite of the failure this guard exists
+    to prevent.
+
+    A diverged increment is TERMINAL: CalculiX writes it and gives up, so nothing sensible follows
+    it. A jump is therefore read as divergence only when the archive cannot corroborate it -- the
+    step or the tail is non-finite, too few frames follow to judge, or the tail falls back on
+    itself instead of continuing to grow.
     """
     n = int(len(np.asarray(frames["theta_deg"])))
     ok = np.ones(n, bool)
@@ -495,8 +665,14 @@ def valid_frames(frames):
     if uz.size == n and n > 4:
         d = np.abs(np.diff(uz))
         med = float(np.median(d[np.isfinite(d)])) if np.isfinite(d).any() else 0.0
+        min_tail = 3                       # frames needed after a jump to call it a snap
         for b in np.where(~np.isfinite(d) | (d > max(20.0 * med, 1e-12)))[0]:
-            ok[b + 1:] = False
+            tail = uz[b + 1:]
+            settles = (np.isfinite(d[b]) and tail.size >= min_tail
+                       and np.all(np.isfinite(tail))
+                       and np.all(np.diff(tail) > -max(5.0 * med, 1e-9)))
+            if not settles:
+                ok[b + 1:] = False
     idx = np.where(ok)[0]
     return idx if idx.size else np.arange(n)
 
@@ -533,16 +709,13 @@ def hinge_render_inset(ax, frames, theta_rad, tip, colour, *, field_lim, field_k
     # default full-mesh frame renders the hinge as a speck in a field of flat sheet. The window is
     # centred on the LIGAMENT by the renderer, not on the origin -- the two are tens of mm apart.
     w_lig = float(frames["w_lig"])
-    # THREE CAMERAS on one state. A single oblique view cannot separate the two things this hinge
-    # does at once: the plan view carries the in-plane opening, the elevation carries the
-    # out-of-plane buckle (here uz reaches ~45x the sheet gauge), and the oblique view is the only
-    # one in which the two read as one deformed body. Shown together they disambiguate each other --
-    # material that overlaps in one projection is separated in another.
-    # TWO orthogonal views, no oblique. An oblique camera shows both the opening and the buckle at
-    # once but names neither: without axes the reader cannot tell which way is "up", so the fold
-    # reads as an arbitrary shape. A plan and an elevation are unambiguous because each kills one
-    # axis -- the plan is the in-plane mechanism, the elevation is the out-of-plane buckle.
-    views = (("top", 89.0, azim), ("side", 2.0, azim))
+    # ONE CAMERA, LOOKING DOWN. It was a plan over an elevation: the plan carried the in-plane
+    # opening, the elevation the out-of-plane buckle. The stacked pair made the inset a tall strip
+    # that pushed the panel around and shrank both views; the buckle it justified is already carried
+    # by the trajectory panel and by the text, and the plan alone is what the reader must read here.
+    # With no second projection to be told apart from, the orientation triad and the view name are
+    # labelling a distinction that no longer exists, so the render is annotated with the bar only.
+    views = (("top", 89.0, azim),)
     tiles = []
     for name, ev, az in views:
         pv = os.path.join(tmpdir, f"hinge_{id(frames)}_{k}_{name}.png")
@@ -550,16 +723,16 @@ def hinge_render_inset(ax, frames, theta_rad, tip, colour, *, field_lim, field_k
                float(frames["thickness"]), float(frames.get("r_win", 100.0)), pv,
                vm=field, vmin=vmin, vmax=vmax, scale=False, view_r=1.15 * w_lig,
                cmap=_yield_cmap(vmin, vmax), label=FIELD_LABEL[field_kind], shading="depth",
-               elev=ev, azim=az, subdiv=2, dpi=400, outline=True, annotate=True,
-               figsize=(1.80, 1.50), annotate_pt=pt(10.5))
+               elev=ev, azim=az, subdiv=2, dpi=400, outline=True, annotate="scale",
+               figsize=(1.80, 1.50), annotate_pt=pt(11.5))
         tiles.append(plt.imread(pv))
 
-    # The box is sized FROM the composite: a three-view strip is tall, and an inset kept at the
-    # single-view aspect would letterbox it into a sliver with white bars top and bottom.
+    # SIZED BY WIDTH, not by height. A single plan tile is landscape where the old strip was
+    # portrait, so holding the height fixed would have doubled the box across the panel.
     strip = _stack_views(tiles)
     ax_w, ax_h = ax.get_window_extent().width, ax.get_window_extent().height
-    box_h = size * 1.42
-    box_w = box_h * (strip.shape[1] / strip.shape[0]) * (ax_h / ax_w)
+    box_w = size * 0.70
+    box_h = box_w * (strip.shape[0] / strip.shape[1]) * (ax_w / ax_h)
     x0, y0 = _clearest_slot(ax, box_w, box_h)
     inset = ax.inset_axes([x0, y0, box_w, box_h], zorder=20)
     inset.imshow(strip)
@@ -743,7 +916,8 @@ def build_figure(ref_paths, ref_field, opt_paths, opt_field, out_png, *, hinge=N
                  n_resample=400, surrogate=None, iso_common=False, frames=None,
                  ref_frames=None, opt_frames=None, iso="damage", dataset=None,
                  select='damage', ref_config=None, opt_config=None,
-                 ref_tess=None, opt_tess=None):
+                 ref_tess=None, opt_tess=None, sheet='load', activation='theta',
+                 r_win_mm=R_WIN_MM):
     """The 2x2 case study. Returns ``(out_png, hinge_index, stats)``.
 
     Args:
@@ -778,6 +952,13 @@ def build_figure(ref_paths, ref_field, opt_paths, opt_field, out_png, *, hinge=N
         dataset: the campaign npz reduced by :func:`load_buckle_dataset`; required for
             ``iso='buckle'``.
         ref_tess, opt_tess: real ``Tessellation`` objects, if a caller happens to have them.
+        sheet: what the left column draws. ``'load'`` is the force network -- tension routes,
+            compression zones, shear marks. ``'activation'`` drops the network and draws the bare
+            tessellation with every ligament coloured by how hard it is worked, on ONE scale shared
+            by the rows, so the left column reads the same quantity as the right one.
+        activation: which scalar colours the ligaments under ``sheet='activation'``. See
+            :func:`activation_values`.
+        r_win_mm: RVE window radius, in mm. Drawn to scale on the sheet.
     """
     if ref_paths.n_hinges != opt_paths.n_hinges:
         raise ValueError(f"designs disagree on hinge count: {ref_paths.n_hinges} vs "
@@ -825,6 +1006,22 @@ def build_figure(ref_paths, ref_field, opt_paths, opt_field, out_png, *, hinge=N
     elif iso == "damage" and surrogate is not None:
         grids = tuple(damage_field(surrogate, *g, xlim, ylim) for g in geoms)
 
+    # ONE colour scale over both sheets, for the same reason the strain window is shared: rows that
+    # autoscale separately cannot be compared, and the comparison is the whole point of the plate.
+    act_vals, act_lim, act_cmap = None, None, None
+    if sheet == 'activation':
+        act_vals = tuple(activation_values(p_, activation, surrogate)
+                         for p_ in (ref_paths, opt_paths))
+        # CLIPPED TO THE DATA, both ends. Anchoring the floor at zero spent most of the ramp on
+        # rotations no hinge of either design reaches, and pushed the whole population into the top
+        # third of the scale -- where the two rows differ by a shade instead of by a tone.
+        lo_act = float(min(v.min() for v in act_vals))
+        hi_act = float(max(v.max() for v in act_vals))
+        act_lim = (lo_act, hi_act if hi_act > lo_act else lo_act + 1.0)
+        act_cmap = LinearSegmentedColormap.from_list("activation", list(ACTIVATION_RAMP))
+        # The window is a PHYSICAL object, so its radius comes from the run's own length scale.
+        act_r_win = r_win_mm / float(ref_paths.length_scale)
+
     row_frames = (ref_frames if ref_frames is not None else frames,
                   opt_frames if opt_frames is not None else frames)
 
@@ -857,29 +1054,38 @@ def build_figure(ref_paths, ref_field, opt_paths, opt_field, out_png, *, hinge=N
         field_lim = (lo, max(hi, lo + 0.02))
     frames_present = field_lim is not None
 
-    fig = plt.figure(figsize=(FIG_W_IN, FIG_W_IN * 0.94), dpi=300)
+    # 0.82, down from 0.94: the render inset lost its stacked elevation, so the strain panels no
+    # longer have to reserve height for a portrait strip.
+    fig_h_in = FIG_W_IN * 0.82
+    fig = plt.figure(figsize=(FIG_W_IN, fig_h_in), dpi=300)
     # The sheet is much taller than it is wide, so a left column sized like the right one is mostly
     # margin; `_fit_axes` fills the height either way.
-    # `bottom` leaves a clear strip for the renders' shared colour key; without it the bar lands on
-    # the lower panel's x-axis label.
+    # The bottom strip carries the lower panel's ticks and x-label, then the key and the colour bar.
+    # It is reserved in INCHES, not in a figure fraction: everything standing in it is set in points,
+    # so a fraction that cleared them on a tall canvas puts the key on the tick labels on a short one.
     outer = fig.add_gridspec(2, 2, width_ratios=[0.62, 1.0], height_ratios=[1.0, 1.0],
                              left=0.075, right=0.99, top=0.945,
-                             bottom=0.105 if frames_present else 0.06,
+                             bottom=(0.72 if frames_present else 0.41) / fig_h_in,
                              wspace=0.08, hspace=0.22)
 
     rows = ((0, ref_paths, ref_field, REF_COLOUR, REF_LABEL, clouds[0], grids[0], ref_config,
-             ref_tess, row_frames[0]),
+             ref_tess, row_frames[0], None if act_vals is None else act_vals[0]),
             (1, opt_paths, opt_field, OPT_COLOUR, OPT_LABEL, clouds[1], grids[1], opt_config,
-             opt_tess, row_frames[1]))
+             opt_tess, row_frames[1], None if act_vals is None else act_vals[1]))
     stats, sheet_pos = {}, []
     tmp = tempfile.TemporaryDirectory()
     tmpdir = tmp.name
-    for r, paths, field, colour, label, cloud, grid, cfg, tess, row_fr in rows:
-        sheet = fig.add_subplot(outer[r, 0])
-        stats[label] = draw_load_path(sheet, field, config=cfg,
-                                      tessellation=tess or _DeployedShim(field.face_nodes),
-                                      highlight=monitored, highlight_colour=INK,
-                                      clamp_as_fill=True)
+    for r, paths, field, colour, label, cloud, grid, cfg, tess, row_fr, act in rows:
+        sheet_ax = fig.add_subplot(outer[r, 0])
+        if sheet == 'activation':
+            stats[label] = draw_activation_sheet(
+                sheet_ax, field, act, vlim=act_lim, cmap=act_cmap, r_win=act_r_win, config=cfg,
+                tessellation=tess or _DeployedShim(field.face_nodes), monitored=monitored)
+        else:
+            stats[label] = draw_load_path(sheet_ax, field, config=cfg,
+                                          tessellation=tess or _DeployedShim(field.face_nodes),
+                                          highlight=monitored, highlight_colour=INK,
+                                          clamp_as_fill=True)
 
         # FLUSH, not spaced: a marginal separated from its panel by a gap floats, and the reader
         # has to carry the axis across the gap by eye. Sharing the axis is not enough -- the two
@@ -896,9 +1102,13 @@ def build_figure(ref_paths, ref_field, opt_paths, opt_field, out_png, *, hinge=N
         stats[label] = {**stats[label], 'iso_levels': levels, 'iso_range': rng,
                         'render': render_info}
 
-        # ONE legend for the pair, on the top row only: both rows use identical encodings and differ
-        # only in hue, so repeating it underneath states nothing the reader has not already learnt.
-        if r == 0:
+        # ONE legend for the pair, on the BOTTOM row: both rows use identical encodings and differ
+        # only in hue, so drawing it twice states nothing the reader has not already learnt. It sits
+        # on row 2 because that is where the panel is empty -- the regularised design collapses its
+        # population onto the origin, while row 1 still has trajectories running through the corner.
+        # ⚠ `_clearest_slot` penalises the lower-left corner for the RENDER in both rows, so the
+        #   inset stays clear of the legend wherever the legend happens to be.
+        if r == 1:
             handles = [Line2D([], [], color="#6C757D", lw=2.6, label="monitored"),
                        Line2D([], [], color="#6C757D", lw=1.25, alpha=0.55, label="others")]
             if grid is not None:
@@ -910,34 +1120,71 @@ def build_figure(ref_paths, ref_field, opt_paths, opt_field, out_png, *, hinge=N
 
         # Row identity on the left edge: a step NUMERAL plus what changed, so the pair reads as one
         # problem solved twice rather than as two unrelated case studies.
-        pos = sheet.get_position()
+        pos = sheet_ax.get_position()
         sheet_pos.append(pos)
         step, what = ROW_STEP[label]
-        ymid = 0.5 * (pos.y0 + pos.y1)
+        # Centred BELOW the numeral, not on the row: the numeral owns the top of the strip, and on
+        # a short canvas a long row name centred on the full height rides into it.
+        ymid = 0.5 * (pos.y0 + pos.y1 - 0.055)
         fig.text(0.030, ymid, what, rotation=90, va="center", ha="center",
                  fontsize=pt(8.5), color=INK, linespacing=1.4)
         fig.text(0.030, pos.y1 - 0.012, step, rotation=0, va="top", ha="center",
                  fontsize=pt(10.5), color=colour, fontweight="bold")
 
         if r == 0:
-            sheet.set_title("Load transmission", fontsize=pt(9.0), color=INK)
+            sheet_ax.set_title("Hinge activation" if sheet == 'activation'
+                               else "Load transmission", fontsize=pt(9.0), color=INK)
             # On the MARGINAL, not the main panel: the marginal sits at the top of the cell, so a
             # title on the panel underneath it would be drawn behind it.
-            top.set_title("Ligament strain", fontsize=pt(9.0), color=INK, pad=6)
+            top.set_title("Hinge deformation", fontsize=pt(9.0), color=INK, pad=6)
             # The transmission channels are design-independent, so this one is drawn once.
             # OUTSIDE the axes, on the figure. Sized for the page these five entries cover most of
             # a sheet panel, and a key drawn on top of the tiles it describes hides the reading.
-            sheet_leg = fig.legend(handles=[
-                Line2D([], [], color=MODE_COLOUR['tension'], lw=2.2, label="tension route"),
-                Patch(facecolor=_zone_swatch((ref_field, opt_field)), edgecolor="#E2E4E8",
-                      label="compression zone"),
-                Line2D([], [], color=MODE_COLOUR['shear'], lw=1.8, label="shear plane"),
-                Patch(facecolor=CLAMP_FILL, edgecolor="#9CA3AB", label="clamped tile"),
-                Line2D([], [], color=INK, lw=0, marker='o', ms=6, markerfacecolor='none',
-                       markeredgewidth=1.6, label="monitored ligament")],
-                fontsize=pt(6.5), loc="lower left", bbox_to_anchor=(0.015, 0.005), ncol=2,
-                frameon=False, handlelength=1.6, columnspacing=1.2, handletextpad=0.5)
+            handles_sheet = ([Patch(facecolor="#E2E5EA", edgecolor="#5A626B", hatch="///",
+                                    label="clamped panel"),
+                              Line2D([], [], color=INK, lw=0, marker='o', ms=6,
+                                     markerfacecolor='none', markeredgewidth=1.6,
+                                     label="monitored hinge")]
+                             if sheet == 'activation' else
+                             [Line2D([], [], color=MODE_COLOUR['tension'], lw=2.2,
+                                     label="tension route"),
+                              Patch(facecolor=_zone_swatch((ref_field, opt_field)),
+                                    edgecolor="#E2E4E8", label="compression zone"),
+                              Line2D([], [], color=MODE_COLOUR['shear'], lw=1.8,
+                                     label="shear plane"),
+                              Patch(facecolor=CLAMP_FILL, edgecolor="#9CA3AB",
+                                    label="clamped panel"),
+                              Line2D([], [], color=INK, lw=0, marker='o', ms=6,
+                                     markerfacecolor='none', markeredgewidth=1.6,
+                                     label="monitored ligament")])
+            # STACKED, and low. Beside the colour bar the two entries ran into the lower strain
+            # panel's x-axis label, which sits in the same band; a single column at the foot of the
+            # page clears it and still reads as one key with the bar.
+            sheet_leg = fig.legend(
+                handles=handles_sheet, fontsize=pt(6.5), loc="lower left",
+                bbox_to_anchor=(0.405, 0.041 / fig_h_in) if sheet == 'activation'
+                                else (0.015, 0.034 / fig_h_in),
+                ncol=1 if sheet == 'activation' else 2,
+                frameon=False, handlelength=1.6, columnspacing=1.2, handletextpad=0.5,
+                labelspacing=0.35)
             sheet_leg.set_zorder(30)
+
+    # THE ONE COLOUR BAR IN THIS PLATE. It is drawn only for the activation sheets, and it is
+    # drawn ONCE: the scale is shared by the rows, so a bar per row would state twice that a colour
+    # means the same thing in each. The renders still carry no bar -- see the note further down.
+    if sheet == 'activation':
+        # NARROWER than the column it sits under. At full column width the bar was longer than the
+        # sheet it describes and read as a second panel rather than as a key.
+        x0 = min(p_.x0 for p_ in sheet_pos)
+        span = max(p_.x1 for p_ in sheet_pos) - x0
+        width = 0.60 * span
+        cax = fig.add_axes([x0 + 0.5 * (span - width), 0.425 / fig_h_in,
+                            width, 0.096 / fig_h_in])
+        cb = fig.colorbar(ScalarMappable(norm=Normalize(*act_lim), cmap=act_cmap), cax=cax,
+                          orientation="horizontal")
+        cb.outline.set_visible(False)
+        cb.ax.tick_params(labelsize=pt(6.5), length=2.0, width=0.6, pad=1.5, colors=INK)
+        cb.set_label(ACTIVATION_LABEL[activation], fontsize=pt(7.0), color=INK, labelpad=2.0)
 
     # ⚠ A between-rows ARROW down the left margin was tried and removed: the rotated row labels
     # already fill that column for almost the full row height, so the arrow and its "retrain" tag
@@ -945,11 +1192,12 @@ def build_figure(ref_paths, ref_field, opt_paths, opt_field, out_png, *, hinge=N
     # ⚠ NO SUPTITLE. The pair reads as one problem solved twice from the row labels alone; a banner
     # over the top only repeats them, and the caption is where that sentence belongs.
 
-    # ⚠ NO SHARED COLOUR BAR. Sized for the page it collided with the lower row's axis label and
-    # the sheet key, and on the compressed ligament it spans 0..0.05 PEEQ -- a scale whose whole
-    # range is "barely yielded", which is not worth the space it was taking. The renders still carry
-    # one COMMON limit (`field_lim`), so the two rows remain directly comparable; the numbers are
-    # printed on every run instead of drawn.
+    # ⚠ NO COLOUR BAR FOR THE RENDERS, and it has now been removed TWICE -- once for colliding with
+    # the lower row's axis label and the sheet key, and again on 2026-08-21 (author) as confusing:
+    # the bar spans 0..0.04 PEEQ, a range whose whole length is "barely yielded", and a reader who
+    # reads it as a damage scale takes the renders for something they are not. The renders still
+    # carry one COMMON limit (`field_lim`), so the two rows stay directly comparable; the numbers
+    # are printed on every run instead of drawn.
     # No bbox_inches: it crops to content, and the emitted page then stops being the authored
     # canvas that PAGE_SCALE is computed from.
     pdf, lo, hi = save_paper_figure(fig, out_png, FIG_W_IN * 72.0, fig.get_size_inches()[1] * 72.0,
@@ -1008,6 +1256,17 @@ def main():
                    help="draw the SAME contours in both rows, at the reference design's ligament, "
                         "instead of each row's own. A common backdrop rather than each design's "
                         "own damage landscape -- read the caveat in _iso_damage before using it.")
+    p.add_argument("--sheet", choices=("load", "activation"), default="load",
+                   help="what the LEFT column draws. 'load' is the force network (tension routes, "
+                        "compression zones, shear marks). 'activation' drops the network and draws "
+                        "the bare tessellation with every ligament coloured by how hard it is "
+                        "worked, on one scale shared by the two rows -- the same quantity the "
+                        "right column plots, read on the sheet.")
+    p.add_argument("--activation", choices=("theta", "damage", "compression", "shear"),
+                   default="theta",
+                   help="which scalar shades the hinge windows under --sheet activation")
+    p.add_argument("--r-win", type=float, default=R_WIN_MM,
+                   help="RVE window radius [mm]; the half-discs are drawn at this radius, to scale")
     p.add_argument("--out", required=True)
     args = p.parse_args()
 
@@ -1017,7 +1276,8 @@ def main():
     # ⚠ The surrogate is loaded whenever it is needed for EITHER job, because it also SELECTS the
     # monitored ligament (`select='damage'`). Tying it to `iso` alone silently changed which
     # ligament the figure follows the moment the backdrop was switched to buckling.
-    need_surrogate = iso == "damage" or args.select == "damage"
+    need_surrogate = (iso == "damage" or args.select == "damage"
+                      or (args.sheet == "activation" and args.activation == "damage"))
     surrogate = load_hinge_surrogate(args.surrogate) if need_surrogate else None
     dataset = load_buckle_dataset(args.dataset) if iso == "buckle" else None
     def _frames(path):
@@ -1032,7 +1292,9 @@ def main():
                                      opt_frames=_frames(args.opt_frames),
                                      iso=iso, dataset=dataset, select=args.select,
                                      ref_config=_cfg(args.ref_config),
-                                     opt_config=_cfg(args.opt_config))
+                                     opt_config=_cfg(args.opt_config),
+                                     sheet=args.sheet, activation=args.activation,
+                                     r_win_mm=args.r_win)
 
     print(f"  monitored ligament {hinge} of {ref_paths.n_hinges}")
     for label in (REF_LABEL, OPT_LABEL):
@@ -1059,10 +1321,13 @@ def main():
     for label, paths in ((REF_LABEL, ref_paths), (OPT_LABEL, opt_paths)):
         e = np.asarray(paths.eta)[:, hinge, :]
         eta = np.asarray(paths.eta)
+        st = stats[label]
+        sheet_read = (f"activation {st['activation_min']:.3f}..{st['activation_max']:.3f} "
+                      f"(mean {st['activation_mean']:.3f})" if args.sheet == 'activation'
+                      else f"routes {st['tension_routes']}  shaded {st['shaded_tiles']}")
         print(f"  {label:38s} min eta_a {e[:, 0].min():+.4f} at load fraction "
               f"{paths.load_fraction[int(np.argmin(e[:, 0]))]:.2f}   endpoint {e[-1, 0]:+.4f}   "
-              f"population min {eta[..., 0].min():+.4f}   routes "
-              f"{stats[label]['tension_routes']}  shaded {stats[label]['shaded_tiles']}")
+              f"population min {eta[..., 0].min():+.4f}   {sheet_read}")
     print(f"  wrote {out}")
 
 

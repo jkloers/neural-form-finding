@@ -157,24 +157,39 @@ def baseline_objective(cfg, w_overlap=OVERLAP_W):
 
 
 def fd_cross_check(L, x0, rng, h=1e-3, n=4):
-    """Weak consistency: <grad L, d> against a central difference at a moderate step.
+    """<grad L, d> against a central difference at a step drawn from INSIDE the quadratic band.
 
     NOT a substitute for the adjoint test -- a central difference is itself only as good as the
     smoothness of the objective, which is the thing under examination. Reported so that a gradient
     that is grossly wrong is visible immediately, while the actual separation of "wrong adjoint"
     from "non-smooth objective" rests on the shared-machinery argument in the module docstring.
+
+    The pairs are returned, not just their worst ratio. Read as a scatter against the diagonal
+    this is the one instrument here that never takes a limit: ``h`` is fixed inside the band the
+    Taylor sweep certifies, so the cancellation that ends that band cannot reach it. The observed
+    order, by contrast, differences neighbouring remainders and therefore amplifies their noise
+    the moment the remainder stops falling.
+
+    ⚠ ``h`` must lie inside the arm's own quadratic band. At the band edge the linear
+    contamination below the band is already the same size as the quadratic signal, and the
+    deviation reported here is then a property of the step, not of the gradient.
+
+    Returns:
+        ``(worst, fd, ref)``. ``worst`` is the largest relative deviation, kept for the printed
+        line; ``fd`` and ``ref`` are the ``(n,)`` central-difference and adjoint directional
+        derivatives, in the order drawn.
     """
     Lf, gf = jax.jit(L), jax.jit(jax.grad(L))
     g = np.asarray(gf(jnp.asarray(x0)))
-    worst = 0.0
-    for _ in range(n):
+    fds, refs = np.zeros(n), np.zeros(n)
+    for i in range(n):
         d = rng.normal(size=x0.size)
         d /= np.linalg.norm(d)
-        fd = (float(Lf(jnp.asarray(x0 + h * d)))
-              - float(Lf(jnp.asarray(x0 - h * d)))) / (2 * h)
-        ref = float(g @ d)
-        worst = max(worst, abs(fd - ref) / max(abs(ref), 1e-300))
-    return worst
+        fds[i] = (float(Lf(jnp.asarray(x0 + h * d)))
+                  - float(Lf(jnp.asarray(x0 - h * d)))) / (2 * h)
+        refs[i] = float(g @ d)
+    worst = float(np.max(np.abs(fds - refs) / np.maximum(np.abs(refs), 1e-300)))
+    return worst, fds, refs
 
 
 def taylor(L, x0, rng, n_steps, h0, n_dir, ratio=2.0):
@@ -240,6 +255,14 @@ def main():
                     help="extra solver_tol values for the shipping arm, one series each. The "
                          "remainder is a difference of converged objective values, so the solve "
                          "tolerance sets the floor R2 cannot fall below.")
+    ap.add_argument("--gradcheck-h", type=float, default=4e-3,
+                    help="step for the adjoint-vs-central-difference cross-check. It must lie "
+                         "INSIDE every arm's quadratic band: 4e-3 clears the surrogate's "
+                         "1.1e-3..1.25e-2 and the ROM chart's 1.4e-4..2.5e-2. At the band edge "
+                         "the linear contamination below the band already matches the quadratic "
+                         "signal, and the deviation then measures the step, not the gradient.")
+    ap.add_argument("--gradcheck-n", type=int, default=48,
+                    help="random directions in the cross-check. Each costs two forward solves.")
     args = ap.parse_args()
 
     cfg = load_and_parse_config(f"data/configs/{args.config}.yaml")
@@ -261,9 +284,11 @@ def main():
     for label, builder in methods:
         L, x0 = builder(cfg)
         rng = np.random.default_rng(0)
-        adj = fd_cross_check(L, x0, rng)
+        adj, fd, ref = fd_cross_check(L, x0, rng, h=args.gradcheck_h, n=args.gradcheck_n)
+        rel = np.abs(fd - ref) / np.maximum(np.abs(ref), 1e-300)
         print(f"\n  {label}   ({x0.size} design parameters)")
-        print(f"    grad.d vs central FD at h=1e-3 (weak check):  {adj:.3e}")
+        print(f"    grad.d vs central FD at h={args.gradcheck_h:g} over {args.gradcheck_n} "
+              f"directions:  median {np.median(rel):.3e}  worst {adj:.3e}")
         hs, r1, o1, r2, o2 = taylor(L, x0, np.random.default_rng(1), args.n_steps,
                                     args.h0, args.n_dir, ratio=args.ratio)
         print(f"    {'h':>10}{'R1':>13}{'order':>8}{'R2':>13}{'order':>8}")
@@ -274,14 +299,16 @@ def main():
         tail = o2[len(o2) // 2:]
         print(f"    observed order of R2 over the finest half: {np.nanmedian(tail):.2f}"
               f"   (2.00 = the gradient is verified)")
-        out[label] = dict(h=hs, R1=r1, o1=o1, R2=r2, o2=o2, adjoint=adj, n_param=int(x0.size))
+        out[label] = dict(h=hs, R1=r1, o1=o1, R2=r2, o2=o2, fd=fd, ref=ref,
+                          adjoint=adj, n_param=int(x0.size))
         jax.clear_caches()
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     np.savez_compressed(args.out,
                         **{f"{k}__{f}": v[f] for k, v in out.items()
-                           for f in ('h', 'R1', 'o1', 'R2', 'o2')},
-                        meta=json.dumps({k: {'adjoint': v['adjoint'], 'n_param': v['n_param']}
+                           for f in ('h', 'R1', 'o1', 'R2', 'o2', 'fd', 'ref')},
+                        meta=json.dumps({k: {'adjoint': v['adjoint'], 'n_param': v['n_param'],
+                                             'gradcheck_h': args.gradcheck_h}
                                          for k, v in out.items()}))
     print(f"\n  wrote {args.out}")
 

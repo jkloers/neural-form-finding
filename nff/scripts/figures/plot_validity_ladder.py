@@ -59,7 +59,7 @@ FIG_W_BP, FIG_H_BP = page_bp(1.0, 1.35)      # \includegraphics[width=1\linewidt
 TITLE_TOP = 0.940    # figure y of the letter + column-title band, shared by all four columns
 TITLE_DX  = 0.023    # letter-to-title offset; the title is LEFT-aligned, never centred on the
                      # column, so no title length can ever run back into its own letter
-GROUP_TOP = 0.990    # figure y of the BASELINES / THIS WORK box tops
+GROUP_TOP = 0.990    # figure y of the baseline / this-work box tops
 
 
 def void_area_m2(r, scale):
@@ -146,42 +146,50 @@ def bare(ax):
         s.set_visible(False)
 
 
-def scale_bar(ax, frame, length_mm=1000.0, color=INK):
-    """A physical reference bar, drawn in DATA coordinates so it scales with the panel.
-
-    Both rows are already in millimetres but on different frames, so each row needs its own bar;
-    a single one would be silently wrong for the other row.
-    """
-    x0, x1, y0, y1 = frame
-    span = x1 - x0
-    bx = x0 + 0.035 * span
-    by = y0 + 0.035 * (y1 - y0)
-    ax.plot([bx, bx + length_mm], [by, by], color=color, lw=1.4, solid_capstyle='butt', zorder=14)
-    for x in (bx, bx + length_mm):                       # end ticks, so the extent is unambiguous
-        ax.plot([x, x], [by - 0.012 * span, by + 0.012 * span], color=color, lw=0.8, zorder=14)
-    lab = f'{length_mm / 1000:.0f} m' if length_mm >= 1000 else f'{length_mm:.0f} mm'
-    ax.text(bx + length_mm / 2, by + 0.022 * span, lab, fontsize=FS_ANNOT, color=color,
-            ha='center', va='bottom', zorder=15)
-
-
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--pkl", default="data/outputs/validity_ladder/ladder_7x7_r2295.pkl")
+    ap.add_argument("--no-boxes", action="store_true",
+                    help="omit the two grouping rules over the columns, keeping the construction "
+                         "column's ground. A slide has a speaker to group the columns")
     ap.add_argument("--out", default="paper/Images/validity_ladder.png")
     ap.add_argument("--dpi", type=int, default=600)
+    ap.add_argument("--one-scale", action="store_true",
+                    help="draw the flat row and the deployed row on one window at one scale, so "
+                         "the expansion on opening reads as a change of size")
+    ap.add_argument("--arms", default=None,
+                    help="comma-separated subset of " + ",".join(DRAWN) + ". Default draws all "
+                         "four. One arm on its own is a single column")
+    ap.add_argument("--width-bp", type=float, default=None,
+                    help="canvas width. Default is the page column; a slide wants its own")
+    ap.add_argument("--aspect", type=float, default=1.35,
+                    help="canvas width / height")
+    ap.add_argument("--numbers-array", action="store_true",
+                    help="the numbers as a table: one row per quantity, labelled once at the "
+                         "left, instead of a key and a value repeated in every column")
+    ap.add_argument("--no-titles", action="store_true",
+                    help="omit the column letters and titles, and give the band they sat in to "
+                         "the drawings")
+    ap.add_argument("--scale", type=float, default=1.0,
+                    help="printed width / authored width. Type is authored at target/scale so it PRINTS at the ladder size. A plate shown on a slide at 0.75 of its authored width takes its 8pt labels to 6pt unless this is set")
     args = ap.parse_args()
 
     # Hatch strokes are 1.0 pt by default, which on a 370 bp plate fills an overlap sliver solid
     # black and turns the texture into debris. At the 0.6 mm spacing of HATCH_OVERLAP a 0.40 pt
     # stroke is about a fifth ink, which reads as stripes rather than silting up in the narrowest
     # slivers.
-    apply_charter(**paper_rc(**{"hatch.linewidth": 0.40}))
+    apply_charter(**paper_rc(args.scale, **{"hatch.linewidth": 0.40}))
     with open(args.pkl, 'rb') as fh:
         D = pickle.load(fh)
     stock, scale = D['stock'], D['scale']
     A_MM, CUT, TGT = D['stock_area_mm2'], D['cut_len_mm'], D['target']
     by_key = {r['key']: r for r in D['rungs']}
-    drawn = [k for k in DRAWN if k in by_key]
+    # --arms narrows the comparison. One arm on its own is how the deck illustrates the
+    # construction: the 'chart' rung is the closed chart with no equilibrium anywhere in it, so its
+    # flat sheet and its deployed sheet are a purely kinematic cut-and-open pair.
+    _want = args.arms.split(",") if args.arms else DRAWN
+    drawn = [k for k in DRAWN if k in by_key and k in _want]
+    assert drawn, f"no arm of {_want} is in the harvest"
     sheet_mm = (stock[:, 0].max() - stock[:, 0].min()) * scale
     n_panels = D['shape'][0]
     EP = next((R['epochs'] for R in by_key.values() if R.get('epochs')), None)
@@ -203,6 +211,20 @@ def main():
     FRAME2 = (Q[:, 0].min() - m2, Q[:, 0].max() + m2,
               Q[:, 1].min() - m2 - 0.07 * (Q[:, 1].max() - Q[:, 1].min()), Q[:, 1].max() + m2)
 
+    # --one-scale puts the flat row and the deployed row on ONE window, so the growth on opening is
+    # a difference in size on the page rather than two drawings fitted to their own cells. This is
+    # what fig:inverse-design-matrix does for its own columns (b) and (c).
+    # Both conditions are needed. bare() sets an equal aspect, so a shared window alone is not
+    # enough: the drawing is fitted to its box, and the two rows' boxes differ in height (2.5
+    # against 2.0), which puts the scale of one on its width and the other on its height. The row
+    # heights are equalised below for the same reason.
+    if args.one_scale:
+        R = np.vstack([P, Q])
+        mr = 0.03 * max(np.ptp(R[:, 0]), np.ptp(R[:, 1]))
+        FRAME = FRAME2 = (R[:, 0].min() - mr, R[:, 0].max() + mr,
+                          R[:, 1].min() - mr - 0.07 * (R[:, 1].max() - R[:, 1].min()),
+                          R[:, 1].max() + mr)
+
     # ONE window size for all columns -- see module docstring. Sized so the SMALLEST defect in
     # the figure is clearly legible; bigger defects overflow it, which is honest since they are
     # already obvious at sheet scale. The chart, having no defect, is centred on its own sheet.
@@ -216,11 +238,32 @@ def main():
             ctr = by_key[key]['exemplar']['nodes'].reshape(-1, 2).mean(axis=0)
         plan[key] = (np.asarray(ctr), half)
 
+    # A page column is 370.6 bp wide and this plate is authored at aspect 1.35, which on a 16:9
+    # body of aspect 2.37 is height-bound: it reaches 57 per cent of the measure and leaves the
+    # rest empty. Authoring it flatter and wider is what fills the slide. Four columns of square
+    # sheets in two rows caps the aspect near 2.0, so 2.0 is the useful end of the range.
+    global FIG_W_BP, FIG_H_BP
+    if args.width_bp:
+        FIG_W_BP = float(args.width_bp)
+    FIG_H_BP = FIG_W_BP / float(args.aspect)
     fig = plt.figure(figsize=figsize_in(FIG_W_BP, FIG_H_BP))
-    gs = GridSpec(3, len(drawn), height_ratios=[2.5, 2.0, 1.05], hspace=0.16, wspace=0.10,
-                  left=0.075, right=0.985, top=0.855, bottom=0.105, figure=fig)
+    # top=0.855 reserves the band that holds the letters, the column titles and the tops of the
+    # two group boxes. With all three gone there is nothing in it, so it goes to the drawings.
+    _r2 = 2.5 if args.one_scale else 2.0      # equal boxes, so one window means one scale
+    # --numbers-array labels its three rows ONCE, at the left, so the left margin has to hold
+    # "Chamfer / radius" rather than only a rotated row name. The panels give up about eight per
+    # cent of their width for it, which is what turns three floating values per column into a
+    # table the eye can read down as well as across.
+    _left = 0.150 if args.numbers_array else 0.075
+    gs = GridSpec(3, len(drawn), height_ratios=[2.5, _r2, 0.95 if args.numbers_array else 1.05],
+                  hspace=0.16, wspace=0.10,
+                  left=_left, right=0.985, bottom=0.105, figure=fig,
+                  top=(0.975 if (args.no_titles and args.no_boxes) else 0.855))
 
     numbers_text = []                     # checked for collisions once the layout is final
+    # Row baselines for --numbers-array, as a fraction of the number band's own height.
+    ARRAY_Y = (0.80, 0.50, 0.20)
+    array_keys, array_first = [], {}
     for col, key in enumerate(drawn):
         R, r = by_key[key], by_key[key]['exemplar']
         ours = key == OURS
@@ -230,24 +273,23 @@ def main():
         ax = fig.add_subplot(gs[0, col])
         draw_flat(ax, r, stock, scale)
         ax.set_xlim(FRAME[0], FRAME[1]); ax.set_ylim(FRAME[2], FRAME[3]); bare(ax)
-        if col == 0:
-            scale_bar(ax, FRAME)
+
 
         # Letter and title are FIGURE text on one shared top edge rather than an axes title, so a
         # two-line title cannot drop its own column's letter out of line with the other three.
         bb = gs[0, col].get_position(fig)
         panel_letter(fig, 'abcd'[col], x=bb.x0, y=TITLE_TOP, va='top')
-        fig.text(bb.x0 + TITLE_DX, TITLE_TOP, TITLE.get(key, R['label']), ha='left',
-                 va='top', fontsize=FS_BASE, linespacing=1.4,
-                 color=(ORANGE if ours else INK),
-                 fontweight=('bold' if ours else 'normal'))
+        if not args.no_titles:
+            fig.text(bb.x0 + TITLE_DX, TITLE_TOP, TITLE.get(key, R['label']), ha='left',
+                     va='top', fontsize=FS_BASE, linespacing=1.4,
+                     color=(ORANGE if ours else INK),
+                     fontweight=('bold' if ours else 'normal'))
 
         # ── row 2: the deployed sheet against the target circle
         ad = fig.add_subplot(gs[1, col])
         draw_deployed(ad, r, TGT, scale)
         ad.set_xlim(FRAME2[0], FRAME2[1]); ad.set_ylim(FRAME2[2], FRAME2[3]); bare(ad)
-        if col == 0:
-            scale_bar(ad, FRAME2)
+
 
         # ── row 3: three numbers, each anchored to something visible above
         at = fig.add_subplot(gs[2, col]); at.axis('off'); at.set_facecolor('none')
@@ -265,6 +307,22 @@ def main():
                 ('Chamfer / radius',
                  '--' if not np.isfinite(ch) else f'{100 * ch / (TGT["r"] * scale):.2f}%')]
         ok = (R['med_tiling'] < 1e-9 and R['med_overlap'] < 1e-9 and R['med_gap'] < 1e-9)
+        if args.numbers_array:
+            # One ROW per quantity, each value centred in its own column, so the block reads down
+            # a column and across a row. The keys are drawn once at the left, after this loop:
+            # repeating them in all four columns is what the page figure does, and on a slide it is
+            # four copies of the same three words.
+            array_keys = [k for k, _ in rows]
+            for i, (k, v) in enumerate(rows):
+                good = v in ('none',)
+                shape = k.startswith('Chamfer')
+                t_val = at.text(0.5, ARRAY_Y[i], v, fontsize=FS_ANNOT,
+                    ha='center', va='center', transform=at.transAxes,
+                    color=(ORANGE if good else (RED if not shape else (INK if ok else GREY))),
+                    fontweight=('bold' if good else 'normal'))
+                if col == 0:
+                    array_first[i] = t_val
+            continue
         for i, (k, v) in enumerate(rows):
             good = v in ('none',)
             shape = k.startswith('Chamfer')
@@ -292,17 +350,23 @@ def main():
     pl = gs[0, len(drawn) - 1].get_position(fig)
     pm = gs[2, 0].get_position(fig)
     pad_x, top, bot = 0.010, GROUP_TOP, pm.y0 + 0.022
-    groups = [(pl.x0, pl.x1, 'THIS WORK', ORANGE, '#FDF3E8')]
+    groups = [(pl.x0, pl.x1, ORANGE, '#FDF3E8')]
     if len(drawn) > 1:                      # no baseline box when only the chart was run
         pk = gs[0, len(drawn) - 2].get_position(fig)
-        groups.insert(0, (p0.x0, pk.x1, 'BASELINES', GREY, 'none'))
-    for x0, x1, txt, col, fc in groups:
+        groups.insert(0, (p0.x0, pk.x1, GREY, 'none'))
+    if args.no_boxes:
+        # The two rules say "these three are baselines, this one is the construction". On a slide
+        # the speaker says that, so the rules go. The construction column keeps its warm ground,
+        # which carries the same grouping as a wash rather than as a frame, and the baseline group
+        # keeps nothing: its box was facecolor 'none', so it was rule and nothing else.
+        # With ONE arm drawn there is nothing to distinguish it from, so the ground goes too.
+        groups = ([] if len(drawn) < 2 else
+                  [(x0, x1, 'none', fc) for x0, x1, col, fc in groups if fc != 'none'])
+    for x0, x1, col, fc in groups:
         fig.patches.append(FancyBboxPatch(
             (x0 - pad_x, bot), (x1 - x0) + 2 * pad_x, top - bot,
             boxstyle='round,pad=0,rounding_size=0.010', transform=fig.transFigure,
             facecolor=fc, edgecolor=col, lw=0.7, zorder=-5))
-        fig.text((x0 + x1) / 2, top - 0.016, txt, ha='center', va='top', fontsize=FS_BASE,
-                 color=col, fontweight='bold')
 
     # ── row labels. Without these a reader meets red holes in row 1 and white holes in row 2 and
     # has no way to know the first is a defect and the second is the mechanism doing its job.
@@ -339,22 +403,40 @@ def main():
 
     bl = [k for k in drawn if k != OURS]
     best_bl = min(bl, key=_ch) if bl else None
-    caption = (
-        f'The validity ladder. A {int(round(sheet_mm)):,} mm square sheet of {n_panels} panels '
-        f'({A_MM / 1e6:.2f} m$^2$) is deployed to the dashed circle of radius '
-        f'{TGT["r"] * scale:,.0f} mm, every column under an identical {EP}-epoch budget. Orange is '
-        'material, hatching is material lying on material, red is a residual void: stock area no '
-        'panel covers. Residual voids are reported as an area, and the shape error as the '
-        'symmetric Chamfer distance between the deployed outline and the target circle. The three '
+    # The baseline sentences describe arms that --arms can leave out, and min() over an empty
+    # sequence is what a one-arm run used to die on. Built separately and only when there are
+    # baselines to describe.
+    baselines = '' if not bl else (
+        'The three '
         'baselines enforce validity after the fact, by projection and by penalties, and each '
-        f'leaves between {min(_va(k) for k in bl):.2f} and {max(_va(k) for k in bl):.2f} m$^2$ of '
+        f'leaves between {100 * min(_va(k) for k in bl) * 1e6 / A_MM:.1f} and '
+        f'{100 * max(_va(k) for k in bl) * 1e6 / A_MM:.1f}% of '
         'the sheet missing, so their outlines cannot be cut as a single piece and their Chamfer '
-        f'values are greyed. The best of them reaches {_ch(best_bl):,.0f} mm. The closed chart '
+        f'values are greyed. The best of them reaches '
+        f'{100 * _ch(best_bl) / (TGT["r"] * scale):.2f}%. ')
+    caption = (
+        f'The validity ladder. A square sheet of {n_panels} panels is deployed to the dashed '
+        f'circle, of radius {TGT["r"] * scale / sheet_mm:.2f} times the sheet side, every column '
+        f'under an identical {EP}-epoch budget. Orange is '
+        'material, hatching is material lying on material, red is a residual void: stock area no '
+        'panel covers. Residual voids are reported as a fraction of the sheet area, and the shape '
+        'error as the symmetric Chamfer distance between the deployed outline and the target '
+        'circle, over the target radius. '
+        + baselines +
+        'The closed chart '
         f'cannot represent a broken sheet at all: zero residual voids, zero overlap, hinge gap at '
-        f'machine precision, and a Chamfer distance of {_ch(OURS):,.0f} mm '
-        f'({100 * _ch(OURS) / (TGT["r"] * scale):.2f}% of the target radius).')
+        f'machine precision, and a Chamfer distance of '
+        f'{100 * _ch(OURS) / (TGT["r"] * scale):.2f}% of the target radius.')
     with open(os.path.splitext(args.out)[0] + '_caption.txt', 'w') as fh:
         fh.write(caption + '\n')
+
+    if args.numbers_array:
+        bb = gs[2, 0].get_position(fig)
+        for i, k in enumerate(array_keys):
+            t_key = fig.text(bb.x0 - 0.012, bb.y0 + ARRAY_Y[i] * (bb.y1 - bb.y0), k,
+                             ha='right', va='center', fontsize=FS_MICRO, color=GREY)
+            # What can collide here is a row label into the first column's value.
+            numbers_text.append((t_key, array_first[i]))
 
     # A key and its value meet in the middle of a 78 bp column, so a longer number -- a three-digit
     # Chamfer, a different sheet -- can run one into the other and the figure would still be

@@ -6,13 +6,36 @@ COLUMN is one reading of that row:
 
     0  the problem      the sheet as a plain rectangle, its supports and its loads
     1  trained design   the learned flat cut pattern, panels coloured by area change
-    2  deployed         the same panels after Stage 2, against the target they were asked to match
+    2  deployed         the same panels after Stage 2, against the target they were asked to
+                        match, tiled by unit cells and coloured where like cells cluster
     3  load path        where the force actually goes once the sheet has opened
 
-The claim the figure makes is a comparison, so three things are held fixed across rows and must
-stay that way: one colour norm for columns 1-2 pooled over every row, one axis extent per column,
-and one target rectangle. A per-row norm or a per-row target would turn five comparable rows into
-five unrelated figures.
+Columns 1 and 2 carry DIFFERENT quantities and therefore different colour. Column 1 is a diverging
+purple-to-green ramp on a continuous field; column 2 is three CATEGORICAL fills, red, slate and
+sand, at matched lightness, because a family is a kind and not an amount. The two shared one ramp
+until 2026-08-19, and a reader with only the two colorbars to tell them apart read them as one
+field.
+
+The unit of column 2 is the DISJOINT unit cell -- the four panels around one void, called a 2x2
+motif by the helpers in nff/closed/force_stats.py -- and
+three facts fix that choice. A panel on its own carries almost no spatial signal: per-panel aspect
+ratio classifies into families at 0.89 to 1.32 times chance contiguity, because deployment
+counter-rotates neighbouring panels. Overlapping 2x2 windows share two panels with each neighbour,
+and that overlap alone holds contiguity at 0.85 to 1.09. Tiling the sheet with NON-overlapping
+blocks lifts it to 1.12 to 1.44 in every row.
+
+A motif's geometry is the two side lengths of its void, not their ratio. Both are fixed by the cut
+pattern and unchanged by deployment, they are near-independent (pooled correlation 0.16), and the
+void's opening angle is uniform over a sheet to under half a degree. Collapsing them to one ratio
+discards the motif's SIZE, which is what separates two of the three families.
+
+A motif is coloured only where at least three same-family motifs touch. Similarity and proximity
+are separate claims and the figure asserts both at once; the rest stay neutral grey.
+
+The claim the figure makes is a comparison, so four things are held fixed across rows and must
+stay that way: one colour norm per quantity pooled over every row, one axis extent per column, one
+scale shared by columns 1 and 2, and one target rectangle. A per-row norm or a per-row target
+would turn five comparable rows into five unrelated figures.
 
 Nothing but ``best_params.pkl`` and ``config.yaml`` is persisted by a run, so each row's design is
 re-solved here (one forward pass, seconds) rather than read back.
@@ -49,12 +72,15 @@ from matplotlib.patches import Patch                                     # noqa:
 from matplotlib.ticker import FuncFormatter                              # noqa: E402
 
 from nff.utils.figstyle import (FS_ANNOT, FS_BASE, FS_PANEL, FS_TICK,    # noqa: E402
-                                GREY, INK, ORANGE, TEXT_W_BP, apply_charter,
-                                charter_diverging, figsize_in, panel_letter, paper_rc,
-                                save_paper_figure, text_width_bp)
+                                GREEN, GREY, INK, ORANGE, PURPLE, TEXT_W_BP,
+                                apply_charter, charter_diverging, figsize_in, panel_letter,
+                                paper_rc, save_paper_figure, text_width_bp)
 from nff.config.experiment import load_and_parse_config                  # noqa: E402
 from nff.closed.setup import build_closed_initial_state                  # noqa: E402
-from nff.closed.force_stats import tile_pressure                         # noqa: E402
+from nff.closed.cell_families import (cell_descriptors, cell_lattice,  # noqa: E402
+                                      family_map, fit_families)
+from nff.closed.void_geometry import build_void_index                    # noqa: E402
+from nff.topology.closed_builder_jax import build_deploy_structure       # noqa: E402
 from nff.closed.load_path_viz import COMPRESSION_FILL, draw_load_path    # noqa: E402
 from nff.closed.load_paths import load_field, solve_deployed_state       # noqa: E402
 from nff.stages.geometry import (compute_face_areas, deformed_vertices,  # noqa: E402
@@ -67,6 +93,12 @@ SHEAR_DOT = "#F2B705"          # golden yellow for the shear marks: the compress
                                # spends TEAL, the module default, so shear read as its darkest
                                # tiles. Warm like the tension route but a full step lighter and
                                # yellower than PRINCETON ORANGE, and only ever drawn as a point.
+PANEL_FILL = "#EDEFF1"         # a motif with no like neighbour: neutral, so colour on this panel
+                               # means similarity AND proximity, never one of the two
+FAMILY_FILL = ("#E7A9A7", "#A9BBD1", "#EBD5A3")   # red, slate, sand. CATEGORICAL: the families are
+                               # kinds, not amounts, so the three sit at matched lightness and none
+                               # reads as "more". Slate is unspent on the plate; (b) is
+                               # purple-green and (d) is orange, teal and gold
 ROMAN = ("I", "II", "III", "IV", "V", "VI", "VII", "VIII")
 
 # ── Page geometry, in POINTS. The plate is authored at the width the manuscript includes it at, so
@@ -88,7 +120,7 @@ WEIGHT_SCALE = 0.45
 # rather than in the project's internal shorthand.
 COLUMNS = ("Boundary conditions\nand loading",
            "Optimised cut pattern,\nundeployed",
-           "Deployed configuration\nand net tile stress",
+           "Deployed configuration\nand unit cells",
            "Internal force\ntransmission")
 
 # Fields that MUST agree across rows, or the figure is comparing different sheets.
@@ -159,22 +191,11 @@ def load_row(run_dir, label):
                 f"by {err:.3e} ({err/scale:.2%} of the sheet). Columns 2 and 3 would show the sheet "
                 f"in two different places -- re-run the load-path extraction for this run.")
 
-    # Column (c)'s colour: the NET stress state of each tile, tension positive. Normalised by the
-    # row's own mean |p|, because the five rows are driven at very different load magnitudes and a
-    # shared absolute scale would show only which row was pulled hardest. This is a different
-    # reading from the compression wash in (d), which is one-sided and per-interface: a tile
-    # squeezed at one hinge and pulled at three is shaded there and reads as tension here.
-    if field is None:
-        pressure = None
-    else:
-        pressure = tile_pressure(field)
-        pressure = pressure / (float(np.abs(pressure).mean()) or 1.0)
-
     flat_xy = np.asarray(init_state.face_centroids)
     v = np.asarray(_shim(reconstruct_vertices(
         init_state.face_centroids, init_state.centroid_node_vectors)).vertices)
     return dict(label=label, run_dir=run_dir, config=config, rel=rel, field=field,
-                pressure=pressure,
+                depl_nodes=depl,
                 flat=_shim(flat), depl=_shim(depl), target=_target_params(config),
                 sheet_bbox=(v[:, 0].min(), v[:, 1].min(), v[:, 0].max(), v[:, 1].max()),
                 face_xy=flat_xy)
@@ -259,6 +280,22 @@ def _fit(ax, box, aspect):
     ax.axis('off')
 
 
+def _match_span(box, reference):
+    """``box`` about its OWN centre, at ``reference``'s span, so two equal axes share one scale.
+
+    Two boxes of equal span drawn into axes of equal size put one data unit at one size on the
+    page. ``_fit`` then pads both symmetrically to the common aspect, and its padding depends only
+    on the span, so the shared scale survives the fit.
+
+    The centre is the box's own and NOT the reference's: deployment is anchored at the pin and the
+    roller on the left edge, so sharing the centre as well would sit the flat sheet off-centre in
+    five consecutive frames, which reads as a layout fault rather than as an anchor.
+    """
+    cx, cy = 0.5 * (box[0] + box[2]), 0.5 * (box[1] + box[3])
+    w, h = reference[2] - reference[0], reference[3] - reference[1]
+    return (cx - w / 2.0, cy - h / 2.0, cx + w / 2.0, cy + h / 2.0)
+
+
 def _wrap_to(text, max_bp, fontsize=FS_BASE):
     """Greedy wrap so no line of ``text`` is wider than ``max_bp`` points when rendered.
 
@@ -277,8 +314,9 @@ def _wrap_to(text, max_bp, fontsize=FS_BASE):
     return "\n".join(lines + [current] if current else lines)
 
 
-def build(rows, out_stem, *, dpi=600, clip_pct=90.0, stress_clip_pct=75.0,
-          formats=("pdf", "png")):
+def build(rows, out_stem, *, dpi=600, clip_pct=90.0, n_families=3, families=True,
+          cluster_min=3, formats=("pdf", "png"), width_bp=None, weight_scale=None,
+          no_headers=False, no_row_labels=False, columns="abcd"):
     apply_charter(**paper_rc(**{"axes.grid": False}))
     n = len(rows)
 
@@ -288,7 +326,10 @@ def build(rows, out_stem, *, dpi=600, clip_pct=90.0, stress_clip_pct=75.0,
     # `extend` arrows so the clipping is stated rather than hidden.
     pooled = np.concatenate([r['rel'] for r in rows])
     lim = float(max(np.percentile(np.abs(pooled), clip_pct), 1e-3))
-    cmap = charter_diverging()
+    # (b) and (c) carry different quantities, so they carry different ramps. Purple-to-green is
+    # a charter pair spent nowhere else on this plate, and it separates from (c)'s red on lightness
+    # as well as on hue, so the two columns stay distinct for a dichromat.
+    cmap_area = charter_diverging(low=PURPLE, high=GREEN, name="charter_area")
     norm = mcolors.TwoSlopeNorm(vmin=-lim, vcenter=0.0, vmax=lim)
     n_clipped = int((np.abs(pooled) > lim).sum())
     print(f"  colour scale +-{lim:.0%} ({clip_pct}th percentile); "
@@ -299,33 +340,71 @@ def build(rows, out_stem, *, dpi=600, clip_pct=90.0, stress_clip_pct=75.0,
           + "  ".join(f"p{q}={np.percentile(np.abs(pooled), q):.0%}"
                       for q in (50, 75, 90, 95, 98, 100)))
 
-    # ── A second norm for column (c): the net tile stress. ──
-    # Its own scale, because it is a different quantity from the area change of (b) and sharing one
-    # ramp between them would imply they are commensurate. Same clip convention, same map.
-    # ⚠ Clipped TIGHTER than the area field, and deliberately. The stress distribution is heavily
-    # skewed -- median |p| is about 0.6 against a maximum near 12 -- so the ninetieth percentile
-    # spends the ramp on a handful of tiles at the grip and leaves the rest of the sheet pale. The
-    # structure worth seeing is the sign of the moderate field, not the magnitude of the extremes.
-    have_pressure = [r for r in rows if r.get('pressure') is not None]
-    if have_pressure:
-        pooled_p = np.concatenate([r['pressure'] for r in have_pressure])
-        lim_p = float(max(np.percentile(np.abs(pooled_p), stress_clip_pct), 1e-6))
-        norm_p = mcolors.TwoSlopeNorm(vmin=-lim_p, vcenter=0.0, vmax=lim_p)
-        n_clipped_p = int((np.abs(pooled_p) > lim_p).sum())
-        resolved = int(((pooled_p < 0) & (np.abs(pooled_p) < lim_p)).sum())
-        print(f"  stress scale +-{lim_p:.2f} x mean|p| ({stress_clip_pct}th percentile); "
-              f"{n_clipped_p}/{pooled_p.size} tiles beyond it; "
-              f"{resolved}/{int((pooled_p < 0).sum())} compressive tiles resolved below the clip")
-        print(f"  tiles in net compression per row: "
-              + "  ".join(f"{r['label'][:4]}={int((r['pressure'] < 0).sum())}"
-                          for r in have_pressure))
-    else:
-        norm_p, n_clipped_p = None, 0
+    # ── Column (c): the unit-cell families. ──
+    # The unit is the DISJOINT unit cell -- the four panels around one void -- and its geometry is
+    # that void's two side lengths. Both are fixed by the cut pattern and neither changes on
+    # deployment, because the panels are rigid. See the module docstring for what was measured
+    # against what: the panel and the OVERLAPPING window both fail, and the side RATIO alone
+    # throws away the size that separates two of the three families.
+    #
+    # The measurement itself lives in nff/closed/cell_families.py, so this plate and any analysis
+    # of the same sheet read one implementation and cannot disagree.
+    M, N = int(rows[0]['config'].topology['M']), int(rows[0]['config'].topology['N'])
+    ls = float(getattr(getattr(rows[0]['config'], 'hinge_model', None), 'length_scale', 406.4))
+    centroids = None
+    if families:
+        void_index = build_void_index(build_deploy_structure(M, N))
+        lattice = cell_lattice(void_index)
+        n_cells, covered = lattice.n_cells, lattice.owner_face.size
+        print(f"  motif lattice: {lattice.shape[0]} x {lattice.shape[1]} disjoint 2x2 blocks, "
+              f"{n_cells} per row, {covered}/{M * N} panels covered "
+              f"({M * N - covered} unpaired on the last row)")
+
+        for r in rows:
+            r['motif_sides'] = cell_descriptors(void_index, lattice, r['depl_nodes'], ls).sides
+        # Pooled over the five rows, so a family means the same shape in every one of them and the
+        # columns stay comparable -- the same discipline the area colour norm follows.
+        pooled = np.vstack([r['motif_sides'] for r in rows])
+        model, labels = fit_families(pooled, n_families)
+        centroids = model.centroids
+        print("  void side percentiles (mm): "
+              + "  ".join(f"long p{q}={np.percentile(pooled[:, 0], q):.0f}"
+                          f"/short p{q}={np.percentile(pooled[:, 1], q):.0f}"
+                          for q in (10, 50, 90)))
+        print(f"  {n_families} families (k-means on log side lengths, pooled): "
+              + "  ".join(f"{centroids[c, 0]:.0f}x{centroids[c, 1]:.0f}mm n={(labels == c).sum()}"
+                          for c in range(n_families))
+              + f"  of {len(labels)}")
+
+        # Whether like motifs sit TOGETHER is a claim, so it is measured rather than left to the
+        # eye. Below one is alternation, not scatter; a plain neighbour count cannot tell them
+        # apart, which is why the ratio is printed against its own chance level.
+        for i, r in enumerate(rows):
+            fam = family_map(labels[i * n_cells:(i + 1) * n_cells], lattice, min_size=cluster_min)
+            r['contiguity'] = fam['contiguity']
+            r['n_clustered'] = fam['n_clustered']
+            r['groups'] = fam['groups']
+            fill = np.array([PANEL_FILL] * (M * N), dtype=object)
+            for k, face_ids in enumerate(lattice.owner_face):
+                if fam['mask'].ravel()[k]:
+                    fill[face_ids] = FAMILY_FILL[int(fam['grid'].ravel()[k])]
+            r['motif_fill'] = list(fill)
+        print(f"  clustered at min group {cluster_min}: "
+              + "  ".join(f"{r['label'][:4]}={r['n_clustered']}/{n_cells}"
+                          f" ({r['contiguity']['ratio']:.2f}x chance)" for r in rows))
+        print("  largest group per row: "
+              + "  ".join(f"{r['label'][:4]}={r['groups'][0][1] if r['groups'] else 0}"
+                          for r in rows))
+        for r in rows:
+            if r['contiguity']['ratio'] < 1.05 or r['n_clustered'] < 0.5 * n_cells:
+                print(f"  ! {r['label'][:4]}: {r['n_clustered']}/{n_cells} clustered at "
+                      f"{r['contiguity']['ratio']:.2f}x chance. Its motifs do NOT form regions, "
+                      f"and the panel must not be read as if they do.")
 
     # ── Per-column extents, pooled over rows. Each data column fills the SAME box, so the rows
-    # align and every panel is drawn as large as it can be. The cost, accepted deliberately, is that
-    # the undeployed and deployed sheets are no longer at one scale; the caption carries the true
-    # dimensions instead.
+    # align and every panel is drawn as large as it can be. Columns (b) and (c) are then put on ONE
+    # span below, so the sheet's growth on deployment is its size on the page rather than a
+    # sentence in the caption. (d) keeps its own margin, which its support glyphs need.
     def col_box(kind):
         if kind == 'schematic':
             # Just enough for the glyphs: supports reach ~0.11 span to the left, arrows ~0.13 to the
@@ -349,6 +428,11 @@ def build(rows, out_stem, *, dpi=600, clip_pct=90.0, stress_clip_pct=75.0,
         return (b[0] - 0.03 * sp, b[1] - 0.03 * sp, b[2] + 0.03 * sp, b[3] + 0.03 * sp)
 
     boxes = {k: col_box(k) for k in ('schematic', 'flat', 'depl', 'path')}
+    # ★ The closed sheet is drawn at the DEPLOYED sheet's scale, so (b) is smaller than (c) by
+    # exactly the expansion the deployment buys. Reviewers read the old plate, where each column
+    # filled its own frame, as a sheet that deploys without growing.
+    flat_span = boxes['flat'][2] - boxes['flat'][0]
+    boxes['flat'] = _match_span(boxes['flat'], boxes['depl'])
     # The data columns share one box aspect: the widest of the three, so none of them is cropped.
     aspect = max((boxes[k][2] - boxes[k][0]) / (boxes[k][3] - boxes[k][1])
                  for k in ('flat', 'depl', 'path'))
@@ -359,14 +443,42 @@ def build(rows, out_stem, *, dpi=600, clip_pct=90.0, stress_clip_pct=75.0,
     # characters at a fixed inch-per-character: that constant was tuned on a canvas 2.8x this one,
     # so it survived neither the resize nor the change of type size.
     wrapped = ["\n".join(textwrap.wrap(r['label'], 17)) for r in rows]
-    label_w = max(text_width_bp(ln, FS_BASE) for w in wrapped for ln in w.split("\n"))
-    roman_w = max(text_width_bp(r, FS_PANEL, weight="bold") for r in ROMAN[:n])
-    gutter = label_w + roman_w + 3 * GAP_BP
+    if no_row_labels:
+        # The deck puts one row on a frame and names it in the frame title, so the numeral and the
+        # case name inside the plate say it twice. The gutter is sized FROM those labels and
+        # panel_w takes what it leaves, so dropping them is not only tidier: on a five-case build
+        # at 432 bp the gutter falls from about 150 bp to 12 and every panel grows by half.
+        label_w = roman_w = 0.0
+        gutter = 2 * GAP_BP
+    else:
+        label_w = max(text_width_bp(ln, FS_BASE) for w in wrapped for ln in w.split("\n"))
+        roman_w = max(text_width_bp(r, FS_PANEL, weight="bold") for r in ROMAN[:n])
+        gutter = label_w + roman_w + 3 * GAP_BP
 
     # The canvas width is fixed by the page, so the panels take what the gutter leaves rather than
-    # the reverse. Everything downstream is derived from this one width.
-    panel_w = (FIG_W_BP - gutter - RIGHT_BP) / (3.0 + SCHEM_FRAC)
+    # the reverse. Everything downstream is derived from this one width. ``width_bp`` overrides it
+    # for a canvas that is not the manuscript page -- a projected slide, whose text block is both
+    # wider and far shallower than a column.
+    canvas_w = FIG_W_BP if width_bp is None else float(width_bp)
+    # A subset of the four columns takes the whole measure between them, so a two-column build has
+    # panels more than twice as wide as the four-column one. That is what it is for: the deck shows
+    # the schematic and the force transmission alone on a frame. Blowing up a crop of the
+    # four-column build instead would print every load-path weight 2.3x too heavy, because ws below
+    # ties them to the panel they are drawn in. Here panel_w grows and ws grows with it.
+    SEL = sorted({"abcd".index(c) for c in columns})
+    assert SEL, "at least one column must be drawn"
+    UNIT = {0: SCHEM_FRAC, 1: 1.0, 2: 1.0, 3: 1.0}
+    # RIGHT_BP is the margin column (d)'s load arrows reach into. Without (d) it is not needed.
+    right = RIGHT_BP if 3 in SEL else GAP_BP
+    panel_w = (canvas_w - gutter - right) / sum(UNIT[k] for k in SEL)
     panel_h = panel_w / aspect
+
+    # Load-path stroke weights are tied to the panel they are drawn in, not to the type: widening
+    # the canvas without widening them leaves hairlines, narrowing it swallows the sheet. The ratio
+    # is against the panel the module constant was tuned at, so the manuscript canvas gets exactly
+    # WEIGHT_SCALE back and nothing about the published plate moves.
+    paper_panel_w = (FIG_W_BP - gutter - RIGHT_BP) / (3.0 + SCHEM_FRAC)
+    ws = WEIGHT_SCALE * panel_w / paper_panel_w if weight_scale is None else float(weight_scale)
     # The schematic is narrower than a data panel: it carries no detail to inspect, and the width it
     # saves goes straight into fitting the figure on a page. It is also sized to its OWN aspect and
     # centred in the row rather than padded out to the row height -- forcing it to the full height
@@ -376,16 +488,27 @@ def build(rows, out_stem, *, dpi=600, clip_pct=90.0, stress_clip_pct=75.0,
                     / (boxes['schematic'][3] - boxes['schematic'][1]))
     schem_h = min(schem_w / schem_aspect, panel_h)
 
-    head, foot = HEAD_BP, FOOT_BP
-    fig_w = FIG_W_BP
+    # The header band is a letter over a two-line column title, closed by a rule. On a slide the
+    # speaker names the columns once and the deck shows one row per frame, so five copies of the
+    # same four titles is five copies of clutter. fig_h is derived from head, so dropping it
+    # SHORTENS the canvas rather than growing the panels: the panels are set by panel_w, which the
+    # four-column layout fixes. 6bp is left so the top row does not start on the trim.
+    head, foot = (6.0 if no_headers else HEAD_BP), FOOT_BP
+    fig_w = canvas_w
     fig_h = head + n * panel_h + foot
     fig = plt.figure(figsize=figsize_in(fig_w, fig_h), facecolor="white")
 
-    lefts = [gutter, gutter + schem_w, gutter + schem_w + panel_w,
-             gutter + schem_w + 2 * panel_w]
-    widths = [schem_w, panel_w, panel_w, panel_w]
+    # Keyed by the ORIGINAL column index, so every reference below still names the column it means
+    # whatever subset is drawn, and an unselected one is simply absent.
+    widths = {0: schem_w, 1: panel_w, 2: panel_w, 3: panel_w}
+    lefts, _x = {}, gutter
+    for _k in SEL:
+        lefts[_k] = _x
+        _x += widths[_k]
 
     def cell(row, col):
+        if col not in lefts:
+            return None
         h = schem_h if col == 0 else panel_h
         top = head + row * panel_h + (panel_h - h) / 2.0      # centred in the row band
         return fig.add_axes([lefts[col] / fig_w, 1.0 - (top + h) / fig_h,
@@ -395,72 +518,74 @@ def build(rows, out_stem, *, dpi=600, clip_pct=90.0, stress_clip_pct=75.0,
     # heights are absolute points from the canvas top, not fractions of the band: as fractions the
     # letter, the second title line and the rule all landed on each other once the band was sized
     # in points instead of inches.
-    for j, (letter, title) in enumerate(zip("abcd", COLUMNS)):
-        xc = (lefts[j] + widths[j] / 2.0) / fig_w
-        panel_letter(fig, letter, x=xc, y=1.0 - LET_Y_BP / fig_h, ha="center", va="center")
-        fig.text(xc, 1.0 - TITLE_Y_BP / fig_h, _wrap_to(title, widths[j] - GAP_BP), ha="center",
-                 va="top", fontsize=FS_BASE, color=INK, linespacing=1.35)
-    fig.add_artist(Line2D([gutter / fig_w, (fig_w - RIGHT_BP) / fig_w],
-                          [1.0 - RULE_Y_BP / fig_h] * 2,
-                          color=INK, lw=0.5, alpha=0.35))
+    if not no_headers:
+        for j, (letter, title) in enumerate(zip("abcd", COLUMNS)):
+            xc = (lefts[j] + widths[j] / 2.0) / fig_w
+            panel_letter(fig, letter, x=xc, y=1.0 - LET_Y_BP / fig_h, ha="center", va="center")
+            fig.text(xc, 1.0 - TITLE_Y_BP / fig_h, _wrap_to(title, widths[j] - GAP_BP),
+                     ha="center", va="top", fontsize=FS_BASE, color=INK, linespacing=1.35)
+        fig.add_artist(Line2D([gutter / fig_w, (fig_w - RIGHT_BP) / fig_w],
+                              [1.0 - RULE_Y_BP / fig_h] * 2,
+                              color=INK, lw=0.5, alpha=0.35))
 
     for i, r in enumerate(rows):
-        colours = [cmap(norm(v)) for v in r['rel']]
-        # (c) carried the SAME array as (b) until the stress field was added, so the two columns
-        # drew one quantity twice and (c) said nothing (b) had not already said.
-        stress_colours = ([cmap(norm_p(v)) for v in r['pressure']]
-                          if r.get('pressure') is not None and norm_p is not None else colours)
+        colours = [cmap_area(norm(v)) for v in r['rel']]
         topo = r['config'].topology
         yc = 1.0 - (head + (i + 0.5) * panel_h) / fig_h
 
-        fig.text((gutter - GAP_BP) / fig_w, yc, wrapped[i], ha="right", va="center",
-                 fontsize=FS_BASE, color=INK, linespacing=1.45)
-        fig.text((gutter - GAP_BP - label_w - GAP_BP) / fig_w, yc, ROMAN[i],
-                 ha="right", va="center", fontsize=FS_PANEL, color=INK, weight="bold")
+        if not no_row_labels:
+            fig.text((gutter - GAP_BP) / fig_w, yc, wrapped[i], ha="right", va="center",
+                     fontsize=FS_BASE, color=INK, linespacing=1.45)
+            fig.text((gutter - GAP_BP - label_w - GAP_BP) / fig_w, yc, ROMAN[i],
+                     ha="right", va="center", fontsize=FS_PANEL, color=INK, weight="bold")
 
         ax = cell(i, 0)
-        draw_loading_schematic(
-            ax, r['sheet_bbox'], r['face_xy'],
-            clamped_faces=topo.get('bc_clamped') or [], clamped_dofs=topo.get('clamped_dofs'),
-            y_roller_faces=topo.get('y_roller_faces') or [],
-            x_roller_faces=topo.get('x_roller_faces') or [], load_specs=topo.get('loads') or [],
-            weight_scale=WEIGHT_SCALE)
-        _fit(ax, boxes['schematic'], schem_aspect)
+        if ax is not None:
+            draw_loading_schematic(
+                ax, r['sheet_bbox'], r['face_xy'],
+                clamped_faces=topo.get('bc_clamped') or [], clamped_dofs=topo.get('clamped_dofs'),
+                y_roller_faces=topo.get('y_roller_faces') or [],
+                x_roller_faces=topo.get('x_roller_faces') or [], load_specs=topo.get('loads') or [],
+                weight_scale=ws)
+            _fit(ax, boxes['schematic'], schem_aspect)
 
         ax = cell(i, 1)
-        plot_tessellation(r['flat'], ax=ax, show_target=False, show_hinges=False,
-                          show_face_indices=False, show_hinge_indices=False,
-                          color_faces=colours, edge_color=TILE_EDGE, edge_width=TILE_EDGE_W,
-                          face_alpha=1.0)
-        _fit(ax, boxes['flat'], aspect)
+        if ax is not None:
+            plot_tessellation(r['flat'], ax=ax, show_target=False, show_hinges=False,
+                              show_face_indices=False, show_hinge_indices=False,
+                              color_faces=colours, edge_color=TILE_EDGE, edge_width=TILE_EDGE_W,
+                              face_alpha=1.0)
+            _fit(ax, boxes['flat'], aspect)
 
         ax = cell(i, 2)
-        plot_tessellation(r['depl'], ax=ax, show_target=True, target_params=r['target'],
-                          show_hinges=False, show_face_indices=False, show_hinge_indices=False,
-                          color_faces=stress_colours, edge_color=TILE_EDGE,
-                          edge_width=TILE_EDGE_W,
-                          face_alpha=1.0, target_color=INK, target_width=0.5,
-                          target_style=(0, (3, 2.2)))
-        _fit(ax, boxes['depl'], aspect)
+        if ax is not None:
+            plot_tessellation(r['depl'], ax=ax, show_target=True, target_params=r['target'],
+                              show_hinges=False, show_face_indices=False, show_hinge_indices=False,
+                              color_faces=r.get('motif_fill', [PANEL_FILL] * len(r['rel'])),
+                              edge_color=TILE_EDGE, edge_width=TILE_EDGE_W,
+                              face_alpha=1.0, target_color=INK, target_width=0.5,
+                              target_style=(0, (3, 2.2)))
+            _fit(ax, boxes['depl'], aspect)
 
         ax = cell(i, 3)
-        if r['field'] is None:
-            ax.axis('off')
-        else:
-            draw_load_path(ax, r['field'], tessellation=r['depl'], config=r['config'],
-                           canvas_aspect=aspect, weight_scale=WEIGHT_SCALE,
-                           shear_colour=SHEAR_DOT)
-            _fit(ax, boxes['path'], aspect)
+        if ax is not None:
+            if r['field'] is None:
+                ax.axis('off')
+            else:
+                draw_load_path(ax, r['field'], tessellation=r['depl'], config=r['config'],
+                               canvas_aspect=aspect, weight_scale=ws,
+                               shear_colour=SHEAR_DOT)
+                _fit(ax, boxes['path'], aspect)
 
     # ── One colorbar under (b) and one under (c); the load-path key under (d). ──
     # They are separate bars because they carry different quantities. A single bar spanning both
     # columns, which is what stood here while (c) repeated (b)'s colours, would now assert that a
     # panel area change and a tile stress share a scale.
-    def _colorbar(column, scalar_norm, clipped, label, formatter):
+    def _colorbar(column, colour_map, scalar_norm, clipped, label, formatter):
         cb_w = 0.92 * panel_w
         cax = fig.add_axes([(lefts[column] + (panel_w - cb_w) / 2.0) / fig_w,
                             0.50 * foot / fig_h, cb_w / fig_w, 0.085 * foot / fig_h])
-        sm = plt.cm.ScalarMappable(cmap=cmap, norm=scalar_norm); sm.set_array([])
+        sm = plt.cm.ScalarMappable(cmap=colour_map, norm=scalar_norm); sm.set_array([])
         cbar = fig.colorbar(sm, cax=cax, orientation="horizontal",
                             extend="both" if clipped else "neither")
         # ⚠ ONE line. Two bars now sit where one used to, so each has about six tenths of the width
@@ -471,11 +596,16 @@ def build(rows, out_stem, *, dpi=600, clip_pct=90.0, stress_clip_pct=75.0,
         cbar.ax.tick_params(labelsize=FS_TICK, length=2.0, width=0.5)
         cbar.outline.set_visible(False)
 
-    _colorbar(1, norm, n_clipped, "panel area change", lambda v, _: f"{v:+.0%}")
-    if norm_p is not None:
-        _colorbar(2, norm_p, n_clipped_p, "net tile stress", lambda v, _: f"{v:+.1f}")
+    if 1 in lefts:
+        _colorbar(1, cmap_area, norm, n_clipped, "panel area change", lambda v, _: f"{v:+.0%}")
+    # ⚠ Column (c) carries NO key. The three family fills are categorical and the plate says so by
+    # using three colours at matched lightness; naming their sizes on the figure spent a 96 bp
+    # column on four labels and printed a number the reader cannot use while looking at the sheet.
+    # The dimensions and how they were measured moved into the body of sec:physical-inverse, which
+    # is where a reader who wants them is already standing. Removed 2026-08-21 at the author's
+    # instruction; the foot band under (c) is deliberately empty.
 
-    lax = fig.add_axes([lefts[3] / fig_w, 0.10 * foot / fig_h,
+    lax = fig.add_axes([lefts[3 if 3 in lefts else SEL[-1]] / fig_w, 0.10 * foot / fig_h,
                         panel_w / fig_w, 0.62 * foot / fig_h])
     lax.axis("off")
     # ⚠ The shear key is a POINT, not a line. Measured on these five deployments, sheared interfaces
@@ -490,40 +620,69 @@ def build(rows, out_stem, *, dpi=600, clip_pct=90.0, stress_clip_pct=75.0,
                loc="center", ncol=1, frameon=False, fontsize=FS_ANNOT, labelcolor=INK,
                handlelength=1.5, labelspacing=0.45, borderpad=0.0)
 
+    # The caption quotes these ratios, so they are measured here rather than recomputed by hand.
+    depl_span = boxes['depl'][2] - boxes['depl'][0]
+    print(f"  frames: (b) and (c) share a {depl_span:.2f} x "
+          f"{boxes['depl'][3] - boxes['depl'][1]:.2f} span; the flat sheet draws at "
+          f"{flat_span / depl_span:.2f} of the deployed one")
+    print(f"  (d) is drawn at {depl_span / (boxes['path'][2] - boxes['path'][0]):.2f}x that "
+          f"scale, the margin its boundary glyphs need")
+
     pdf, lo, hi = save_paper_figure(fig, out_stem, fig_w, fig_h, dpi=dpi,
                                     png=("png" in formats))
     print(f"  wrote {pdf} ({fig_w:.1f} x {fig_h:.1f} bp, type {lo:.1f}-{hi:.1f} pt)")
     plt.close(fig)
-    write_caption(rows, out_stem)
+    write_caption(rows, out_stem, centroids=centroids, cluster_min=cluster_min)
 
 
-def write_caption(rows, out_stem):
+def write_caption(rows, out_stem, *, centroids=None, cluster_min=3):
     """Emit the caption beside the figure.
 
-    Columns (b) and (c) are drawn at DIFFERENT scales so each fills its box, which is what makes the
-    tessellation legible; the true dimensions therefore have to be stated in words or the reader
-    cannot recover how much the sheet grows on deployment.
+    Every numeral here is measured off the drawn geometry rather than written down, so the caption
+    cannot drift from the plate. This file is the authority the manuscript caption is checked
+    against, not the reverse.
     """
     topo = rows[0]['config'].topology
     ls = float(getattr(getattr(rows[0]['config'], 'hinge_model', None), 'length_scale', 406.4))
-    flat = _bbox_of(rows[0]['flat'].vertices)
+    flat = _union([_bbox_of(r['flat'].vertices) for r in rows])
     depl = _union([_bbox_of(r['depl'].vertices) for r in rows])
     fw, fh = (flat[2] - flat[0]) * ls, (flat[3] - flat[1]) * ls
     dw, dh = (depl[2] - depl[0]) * ls, (depl[3] - depl[1]) * ls
+    linear, areal = (depl[2] - depl[0]) / (flat[2] - flat[0]), (dw * dh) / (fw * fh)
+    family = ""
+    if centroids is not None:
+        words = {2: "two", 3: "three", 4: "four", 5: "five", 6: "six"}
+        # The three mean sizes are NOT quoted here. They live in the body of sec:physical-inverse
+        # now, and this file is what the manuscript caption is checked against, so a number left
+        # here would put the caption and the section permanently out of step.
+        n_motifs = len(rows[0]['motif_sides'])
+        marked = [r['n_clustered'] for r in rows]
+        family = (
+            f"The sheet is tiled by {n_motifs} disjoint unit cells, each the four panels around "
+            f"one void. A unit cell is classified by that void's two side lengths, which the cut "
+            f"pattern fixes and deployment leaves unchanged. Pooled over all five designs these "
+            f"form {words.get(len(centroids), len(centroids))} families; "
+            f"the colours are categorical and carry no order. A unit cell takes its family colour "
+            f"only where at least {words.get(cluster_min, cluster_min)} cells of the same family "
+            f"touch, so colour asserts similar geometry and proximity together. Between "
+            f"{min(marked)} and {max(marked)} cells are coloured in a row; the rest are grey, "
+            f"as is the final panel column, which the tiling leaves unpaired. ")
     txt = (
         f"Inverse design of one kirigami sheet under five mechanical problems. A single "
         f"{int(topo['M'])} x {int(topo['N'])} closed sheet, {fw:.0f} x {fh:.0f} mm flat, is held "
         f"identically in every row by a pin and a roller on its left edge and is deployed to the "
         f"same target rectangle; the rows differ only in how it is actuated. "
         f"(a) Boundary conditions and applied loading. (b) The optimised cut pattern in its "
-        f"undeployed, flat state, panels coloured by area relative to the uniform sheet. "
-        f"(c) The deployed configuration against the target, dashed, tiles coloured by their net "
-        f"stress, tension positive, each row scaled by its own mean magnitude. (d) The internal "
-        f"force transmission once deployed, as tension routes, compressed tiles and sheared "
-        f"interfaces. Panels (b) to (d) are each drawn to fill their frame and are therefore NOT "
-        f"at a common scale: the sheet measures {fw:.0f} x {fh:.0f} mm undeployed and reaches "
-        f"{dw:.0f} x {dh:.0f} mm deployed, a linear expansion of about "
-        f"{(depl[2]-depl[0])/(flat[2]-flat[0]):.2f} and close to a doubling of area."
+        f"undeployed, flat state, panels coloured by area relative to the uniform sheet, on a "
+        f"purple-to-green scale of its own. "
+        f"(c) The deployed configuration against the target, dashed. {family}"
+        f"(d) The internal "
+        f"force transmission once deployed, as tension routes, compressed panels and sheared "
+        f"interfaces. Panels (b) and (c) are drawn at ONE scale, so the growth on deployment is "
+        f"the difference in size on the page: the sheet measures {fw:.0f} x {fh:.0f} mm "
+        f"undeployed and reaches {dw:.0f} x {dh:.0f} mm deployed, a linear expansion of "
+        f"{linear:.2f} and an areal expansion of {areal:.2f}. Panel (d) is drawn slightly smaller, "
+        f"the extra margin its support glyphs need."
     )
     with open(f"{out_stem}.txt", "w") as fh:
         fh.write(txt + "\n")
@@ -536,12 +695,34 @@ def main():
     p.add_argument("--row", action="append", required=True, metavar="RUN_DIR:LABEL",
                    help="one run folder and its row label; repeat once per problem, in order")
     p.add_argument("--out", default="paper/Images/inverse_design_matrix")
+    p.add_argument("--columns", default="abcd",
+                   help="which of the four columns to draw, as a subset of abcd: (a) loading, "
+                        "(b) undeployed cut pattern, (c) deployed against target, (d) force "
+                        "transmission. The selected columns share the whole measure, so fewer "
+                        "columns means larger panels")
+    p.add_argument("--no-row-labels", action="store_true",
+                   help="omit the numeral and case name in the left gutter, and give the gutter "
+                        "to the panels. For a deck that shows one row per frame and names it in "
+                        "the frame title")
+    p.add_argument("--no-headers", action="store_true",
+                   help="omit the column letters, titles and rule. A slide has a speaker to name "
+                        "the columns, and the deck shows one row per frame")
     p.add_argument("--dpi", type=int, default=600)
     p.add_argument("--clip-pct", type=float, default=90.0,
                    help="percentile of |area change| the colour scale saturates at")
-    p.add_argument("--stress-clip-pct", type=float, default=75.0,
-                   help="percentile of |tile stress| column (c) saturates at; tighter than the "
-                        "area clip because the stress distribution is far more skewed")
+    p.add_argument("--n-families", type=int, default=3,
+                   help="how many geometric families to split the 2x2 motifs into")
+    p.add_argument("--cluster-min", type=int, default=3,
+                   help="smallest run of touching same-family motifs that counts as a cluster; "
+                        "motifs below it are drawn neutral")
+    p.add_argument("--no-families", action="store_true",
+                   help="draw column (c) with no motif colouring (layout proofing)")
+    p.add_argument("--width-bp", type=float, default=None,
+                   help="canvas width in points; default is the manuscript's 1.2\\textwidth. Set it "
+                        "to the text block of another medium, e.g. a 16:9 slide, and the load-path "
+                        "stroke weights follow the panel width automatically")
+    p.add_argument("--weight-scale", type=float, default=None,
+                   help="override the load-path stroke weight instead of deriving it from the width")
     p.add_argument("--no-png", action="store_true", help="PDF only (the PNG is slow)")
     p.add_argument("--skip-check", action="store_true",
                    help="draw rows that are NOT posed on the same sheet (layout proofing only)")
@@ -558,8 +739,12 @@ def main():
     if not args.skip_check:
         check_comparable(rows)
     build(rows, args.out, dpi=args.dpi, clip_pct=args.clip_pct,
-          stress_clip_pct=args.stress_clip_pct,
-          formats=("pdf",) if args.no_png else ("pdf", "png"))
+          n_families=args.n_families, families=not args.no_families,
+          cluster_min=args.cluster_min,
+          formats=("pdf",) if args.no_png else ("pdf", "png"),
+          width_bp=args.width_bp, weight_scale=args.weight_scale,
+          no_headers=args.no_headers, no_row_labels=args.no_row_labels,
+          columns=args.columns)
 
 
 if __name__ == "__main__":

@@ -43,7 +43,8 @@ import jax.numpy as jnp
 
 # ── Princeton palette (house standard; NO blue, per user pref) ──
 from nff.utils.figstyle import (FS_MICRO, FS_PANEL, GREEN, GREY, INK, ORANGE, PURPLE, RED, TEAL,
-                                TEXT_W_BP, apply_charter, paper_rc)
+                                panel_letter, panel_letters_on,
+                                TEXT_W_BP, apply_charter, paper_rc, slide_bp)
 CREAM  = "#FDF3E7"
 VIVID      = ORANGE      # outer physical cut patterns (a, e)
 LIGHT      = "#FBDDB6"   # inner-panel fill (b, c, d)
@@ -212,6 +213,8 @@ def extract_spine(config_name):
     ci, cj = rows // 2, cols // 2
     for i, j in [(ci, cj), (ci, cj - 1), (ci - 1, cj), (ci + 1, cj), (ci, cj + 1), (ci - 1, cj - 1)]:
         if 0 < i < rows - 1 and 0 < j < cols - 1 and int(T[i, j]) == 1:
+            # A, B are the facing endpoints of the two NEIGHBOURING cuts (Sec. sec:tessellation);
+            # x, xp are THIS cut's own two endpoints, which r places on the segment [A, B].
             highlight_cut = dict(A=coords_init[pidf(i - 1, j, 0)], B=coords_init[pidf(i + 1, j, 1)],
                                  x=coords_init[pidf(i, j, 0)], xp=coords_init[pidf(i, j, 1)])
             break
@@ -272,8 +275,9 @@ def _flatten_faces(load_specs):
 
 def _void_from_cut(vs0, fields0, hc):
     """Void of the EXACT highlighted cut = the deployed positions of its 4 collinear cut-vertices
-    A, x', x, B (so it matches the cut spotlighted on panel a). Rotated so the cut A-B (long diagonal)
-    is horizontal and centred on the void; returns the corners A, B (cut) and x, xp (sliders) + tiles."""
+    A, x', x, B (so it matches the cut spotlighted on panel a). Rotated so the long diagonal A-B (the
+    line the sheet is cut along, seen when closed) is horizontal and centred on the void; returns the
+    neighbours' facing endpoints A, B and this cut's own endpoints x, xp (the sliders) + tiles."""
     cnv = np.asarray(vs0.centroid_node_vectors); fc0 = np.asarray(vs0.face_centroids)
     nf, nn, _ = cnv.shape
     flat = (fc0[:, None] + cnv).reshape(-1, 2)
@@ -402,7 +406,15 @@ def _elbow_arrow(fig, pts_bp, color, lw=1.0, r_bp=4.0, ms=6.0, zorder=5):
                (pts[-1][0] / FIG_W_BP, pts[-1][1] / FIG_H_BP), color, lw, ms=ms)
 
 
+# Leaders are sized and placed for a 102 bp visual. The slide row gives each visual 61 bp, where
+# a two-line boxed callout is wider than the card it sits in, so the row drops them: a presenter
+# says what a leader says. Set by build_figure_slide, read here and by panel_target.
+_SLIDE = False
+
+
 def _leader(ax, pt, textpt, label, color, fontsize=FS_LEADER):
+    if _SLIDE:
+        return
     ax.annotate(label, xy=pt, xytext=textpt, fontsize=fontsize, color=color, ha="center", va="center",
                 arrowprops=dict(arrowstyle="-", color=color, lw=dw(1.0)), zorder=12,
                 bbox=dict(boxstyle="round,pad=0.2", fc="white", ec=color, lw=dw(0.8), alpha=0.95))
@@ -475,8 +487,8 @@ def panel_cut(ax, geom, kind, S=None):
     ax.set_aspect("equal"); ax.axis("off")
     if kind == 'design':
         u5 = W_ / 5.0
-        kl_r, kh_r = 0.36 * u5, 0.20 * u5        # r knobs   (9)  -> 5.3 x 2.9 bp
-        kl_t, kh_t = 0.42 * u5, 0.24 * u5        # tau knobs (12) -> 6.1 x 3.5 bp
+        kl_r, kh_r = 0.36 * u5, 0.20 * u5        # r knobs   (16) -> 5.3 x 2.9 bp
+        kl_t, kh_t = 0.42 * u5, 0.24 * u5        # tau knobs (16) -> 6.1 x 3.5 bp
         # ONE void-aspect-ratio slider per cut (a single r sets both cut-vertices), void side.
         for xx, xpp, uh in S['all_sliders']:
             nrm = np.array([-uh[1], uh[0]])
@@ -487,43 +499,23 @@ def panel_cut(ax, geom, kind, S=None):
             nrm = np.array([-uh[1], uh[0]])
             _slider_knob(ax, pos, uh, nrm, sd, kl_t, kh_t, color=TAU_SLIDER, ec="white",
                          lw=dw(0.9), zorder=6)
-        # a hinge is the uncut strip BETWEEN two consecutive cut ends, and it carries one descriptor
-        # g_h, so mark the midpoint of the closest cross-cut pair. Marking the cut ENDS instead would
-        # put a teal dot exactly where an r knob already sits -- two meanings on one point, which is
-        # what made this panel unreadable.
-        segs = [np.asarray(sg, float) for sg in geom['centerlines']]
-        cands = []
-        for i, si in enumerate(segs):
-            for j, sj in enumerate(segs):
-                if j <= i:
-                    continue
-                for pi in si:
-                    for pj in sj:
-                        cands.append((float(np.linalg.norm(pi - pj)), (pi + pj) / 2.0))
-        dmin = min(c[0] for c in cands)
-        # every near-minimal pair is a ligament; take an INTERIOR one near the label, so the leader
-        # is short and the dot is not swallowed by its own box or lost on the rim
-        # above the zoom marker, which belongs to r and must not be crowded by a second meaning
-        anchor = np.array([minx + 0.52 * W_, miny + 0.78 * H_])
-        inner = [c for c in cands
-                 if c[0] <= 1.5 * dmin + 1e-12
-                 and minx + 0.16 * W_ < c[1][0] < maxx - 0.16 * W_
-                 and miny + 0.16 * H_ < c[1][1] < maxy - 0.16 * H_]
-        wl_pt = min(inner or cands, key=lambda c: np.linalg.norm(c[1] - anchor))[1]
-        ax.scatter([wl_pt[0]], [wl_pt[1]], s=dA(34), color=G_COLOR, edgecolor="white",
-                   linewidths=dw(0.9), zorder=8)
+        # The hinge descriptor g_h is NOT annotated here: a hinge stores no geometry the cut
+        # pattern shows, and it enters the model only through the energy, so card b carries it.
         # emphasize the ONE boundary slider the caption points to
         bpos, buh, bsd = min(S['bnd_sliders'], key=lambda t: t[0][1])
         bnrm = np.array([-buh[1], buh[0]])
         _slider_knob(ax, bpos, buh, bnrm, bsd, kl_t * 1.35, kh_t * 1.35, color=TAU_SLIDER,
                      ec=INK, lw=dw(1.0), zorder=8)
         _leader(ax, bpos, np.array([minx + 0.23 * W_, miny + 0.19 * H_]),
-                "boundary\nslider $\\tau$", TAU_SLIDER, FS_LEADER)
-        # the box is placed RELATIVE to the dot, so the leader is short whichever ligament is picked
-        _leader(ax, wl_pt, wl_pt + np.array([0.20 * W_, 0.15 * H_]),
-                "hinge design\n$\\boldsymbol{g}_h$", G_COLOR, FS_LEADER)
+                "boundary\nposition $\\tau$", TAU_SLIDER, FS_LEADER)
         # HIGHLIGHT one cut: a THICKER dark centerline A-B + its r slider, framed as the zoom region
-        hc = S.get('highlight_cut')
+        #
+        # Not on the slide row. The frame is a ZOOM MARKER, and the band it points at is one of the
+        # two the row drops, so it would mark nothing. The labels are the harder reason: they are
+        # set in absolute points against a visual that went from 102 bp to 61, so A lands on a cut
+        # marker and B hangs off the frame. The parametrization slide carries this cut properly,
+        # cropped from the page plate at about 105 per cent.
+        hc = None if _SLIDE else S.get('highlight_cut')
         if hc is not None:
             A, B, x, xp = hc['A'], hc['B'], hc['x'], hc['xp']
             # the zoom marker, at the SAME aspect as the detail band below so the two frames rhyme
@@ -538,9 +530,19 @@ def panel_cut(ax, geom, kind, S=None):
             ax.plot([A[0], B[0]], [A[1], B[1]], color=INK, lw=dw(3.0), solid_capstyle="round",
                     zorder=7)
             import matplotlib.patheffects as pe
-            for P, lab, off in ((A, "A", -1.0), (B, "B", 1.0)):
+            # A, B are the facing endpoints of the two NEIGHBOURING cuts and x, x' this cut's own.
+            # Labelling all four is what lets the zoom below be read as the void they bound.
+            for P, lab, off in ((A, r"$\boldsymbol{A}$", -1.0), (B, r"$\boldsymbol{B}$", 1.0)):
                 ax.plot(*P, marker="o", mfc="white", mec=INK, ms=dw(5), zorder=8)
                 ax.text(P[0] + off * 0.045 * W_, P[1] + 0.035 * H_, lab, ha="center", va="center",
+                        fontsize=FS_MICRO, color=INK, zorder=11,
+                        path_effects=[pe.withStroke(linewidth=dw(2.6), foreground="white")])
+            sgn_x = 1.0 if x[1] >= xp[1] else -1.0
+            for P, lab, sgn in ((x, r"$\boldsymbol{x}$", sgn_x),
+                                (xp, r"$\boldsymbol{x}'$", -sgn_x)):
+                P = np.asarray(P)
+                ax.plot(*P, marker="o", mfc="white", mec=INK, ms=dw(4.4), zorder=8)
+                ax.text(P[0], P[1] + sgn * 0.055 * H_, lab, ha="center", va="center",
                         fontsize=FS_MICRO, color=INK, zorder=11,
                         path_effects=[pe.withStroke(linewidth=dw(2.6), foreground="white")])
             u_hat = (B - A) / np.linalg.norm(B - A); nrm = np.array([-u_hat[1], u_hat[0]])
@@ -551,7 +553,13 @@ def panel_rom(ax, S):
     nodes = S['panel_flat']
     _draw_panels(ax, nodes, facecolor=LIGHT, edgecolor=INNER_EDGE, lw=dw(0.9), zorder=4)
     hp = S['hinge_xy_flat']
-    ax.scatter(hp[:, 0], hp[:, 1], s=dA(56), color=TEAL, edgecolor="white", linewidths=dw(1.0),
+    # ⚠ The flat closed sheet puts hinge points in NEAR-COINCIDENT PAIRS: two cuts meeting at a
+    # corner give two hinges a fraction of a marker apart. At a fixed marker size they merge into
+    # one blob, which the page plate does too. They are two hinges and must not be deduplicated,
+    # so the row draws them smaller instead, at 0.6 of the page diameter, with a thinner keyline
+    # so a small marker is not mostly edge. Page output is untouched.
+    _hs, _hlw = (11, 0.5) if _SLIDE else (56, 1.0)
+    ax.scatter(hp[:, 0], hp[:, 1], s=dA(_hs), color=TEAL, edgecolor="white", linewidths=dw(_hlw),
                zorder=8)
     _fit_view(ax, nodes.reshape(-1, 2))
     c = nodes.mean(1).mean(0)
@@ -563,8 +571,14 @@ def panel_rom(ax, S):
     _leader(ax, pc, pc + np.array([-1.6, -1.4]) * np.ptp(nodes[0], 0).max() * 0.7, "rigid panel", GREY)
 
 
-def panel_deploy(ax, S):
-    """c: HALF deployment; flat (closed) state ghosted behind. Clamp + tile-fitted moment."""
+def panel_deploy(ax, S, kinematic=False):
+    """c: HALF deployment; flat (closed) state ghosted behind. Clamp + tile-fitted moment.
+
+    ``kinematic`` draws the same opening with none of the mechanics on it: the hinges become
+    plain marks instead of an energy field, and the applied moment goes, a kinematic deployment
+    being the mechanism moving under no load at all. It is what the first sight of the pipeline
+    shows, before either the hinge energy or equilibrium has been introduced.
+    """
     half = S['panel_half']
     _draw_panels(ax, S['panel_flat_frame'], facecolor="none", edgecolor=GREY, alpha=0.28,
                  lw=dw(0.8), zorder=2)                                # closed (start) ghost
@@ -574,16 +588,23 @@ def panel_deploy(ax, S):
         _draw_panels(ax, half[[fid]], facecolor=GREY, alpha=0.7, edgecolor=INK, lw=dw(1.2), zorder=6)
         p = S['fc_half'][fid]
         _leader(ax, p, p + np.array([-0.34, -0.46]) * span, "clamped\ncentre", GREY, FS_LEADER)
-    for fid in S['loaded']:
-        tile = half[fid]; tc = tile.mean(0)
-        mom_r = 0.36 * float(np.min(np.linalg.norm(tile - tc, axis=1)))
-        _moment_arrow(ax, tc, mom_r, RED, ccw=True, lw=dw(2.2))
-        _leader(ax, tc + np.array([mom_r, mom_r]) * 0.9, tc + np.array([0.46, 0.50]) * span,
-                r"applied moment $M$", RED, FS_LEADER)
-    W = S['W_half']
-    norm = Normalize(vmin=float(np.quantile(W, 0.05)), vmax=float(np.quantile(W, 0.92)))
-    sc = ax.scatter(S['hinge_xy_half'][:, 0], S['hinge_xy_half'][:, 1], c=W, cmap=ENERGY_CMAP,
-                    norm=norm, s=dA(46), edgecolor=INK, linewidths=dw(0.5), zorder=9)
+    if not kinematic:
+        for fid in S['loaded']:
+            tile = half[fid]; tc = tile.mean(0)
+            mom_r = 0.36 * float(np.min(np.linalg.norm(tile - tc, axis=1)))
+            _moment_arrow(ax, tc, mom_r, RED, ccw=True, lw=dw(2.2))
+            _leader(ax, tc + np.array([mom_r, mom_r]) * 0.9, tc + np.array([0.46, 0.50]) * span,
+                    r"applied moment $M$", RED, FS_LEADER)
+    if kinematic:
+        ax.scatter(S['hinge_xy_half'][:, 0], S['hinge_xy_half'][:, 1], c=TEAL, s=dA(46),
+                   edgecolor=INK, linewidths=dw(0.5), zorder=9)
+        sc = norm = None
+    else:
+        W = S['W_half']
+        norm = Normalize(vmin=float(np.quantile(W, 0.05)), vmax=float(np.quantile(W, 0.92)))
+        sc = ax.scatter(S['hinge_xy_half'][:, 0], S['hinge_xy_half'][:, 1], c=W,
+                        cmap=ENERGY_CMAP, norm=norm, s=dA(46), edgecolor=INK,
+                        linewidths=dw(0.5), zorder=9)
     _fit_view(ax, S['panel_frames'][-1].reshape(-1, 2), pad=0.22)
     return sc, norm
 
@@ -593,10 +614,15 @@ def panel_target(ax, S):
     _draw_panels(ax, final, facecolor=LIGHT, edgecolor=INNER_EDGE, lw=dw(0.9), zorder=3)
     cen, rad = S['tcen'], S['trad']
     ax.add_patch(Circle(cen, rad, fill=False, edgecolor=INK, lw=dw(2.2), ls="--", zorder=6))
-    tp = cen + rad * np.array([0.72, 0.72])
-    ax.annotate("target shape", xy=tp, textcoords="offset points", xytext=(8, 4), ha="left",
-                fontsize=FS_LEADER, color=INK,
-                arrowprops=dict(arrowstyle="-", color=INK, lw=dw(0.9)))
+    # Two lines anchored to the top-right corner of the view, mirroring the green label opposite.
+    # A single line offset outward from the circle is 35 bp wide and the view is only ~79 bp, so it
+    # left the card and printed clipped.
+    if not _SLIDE:
+        tp = cen + rad * np.array([0.94, 0.34])      # low enough that the leader reads as a leader
+        ax.annotate("target\nshape", xy=tp, xytext=cen + rad * np.array([1.24, 1.24]),
+                    ha="right", va="top", multialignment="right",
+                    fontsize=FS_LEADER, color=INK, zorder=12,
+                    arrowprops=dict(arrowstyle="-", color=INK, lw=dw(0.9)))
     cl = S['cloud']
     ax.scatter(cl[:, 0], cl[:, 1], s=dA(44), color=GREEN, edgecolor="white", linewidths=dw(0.9),
                zorder=8)
@@ -618,7 +644,7 @@ def panel_target(ax, S):
 # NOT orange (= the paper), never blue.
 R_SLIDER = PURPLE
 R_SLIDER_FADE = "#8E79AD"     # mid purple (un-highlighted); #B7A6CC vanished against ORANGE
-TAU_SLIDER = GREEN            # every boundary slider is full green -- there are only 12 of them
+TAU_SLIDER = GREEN            # every boundary slider is full green -- there are only 16 of them
 G_COLOR = TEAL                # the hinge descriptor g_h = (w_lig, alpha, rho_f, w_c)
 
 
@@ -634,8 +660,11 @@ def _slider_knob(ax, foot, u_hat, nrm, side, kl, kh, color=R_SLIDER, zorder=8, e
 
 def detail_theta(ax, S):
     """a: a MAGNIFIED view of the cut framed on the sheet above, showing how the slider sets the void
-    aspect ratio. The cut = the diagonal A-B (the line seen when closed); the slider sits ON it and
-    opens it perpendicular, so the void's two diagonals give r = l_perp / l_par.
+    aspect ratio. A and B are the facing endpoints of the two neighbouring cuts and A-B is the line
+    seen when closed; r places this cut's own endpoints x, x' on it, so the void that opens has
+    sides |A-x| = (1-r)L and |x-B| = rL. Those two lengths are what the drawing dimensions: they are
+    the paper's r (eq:aspect-ratio) and they hold at every opening angle, unlike the ratio of the
+    void's two diagonals that this panel printed until 2026-08-23.
 
     Every length is a fraction of L = |A-B|, so the drawing is scale-free and the magnification is
     set only by _fit_box. w_lig is NOT here -- it is a leader on the sheet; dropping it is what pays
@@ -653,9 +682,20 @@ def detail_theta(ax, S):
     u = (B - A); L = float(np.linalg.norm(u)); u_hat = u / L; nrm = np.array([-u_hat[1], u_hat[0]])
     ax.add_patch(MplPolygon(void, closed=True, facecolor="white", edgecolor=INK, lw=dw(1.6), zorder=4))
     ax.plot([A[0], B[0]], [A[1], B[1]], color=INK, ls=(0, (4, 2.5)), lw=dw(1.4), zorder=5)
-    for P, lab in ((A, "A"), (B, "B")):
+    # All four corners carry the names Sec. sec:tessellation gives them: A and B are the facing
+    # endpoints of the two NEIGHBOURING cuts, x and x' the two endpoints of THIS one, which r
+    # places on [A, B]. They were printed C and D until 2026-08-23, which named nothing in the
+    # paper and collided with the cut C_ij itself.
+    # The upper summit's label is lifted clear: the two side lengths are printed just above the two
+    # edges that meet there, and at 0.150 L it landed between them.
+    top_is_x = x[1] >= xp[1]
+    top, bot = (x, xp) if top_is_x else (xp, x)
+    top_lab, bot_lab = ((r"$\boldsymbol{x}$", r"$\boldsymbol{x}'$") if top_is_x
+                        else (r"$\boldsymbol{x}'$", r"$\boldsymbol{x}$"))
+    for P, lab, dy in ((A, r"$\boldsymbol{A}$", 0.105), (B, r"$\boldsymbol{B}$", 0.105),
+                       (top, top_lab, 0.205), (bot, bot_lab, -0.150)):
         ax.plot(*P, marker="o", mfc="white", mec=INK, ms=dw(7), zorder=6)
-        ax.text(P[0], P[1] + 0.105 * L, lab, ha="center", va="center", fontsize=FS_MICRO,
+        ax.text(P[0], P[1] + dy * L, lab, ha="center", va="center", fontsize=FS_MICRO,
                 color=INK, zorder=8, path_effects=halo)
     # ONE slider per cut: a single r sets BOTH cut-vertices, so keep both dotted projections to the
     # summits it opens but draw only ONE knob, on the SAME vertex the sheet above spotlights.
@@ -674,7 +714,7 @@ def detail_theta(ax, S):
                  zorder=10)
     # l_par below, drawn as a BROKEN dimension with the label in the gap -- that buys back a whole
     # label row, which is most of what makes room for the magnification.
-    yb = min(A[1], B[1], x[1], xp[1]) - 0.14 * L
+    yb = min(A[1], B[1], x[1], xp[1]) - 0.30 * L      # room for the lower summit's label
     for P in (A, B):
         ax.plot([P[0], P[0]], [P[1], yb + 0.02 * L], color=INK, lw=dw(0.6), zorder=5)
     xm = (A[0] + B[0]) / 2
@@ -682,31 +722,33 @@ def detail_theta(ax, S):
         ax.annotate("", xy=(tip, yb), xytext=(tail, yb),
                     arrowprops=dict(arrowstyle="-|>", color=INK, lw=dw(1.0), mutation_scale=dw(11)),
                     zorder=5)
-    ax.text(xm, yb, r"$\ell_\parallel$", ha="center", va="center", fontsize=FS_MICRO, color=INK,
+    ax.text(xm, yb, r"$L$", ha="center", va="center", fontsize=FS_MICRO, color=INK,
             zorder=7, path_effects=halo)
-    # l_perp clear of the void on the right; the void is a parallelogram, so an in-place arrow
-    # between its two short-diagonal corners would land diagonally across the cut line.
-    xdim = max(x[0], xp[0], B[0]) + 0.135 * L
-    for P in (x, xp):
-        ax.plot([P[0], xdim + 0.02 * L], [P[1], P[1]], color=INK, lw=dw(0.6), zorder=5)
-    ax.annotate("", xy=(xdim, x[1]), xytext=(xdim, xp[1]),
-                arrowprops=dict(arrowstyle="<|-|>", color=INK, lw=dw(1.0), mutation_scale=dw(11)),
-                zorder=6)
-    ax.text(xdim + 0.045 * L, (x[1] + xp[1]) / 2, r"$\ell_\perp$", ha="left", va="center",
-            fontsize=FS_MICRO, color=INK, zorder=7, path_effects=halo)
+    # The two sides r sets: |A-x| = (1-r)L and |x-B| = rL, invariant at EVERY opening angle. These
+    # replace "r = l_perp/l_par" (printed here until 2026-08-23), which is the ratio of the void's
+    # two DIAGONALS -- not r, and not invariant: it runs 0.09 to 1.47 over one opening sweep.
+    # The void is a parallelogram, so the other two sides repeat these two and are left unlabelled.
+    # Both labels go on the UPPER two edges (the lower half already carries the lower summit's label
+    # and the L dimension), so which name lands on which edge follows the upper summit's identity.
+    for P, Q, lab in ((A, top, r"$(1-r)L$" if top_is_x else r"$rL$"),
+                      (top, B, r"$rL$" if top_is_x else r"$(1-r)L$")):
+        mid = (P + Q) / 2.0
+        e = Q - P
+        n = np.array([-e[1], e[0]])
+        n = n / (float(np.linalg.norm(n)) + 1e-12)
+        if float(np.dot(n, mid)) < 0.0:          # the void is centred on the origin: point OUTWARD
+            n = -n
+        pos = mid + 0.17 * L * n
+        ax.text(pos[0], pos[1], lab, ha="center", va="center", fontsize=FS_MICRO,
+                color=R_SLIDER, zorder=9, path_effects=halo)
     ys_ = void[:, 1]
-    _fit_box(ax, (A[0] - 0.10 * L, yb - 0.10 * L), (xdim + 0.17 * L, ys_.max() + 0.20 * L))
+    xdim = max(x[0], xp[0], B[0])
+    _fit_box(ax, (A[0] - 0.30 * L, yb - 0.10 * L), (xdim + 0.30 * L, ys_.max() + 0.46 * L))
     # a band of material behind the void, so the white quad reads as a HOLE rather than a shape
     x0, x1 = ax.get_xlim()
     ax.add_patch(MplPolygon([[x0, ys_.min() - 0.09 * L], [x1, ys_.min() - 0.09 * L],
                              [x1, ys_.max() + 0.09 * L], [x0, ys_.max() + 0.09 * L]],
                             closed=True, facecolor=LIGHT, edgecolor="none", zorder=0))
-    # the defining relation, in AXES coords so it cannot inflate the equal-aspect fit above
-    # the pair straddles one anchor, so the purple r keeps its colour without needing a width measure
-    ax.text(0.60, 0.88, r"$r$", transform=ax.transAxes, ha="right", va="center",
-            fontsize=FS_SMALL, color=R_SLIDER, zorder=9, path_effects=halo)
-    ax.text(0.60, 0.88, r"$=\ell_\perp/\ell_\parallel$", transform=ax.transAxes, ha="left",
-            va="center", fontsize=FS_SMALL, color=INK, zorder=9, path_effects=halo)
 
 
 def detail_two_faces(ax):
@@ -722,10 +764,10 @@ def detail_two_faces(ax):
     belong to the surrogate's features, not here. Kinematics only (no energy)."""
     from matplotlib.patches import Arc as MplArc
     ax.axis("off")
-    yspan = _match_aspect(ax, 9.6)
+    yspan = _match_aspect(ax, 8.4)      # was 9.6; the per-mode formula row is gone, so draw larger
     GHOST = "#B9B6B0"                              # rest-state ghost
     d, g = 0.40, 0.10                              # panel centre-to-tip; half the rest ligament
-    yc = yspan * 0.60                              # one shared row of diagrams
+    yc = yspan * 0.48                              # one shared row of diagrams
 
     def diamond(cx, cy, ang=0.0):
         """A rotating-squares panel (square on its corner); the CORNER TIPS are the hinge points."""
@@ -743,12 +785,9 @@ def detail_two_faces(ax):
                                 ls=(0, (4, 3)) if ghost else "-", zorder=2 if ghost else 3))
 
     names = {"opening": "Opening", "shear": "Shear", "rotation": "Rotation"}
-    # the cut frame (e_sec, e_sec_perp) is named once under the strip, so the per-mode formulas can
-    # stay narrow enough for a 34 bp column
-    forms = {"opening": r"$a=\boldsymbol{d}\cdot\hat{\boldsymbol{e}}$",
-             "shear": r"$s=\boldsymbol{d}\cdot\hat{\boldsymbol{e}}^{\perp}$",
-             "rotation": r"$\vartheta=\phi_k-\phi_i$"}
-    for mode, cx in zip(("opening", "shear", "rotation"), (1.60, 4.80, 8.00)):
+    # No per-mode formula line: each mode is DIMENSIONED in the drawing, and the definitions live in
+    # eq:hinge-strain. Printing them again here only competed with the arrow labels a, s, vartheta.
+    for mode, cx in zip(("opening", "shear", "rotation"), (1.40, 4.20, 7.00)):
         acx, bcx = cx - (g + d), cx + (g + d)      # panel i (fixed) / panel k (at rest) centres
         P1 = np.array([acx + d, yc])               # i's hinge CORNER (its right tip)
         P2r = np.array([bcx - d, yc])              # k's hinge CORNER at REST (its left tip)
@@ -796,9 +835,8 @@ def detail_two_faces(ax):
                                 theta2=90 + np.degrees(th), color=INK, lw=dw(1.1), zorder=4))
             ax.text(P2r[0] - 0.24, P2r[1] + L + 0.16, r"$\vartheta$", ha="center", va="center",
                     fontsize=FS_MICRO, color=INK)
-        ax.text(cx, yspan - 0.34, names[mode], ha="center", va="center", fontsize=FS_MICRO,
+        ax.text(cx, yspan - 0.75, names[mode], ha="center", va="center", fontsize=FS_MICRO,
                 fontweight="bold", color=INK)
-        ax.text(cx, 0.62, forms[mode], ha="center", va="center", fontsize=FS_MICRO, color=INK)
 
 
 def detail_energy(ax, S):
@@ -820,7 +858,7 @@ def detail_energy(ax, S):
     ax.plot(lam, sh, color=TEAL, lw=dw(2.0), zorder=6)
     ax.plot(lam, tn, color=ORANGE, lw=dw(2.2), zorder=6)
     ax.set_xlim(0, 1); ax.set_ylim(0, top * 1.16)
-    ax.set_xlabel(r"load parameter $\lambda$", fontsize=FS_LEADER, color=GREY, labelpad=1.5)
+    ax.set_xlabel(r"load factor $\zeta$", fontsize=FS_LEADER, color=GREY, labelpad=1.5)
     # the numeric ticks say nothing here (schematic axis) -- label the three curves inline instead
     ax.set_xticks([]); ax.set_yticks([])
     # figstyle hides the top/right spines, which left this plot with no defined upper edge and made
@@ -930,8 +968,8 @@ def build_figure(S, out_base, audit=False):
     apply_charter(**_PLATE_RC)
     fig = plt.figure(figsize=(FIG_W_BP / 72.0, FIG_H_BP / 72.0))
 
-    titles = {"a": "cut pattern", "b": "reduced-order model", "c": "kinematic deployment",
-              "d": "deployed vs target", "e": "optimized pattern"}
+    titles = {"a": "cut pattern", "b": "hinge energy", "c": "kinematic deployment",
+              "d": "deployed vs target", "e": "optimised pattern"}
 
     # Forward-model container: a stepped polygon. The top bar reaches down past row 1 so the c->d
     # wrap arrow runs inside it, which leaves the row-2 cell right of the leg outside -- that is
@@ -950,8 +988,7 @@ def build_figure(S, out_base, audit=False):
                                       boxstyle=f"round,pad={fx(1.5)},rounding_size={fx(4)}",
                                       transform=fig.transFigure, facecolor=BOX_FILL, edgecolor=edge,
                                       lw=dw(2.0) if k == "a" else dw(1.2), zorder=-2))
-        fig.text(fx(kx + 5.0), _fy_in(k, TITLE_OFF), k, ha="left", va="center",
-                 fontsize=FS_PANEL, fontweight="bold")
+        panel_letter(fig, k, x=fx(kx + 5.0), y=_fy_in(k, TITLE_OFF), ha="left", va="center")
         fig.text(_cx(k), _fy_in(k, TITLE_OFF), titles[k], ha="center", va="center", fontsize=FS_TITLE)
 
     axv = {k: fig.add_axes(_vis(k)) for k in CARDS}
@@ -982,22 +1019,26 @@ def build_figure(S, out_base, audit=False):
     fig.text(fx(_zx0 + 3.5), fy(_zy1 - 4.5), "zoom", ha="left", va="center", fontsize=FS_MICRO,
              color=GREY, style="italic", zorder=10)
 
-    # ── b: the reduced hinge kinematics, eq:hinge-strain ──
-    _formula(fig, _cx("b"), _fy_in("b", FORM_OFF),
+    # ── b: the reduced hinge kinematics eq:hinge-strain, and the stored energy they enter. Two
+    #      lines like card c -- the measures on top, the energy below -- with a short riser between
+    #      them, so the direction of the map is DRAWN rather than left to the reader. The argument
+    #      order is the manuscript's, W(eps; g): the deformation first, the hinge design second.
+    _formula(fig, _cx("b"), _fy_in("b", FORM_HI + 2.0),
              r"$\boldsymbol{\varepsilon}_h(\boldsymbol{q})=(a_h,\,s_h,\,\vartheta_h)$",
              TEAL, FS_FORMULA)
+    _fig_arrow(fig, (_cx("b"), _fy_in("b", FORM_LO + 8.2)),
+               (_cx("b"), _fy_in("b", FORM_LO + 2.8)), GREY, lw=dw(1.1), ms=5.0, shrink=0.0)
+    _colored_line(fig, _cx("b"), _fy_in("b", FORM_LO - 2.0),
+                  [(r"$\mathcal{W}(\,$", INK), (r"$\boldsymbol{\varepsilon}_h$", TEAL),
+                   (r"$\,;\,$", INK), (r"$\boldsymbol{g}_h$", G_COLOR), (r"$\,)$", INK)],
+                  fs=FS_SMALL)
     detail_two_faces(fig.add_axes(_det("b")))
 
-    # ── c: equilibrium, eq:equilibrium. The full Pi does not fit the card, so it is named on the
-    #      first line and glossed on the second, in the colours of the things visible above it.
-    _formula(fig, _cx("c"), _fy_in("c", FORM_HI),
-             r"$\boldsymbol{q}^\star(\lambda;\boldsymbol{\theta})="
+    # ── c: equilibrium, eq:equilibrium. Pi is NOT expanded here -- eq:equilibrium defines it, and
+    #      the card is about the deployed state the minimisation returns.
+    _formula(fig, _cx("c"), _fy_in("c", FORM_OFF),
+             r"$\boldsymbol{q}^\star(\zeta;\boldsymbol{\theta})="
              r"\arg\min_{\boldsymbol{q}\in\mathcal{C}}\ \Pi$", INK, FS_FORMULA)
-    # ORANGE now means TENSION in the plot below, so the gloss keeps exactly one accent: RED = the
-    # applied moment M, which is visible in the panel above.
-    _colored_line(fig, _cx("c"), _fy_in("c", FORM_LO),
-                  [(r"$\Pi=$", INK), ("hinge energy", INK), (r"$\,-\,\lambda\,$", INK),
-                   ("load work", RED)], fs=FS_MICRO)
     detail_energy(fig.add_axes(_det("c", ix=6.0, iy=6.5, ty=3.5)), S)
     # inset far enough from the card edge that the "low"/"high" tick labels stay inside it
     cax = fig.add_axes([fx(CARDS["c"][0] + CW1 - APAD - 22.0), _fy_in("c", VIS_OFF + VIS_H * 0.24),
@@ -1014,7 +1055,7 @@ def build_figure(S, out_base, audit=False):
                   fs=FS_SMALL, box=True)
     detail_damage_curve(fig.add_axes(_det("d", ix=6.0, iy=6.5)))
 
-    _formula(fig, _cx("e"), _fy_in("e", FORM_OFF), r"$\boldsymbol{\theta}^\star$  optimized design",
+    _formula(fig, _cx("e"), _fy_in("e", FORM_OFF), r"$\boldsymbol{\theta}^\star$  optimised design",
              INNER_EDGE, FS_FORMULA)
     fig.text(_cx("e"), _fy_in("e", DET_OFF + DET_H / 2), "ready for\nreal-world\nfabrication",
              ha="center", va="center", fontsize=FS_SMALL, color="#8a3a00", style="italic")
@@ -1083,10 +1124,13 @@ def build_figure(S, out_base, audit=False):
     print(f"wrote {out_base}.png / .pdf  ({FIG_W_BP:.1f} x {FIG_H_BP:.1f} bp)")
 
 
-def _fig_arrow(fig, p0, p1, color, lw=None, ms=6.0):
+def _fig_arrow(fig, p0, p1, color, lw=None, ms=6.0, shrink=None, zorder=5):
+    """shrink: override the 2 pt trimmed off EACH end by default -- pass 0.0 for a short riser,
+    which the default would otherwise reduce to a bare arrowhead."""
+    kw = {} if shrink is None else dict(shrinkA=shrink, shrinkB=shrink)
     fig.add_artist(FancyArrowPatch(p0, p1, transform=fig.transFigure, arrowstyle="-|>",
                                    mutation_scale=ms, lw=dw(2.0) if lw is None else lw,
-                                   color=color, zorder=5))
+                                   color=color, zorder=zorder, **kw))
 
 
 def _audit(fig):
@@ -1102,19 +1146,261 @@ def _audit(fig):
     lws = [ln.get_linewidth() for ln in fig.findobj(matplotlib.lines.Line2D)]
     print(f"-- linewidths: {min(lws):.2f} .. {max(lws):.2f} pt" if lws else "-- no lines")
     r = fig.canvas.get_renderer()
+    to_bp = lambda px: px / fig.bbox.width * FIG_W_BP
     over = []
     for k, (kx, ky, kw) in CARDS.items():
-        inner = (kw - 2 * APAD) / FIG_W_BP * fig.bbox.width
-        cxp = (kx + kw / 2) / FIG_W_BP * fig.bbox.width
+        # A label overflows when either EDGE leaves the card, not only when the string is wider than
+        # the card: "target shape" was 35 bp inside a 88 bp card and still printed clipped.
+        cx0 = kx / FIG_W_BP * fig.bbox.width
+        cx1 = (kx + kw) / FIG_W_BP * fig.bbox.width
         y0, y1 = (ky / FIG_H_BP * fig.bbox.height, (ky + CH) / FIG_H_BP * fig.bbox.height)
         for t in fig.findobj(matplotlib.text.Text):
             bb = t.get_window_extent(renderer=r)
-            ymid = bb.y0 + bb.height / 2
-            if y0 < ymid < y1 and abs(bb.x0 + bb.width / 2 - cxp) < inner * 0.5 and bb.width > inner:
-                over.append((k, round(bb.width / fig.bbox.width * FIG_W_BP, 1),
-                             round(inner / fig.bbox.width * FIG_W_BP, 1), t.get_text()[:36]))
+            xmid, ymid = bb.x0 + bb.width / 2, bb.y0 + bb.height / 2
+            if not (y0 < ymid < y1 and cx0 < xmid < cx1):
+                continue                                  # not this card's text
+            spill = max(cx0 - bb.x0, bb.x1 - cx1)
+            if spill > 0.5:                               # sub-half-point is anti-aliasing, not a bug
+                over.append((k, f"spills {to_bp(spill):.1f} bp", t.get_text()[:36]))
     print(f"-- overflowing card text: {over if over else 'none'}")
     assert sizes[0][0] >= 6.0, f"sub-6pt text would print illegibly: {sizes[:4]}"
+
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Slide composition — the same five cards in ONE ROW
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# The page plate is 437 x 425 bp, near enough square that a 16:9 body (410 x 188 pt) is
+# height-limited by it: it prints half the slide wide and takes its 7 pt type to 3.3. A row uses
+# the width the page never had. Authored at 408 bp, so an authored point size is a projected one.
+#
+# What the row DROPS, and why: the formula band and the detail band under every card. Five cards
+# across 408 bp leaves each 68 bp wide against the page's 110, so a formula set to fit would be
+# 5 pt on a projector. The equations are not lost -- theta is the parametrisation slide's own
+# display, W belongs to the hinge slides -- and this slide is the one place the pipeline is a
+# picture rather than an argument. The visuals, the titles, the flow and the backward pass are
+# what a row is for.
+
+SL_W_BP, SL_H_BP = slide_bp(aspect=408.0 / 128.0)
+
+SL_CW = 63.4                                 # card width; 5 of them and 4 gaps fill 408 bp
+# The wide gap has to hold the loss node AND an arrow either side of it. At 34 it did not: the node
+# is 16 bp wide, which left each arrow 5 bp of shaft under a 15 bp arrowhead, so both read as a
+# floating head, and the forward-model container's border landed mid-arrow. 49 buys about 9 bp of
+# shaft on the left and 12 on the right, paid for with 3 bp off each of the five cards.
+SL_GAP, SL_GAP_L = 10.0, 49.0                # plain gap, and the d -> e gap that holds the loss
+# The a -> b gap is wider than a plain one because THREE things share it: card a's edge, the
+# forward-model container's left border, and the chevron. At 10 the border landed 1 bp from the
+# chevron and the glyph was drawn straight over it. 18 leaves the chevron 7 bp of clear space
+# either side.
+SL_GAP_A = 18.0
+SL_M = 2.0                                   # canvas margin
+SL_LANE_Y, SL_LANE_H = 8.5, 13.0             # backward-pass lane (centre, height)
+SL_CY, SL_CH = 30.0, 82.0                    # card bottom and height
+SL_APAD = 3.5                                # axes inset inside a card
+SL_TITLE_OFF = SL_CH - 7.0                   # letter + title strip, from the card bottom
+SL_VIS_OFF, SL_VIS_H = 3.0, SL_CH - 14.0     # visual band
+
+# Left edges, laid out left to right with the wide gap before e.
+_sl_x = {}
+_x = SL_M
+for _k in "abcde":
+    _sl_x[_k] = _x
+    _x += SL_CW + (SL_GAP_L if _k == "d" else (SL_GAP_A if _k == "a" else SL_GAP))
+SL_CARDS = {k: (_sl_x[k], SL_CY, SL_CW) for k in "abcde"}
+
+SL_X_LOSS = _sl_x["d"] + SL_CW + SL_GAP_L / 2     # loss node, centred in the wide gap
+# The container insets 5 bp from the cards it holds, the same on both sides, so neither border
+# shares space with a chevron or an arrowhead.
+SL_FX0 = _sl_x["b"] - 5.0                          # forward-model container, around b c d
+SL_FX1 = _sl_x["d"] + SL_CW + 5.0
+SL_FY_BOT, SL_FY_TOP = SL_CY - 5.0, SL_CY + SL_CH + 5.0
+
+# The row a talk meets FIRST holds four cards, not five. At that point neither the hinge energy
+# nor equilibrium has been introduced, and the deployment the five-card row shows is a physical
+# one, so b and c collapse into a single kinematic-deployment card. The five-card row returns on
+# the objective frame, by which point every stage of it has been explained.
+SL_KIN_CARDS = "acde"
+SL_KIN_TITLE = "kinematic deployment"
+
+
+def _sl_layout(keys):
+    """Left edges and card width for a row of ``keys``, filling the 408 bp measure.
+
+    The gaps are fixed by what each has to hold: a to b carries the container's left border and a
+    chevron, d to e carries the loss node and an arrow either side. So the CARDS absorb a dropped
+    stage rather than the row leaving a hole, and four cards come out 81.8 bp wide against 63.4.
+    """
+    gaps = [SL_GAP_L if k == "d" else (SL_GAP_A if k == "a" else SL_GAP) for k in keys[:-1]]
+    cw = (SL_W_BP - 2 * SL_M - sum(gaps)) / len(keys)
+    x, xs = SL_M, {}
+    for i, k in enumerate(keys):
+        xs[k] = x
+        x += cw + (gaps[i] if i < len(gaps) else 0.0)
+    return xs, cw
+
+
+def _fit_fontsize(fig, labels, avail_bp, fs0, floor=5.6):
+    """Largest size at or below ``fs0`` at which every label fits ``avail_bp``."""
+    r = fig.canvas.get_renderer()
+    fs = fs0
+    while fs > floor:
+        t = fig.text(0.5, 0.5, max(labels, key=len), fontsize=fs)
+        w = t.get_window_extent(renderer=r).width / fig.bbox.width * FIG_W_BP
+        t.remove()
+        if w <= avail_bp:
+            break
+        fs -= 0.1
+    return round(fs, 1)
+
+
+def build_figure_slide(S, out_base, kinematic=False):
+    """One-row cut of the pipeline plate, authored at the size a 16:9 slide gives it.
+
+    ``kinematic`` drops the hinge-energy card and shows the deployment with no mechanics on it,
+    for the frame that meets the pipeline before any stage of it has been explained.
+    """
+    global FIG_W_BP, FIG_H_BP, _SLIDE
+    FIG_W_BP, FIG_H_BP = SL_W_BP, SL_H_BP          # fx/fy and every helper read these
+    _SLIDE = True
+
+    # Local, not the module's: the four-card row is a different geometry and nothing outside this
+    # call should see it. Every name here shadows its module-level default for this build only.
+    keys = SL_KIN_CARDS if kinematic else "abcde"
+    _sl_x, SL_CW = _sl_layout(keys)
+    SL_CARDS = {k: (_sl_x[k], SL_CY, SL_CW) for k in keys}
+    SL_X_LOSS = _sl_x["d"] + SL_CW + SL_GAP_L / 2
+    SL_FX0 = _sl_x["b" if "b" in keys else "c"] - 5.0
+    SL_FX1 = _sl_x["d"] + SL_CW + 5.0
+
+    vis = lambda k: [fx(SL_CARDS[k][0] + SL_APAD), fy(SL_CARDS[k][1] + SL_VIS_OFF),
+                     fx(SL_CW - 2 * SL_APAD), fy(SL_VIS_H)]
+    cx = lambda k: fx(SL_CARDS[k][0] + SL_CW / 2)
+    yin = lambda k, off: fy(SL_CARDS[k][1] + off)
+
+    apply_charter(**_PLATE_RC)
+    fig = plt.figure(figsize=(FIG_W_BP / 72.0, FIG_H_BP / 72.0))
+
+    # A 68 bp card holds about 13 characters at a size that survives a projector, so three of the
+    # page's five titles are shortened. The card carries the meaning the words drop: (c) shows the
+    # deployment, (d) shows the sheet inside its dashed target, (e) shows the cut pattern again.
+    titles = {"a": "cut pattern", "b": "hinge energy", "c": "deployment",
+              "d": "vs target", "e": "optimised cut"}
+    if kinematic:
+        titles["c"] = SL_KIN_TITLE
+    titles = {k: titles[k] for k in keys}
+    # One size for all five, set by the longest, so the strip reads as one row rather than five
+    # decisions. Measured, not guessed: a title that overruns its card runs UNDER the next card's
+    # letter and nothing in the build reports it. That is what "deployed vs target" did, bottoming
+    # out against the floor and still overflowing, which is why the words above are shorter.
+    fs_title = _fit_fontsize(fig, list(titles.values()), SL_CW - 12.5, FS_TITLE, floor=5.6)
+
+    # Forward-model container: a plain rounded box here, not the page's stepped polygon. The step
+    # existed to let the c -> d arrow wrap from row 1 into row 2; in a row there is no wrap.
+    fig.add_artist(PathPatch(_rounded_path([(SL_FX0, SL_FY_TOP), (SL_FX1, SL_FY_TOP),
+                                            (SL_FX1, SL_FY_BOT), (SL_FX0, SL_FY_BOT)], 5.0),
+                             transform=fig.transFigure, facecolor=FWD_FILL, edgecolor=GREY,
+                             lw=dw(1.3), zorder=-3))
+    fig.text(fx((SL_FX0 + SL_FX1) / 2), fy(SL_FY_TOP + 5.5), "differentiable forward model",
+             ha="center", va="center", fontsize=FS_TITLE, style="italic", color=GREY)
+
+    for k, (kx, ky, kw) in SL_CARDS.items():
+        edge = R_COLOR if k == "a" else (GREY if k in ("b", "c", "d") else INNER_EDGE)
+        fig.add_artist(FancyBboxPatch((fx(kx), fy(ky)), fx(kw), fy(SL_CH),
+                                      boxstyle=f"round,pad={fx(1.5)},rounding_size={fx(4)}",
+                                      transform=fig.transFigure, facecolor=BOX_FILL, edgecolor=edge,
+                                      lw=dw(2.0) if k == "a" else dw(1.2), zorder=-2))
+        # The letter owns the left of the strip and the title centres in the rest of it. Centring
+        # the title on the whole card, as the page does, runs it under the letter at this width.
+        # With the letters off there is no strip to dodge, so the title takes the whole card.
+        panel_letter(fig, k, x=fx(kx + 3.5), y=yin(k, SL_TITLE_OFF), ha="left", va="center")
+        _tx = (kx + 9.0 + (SL_CW - 12.5) / 2) if panel_letters_on() else (kx + SL_CW / 2)
+        fig.text(fx(_tx), yin(k, SL_TITLE_OFF), titles[k],
+                 ha="center", va="center", fontsize=fs_title)
+
+    # Card c reserves the bottom of its visual band for the colour key, so the sheet is fitted into
+    # what is left and the two cannot meet. A vertical bar inside the band, as the page has it, is
+    # drawn straight over the deployed sheet at this width: the page affords it a 102 bp card and
+    # 22 bp of inset, and 68 bp does not.
+    SL_CBAR_H = 0.0 if kinematic else 11.0
+    axv = {k: fig.add_axes(vis(k)) for k in SL_CARDS if k != "c"}
+    axv["c"] = fig.add_axes([fx(SL_CARDS["c"][0] + SL_APAD),
+                             yin("c", SL_VIS_OFF + SL_CBAR_H),
+                             fx(SL_CW - 2 * SL_APAD), fy(SL_VIS_H - SL_CBAR_H)])
+    panel_cut(axv["a"], S['geom_init'], "design", S)
+    if not kinematic:
+        panel_rom(axv["b"], S)
+    sc, norm = panel_deploy(axv["c"], S, kinematic=kinematic)
+    panel_target(axv["d"], S)
+    panel_cut(axv["e"], S['geom_opt'], "output")
+
+    # The hinge-energy key, horizontal in the strip reserved above, with its ends labelled beside
+    # the bar rather than under it: 5.5 pt text needs 5.5 bp of height and the strip has 11 for
+    # bar and label together. No "hinge W" title either, for the same reason the page can afford
+    # one and this cannot.
+    if not kinematic:
+        _cb_w, _cb_y = 30.0, SL_VIS_OFF + 4.5
+        _cb_x = SL_CARDS["c"][0] + SL_CW / 2 - _cb_w / 2
+        cax = fig.add_axes([fx(_cb_x), yin("c", _cb_y), fx(_cb_w), fy(3.0)])
+        cb = fig.colorbar(sc, cax=cax, orientation="horizontal")
+        cb.set_ticks([]); cb.outline.set_linewidth(dw(0.8))
+        for _x, _lab, _ha in ((_cb_x - 1.5, "low", "right"),
+                              (_cb_x + _cb_w + 1.5, "high", "left")):
+            fig.text(fx(_x), yin("c", _cb_y + 1.5), _lab, ha=_ha, va="center",
+                     fontsize=FS_MICRO, color=GREY)
+
+    # forward chevrons, one in every gap inside the row except the wide one before e, which
+    # carries the loss node and its two arrows instead
+    chev_y = yin("a", SL_VIS_OFF + SL_VIS_H / 2)
+    for k in keys[:-2]:
+        _g = SL_GAP_A if k == "a" else SL_GAP
+        fig.text(fx(_sl_x[k] + SL_CW + _g / 2), chev_y, "❯", ha="center", va="center",
+                 fontsize=FS_PANEL, color=GREY)
+
+    # loss node between d and e
+    fig.add_artist(FancyBboxPatch((fx(SL_X_LOSS - 8), fy(chev_y * FIG_H_BP - 6.5)), fx(16), fy(13),
+                                  boxstyle=f"round,pad={fx(1)},rounding_size={fx(3)}",
+                                  transform=fig.transFigure, facecolor="white", edgecolor=RED,
+                                  lw=dw(1.6), zorder=6))
+    fig.text(fx(SL_X_LOSS), chev_y, r"$\mathcal{L}$", ha="center", va="center", fontsize=FS_PANEL,
+             color=RED, zorder=7)
+    fig.text(fx(SL_X_LOSS), fy(chev_y * FIG_H_BP + 12.0), "loss", ha="center", va="center",
+             fontsize=FS_LEADER, color=RED)
+    # Both arrows are measured from the loss node's own edges, not from a fixed offset, so a change
+    # to the gap cannot silently shorten them back to a bare arrowhead.
+    _loss_l, _loss_r = SL_X_LOSS - 8.0, SL_X_LOSS + 8.0
+    _fig_arrow(fig, (fx(_sl_x["d"] + SL_CW + 7.0), chev_y), (fx(_loss_l - 1.5), chev_y),
+               GREY, dw(2.0), ms=dw(13))
+    _fig_arrow(fig, (fx(_loss_r + 1.5), chev_y), (fx(_sl_x["e"] - 2.0), chev_y),
+               INK, dw(2.4), ms=dw(13))
+
+    # ── backward pass: an INK lane along the bottom, rising into card a ──
+    lane_x0, lane_x1 = _sl_x["a"] + SL_CW / 2 - 6.0, SL_X_LOSS
+    fig.add_artist(FancyBboxPatch((fx(lane_x0), fy(SL_LANE_Y - SL_LANE_H / 2)),
+                                  fx(lane_x1 - lane_x0), fy(SL_LANE_H),
+                                  boxstyle=f"round,pad={fx(1)},rounding_size={fx(6)}",
+                                  transform=fig.transFigure, facecolor=BACK_FILL, edgecolor=INK,
+                                  lw=dw(1.8), zorder=1))
+    for xch in np.linspace(lane_x0 + 22.0, lane_x1 - 12.0, 6):
+        fig.text(fx(xch), fy(SL_LANE_Y), "❮", ha="center", va="center", fontsize=FS_SMALL,
+                 color=INK, zorder=2)
+    fig.text(fx((lane_x0 + lane_x1) / 2), fy(SL_LANE_Y + SL_LANE_H / 2 + 5.0),
+             r"backward pass: $\partial\mathcal{L}/\partial\boldsymbol{\theta}$",
+             ha="center", va="center", fontsize=FS_TITLE, color=INK, style="italic")
+    _fig_arrow(fig, (fx(SL_X_LOSS), fy(chev_y * FIG_H_BP - 9.0)),
+               (fx(SL_X_LOSS), fy(SL_LANE_Y + SL_LANE_H / 2)), INK, dw(2.4), ms=dw(15))
+    x_riser = _sl_x["a"] + SL_CW / 2
+    _fig_arrow(fig, (fx(x_riser), fy(SL_LANE_Y + SL_LANE_H / 2)), (fx(x_riser), fy(SL_CY - 2)),
+               INK, dw(2.6), ms=dw(15))
+    fig.text(fx(x_riser + 5), fy((SL_LANE_Y + SL_CY) / 2 + 1.0),
+             r"$\boldsymbol{\theta}\leftarrow\mathrm{Adam}$", ha="left", va="center",
+             fontsize=FS_LEADER, color=INK)
+
+    for ext in ("png", "pdf"):
+        fig.savefig(f"{out_base}.{ext}", dpi=600)
+    plt.close(fig)
+    print(f"wrote {out_base}.png / .pdf  ({FIG_W_BP:.1f} x {FIG_H_BP:.1f} bp)")
 
 
 def main():
@@ -1122,8 +1408,17 @@ def main():
     ap.add_argument("--config-name", default="overview")
     ap.add_argument("--out", default="data/outputs/pipeline_overview")
     ap.add_argument("--audit", action="store_true", help="report printed type sizes and overflow")
+    ap.add_argument("--slide", action="store_true",
+                    help="one-row layout authored for a 16:9 slide instead of the page plate")
+    ap.add_argument("--kinematic", action="store_true",
+                    help="slide row with the hinge-energy card dropped and the deployment drawn "
+                         "with no mechanics on it, for the first sight of the pipeline")
     args = ap.parse_args()
-    build_figure(extract_spine(args.config_name), args.out, audit=args.audit)
+    S = extract_spine(args.config_name)
+    if args.slide:
+        build_figure_slide(S, args.out, kinematic=args.kinematic)
+    else:
+        build_figure(S, args.out, audit=args.audit)
 
 
 if __name__ == "__main__":

@@ -156,7 +156,7 @@ def main():
     e_r2, e_rr = r2(Wp[te], Wt[te]), rel_rmse(Wp[te], Wt[te])
     _corner(ax, f"$R^2 = {e_r2:.4f}$\nrel. RMSE $= {e_rr*100:.2f}$%",
             _obstacles(ax, [(Wt[te], Wp[te])], lims))
-    ax.set_xlabel(r"oracle $\mathcal{W}$  [N mm]")
+    ax.set_xlabel(r"finite-element $\mathcal{W}$  [N mm]")
     ax.set_ylabel(r"surrogate $\mathcal{W}$  [N mm]")
     ax.set_title("Stored energy", pad=5, fontsize=FS_BASE, color=INK)
     cap["energy"] = (e_r2, e_rr)
@@ -178,9 +178,9 @@ def main():
     ax.set_aspect("equal", "box")
     obs = _obstacles(ax, [(Ft_n[:, j], Fp_n[:, j]) for j in range(3)], (-lim, lim))
     # Kept short: at this canvas size the full "/ component RMS" label is taller than the axes.
-    ax.set_xlabel("oracle force / RMS")
+    ax.set_xlabel("finite-element force / RMS")
     ax.set_ylabel("surrogate force / RMS")
-    ax.set_title(r"Internal force $\partial\mathcal{W}/\partial\mathbf{u}$", pad=5,
+    ax.set_title(r"Internal force $\nabla_{\varepsilon}\mathcal{W}$", pad=5,
                  fontsize=FS_BASE, color=INK)
     ax.legend(loc="best", fontsize=FS_ANNOT, handletextpad=0.3, borderpad=0.35, markerscale=1.6)
     _corner(ax, f"$R^2 = {f_r2:.4f}$\nrel. RMSE $= {mean_rel*100:.1f}$%", obs)
@@ -193,7 +193,7 @@ def main():
     d_r2, d_rr = r2(Dp[te], Dt[te]), rel_rmse(Dp[te], Dt[te])
     _corner(ax, f"$R^2 = {d_r2:.4f}$\nrel. RMSE $= {d_rr*100:.2f}$%",
             _obstacles(ax, [(Dt[te], Dp[te])], lims))
-    ax.set_xlabel(r"oracle $\Delta$")
+    ax.set_xlabel(r"finite-element $D$")
     ax.set_ylabel(r"surrogate $\hat{D}$")
     ax.set_title("Ductile-damage head", pad=5, fontsize=FS_BASE, color=INK)
     cap["damage"] = (d_r2, d_rr)

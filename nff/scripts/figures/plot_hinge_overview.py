@@ -64,6 +64,8 @@ def main():
     ap.add_argument("--supplement", action="store_true",
                     help="draw the detail at 180-alpha (the raw cut-opening) to compare the pi-alpha")
     ap.add_argument("--out", default="data/outputs/hinge_overview.pdf")
+    ap.add_argument("--no-boxes", action="store_true",
+                    help="omit the grouping rule drawn round the plate. A slide has a speaker to group the panels, and a framed plate on a slide reads as a page")
     args = ap.parse_args()
 
     # RANDOM tessellation: per-cell aspect ratios r in (0,1) -> varied, non-90 hinge angles
@@ -109,10 +111,11 @@ def main():
     # ── one plate, not two drawings. A single faint ground behind both panels groups them;
     # the letters sit in figure space above each panel so nothing collides with the drawings.
     # A border round (b) was tried and rejected: it clipped L_sec and fouled the letter.
-    fig.patches.append(FancyBboxPatch((0.008, 0.02), 0.984, 0.96,
-                                      boxstyle="round,pad=0,rounding_size=0.012",
-                                      transform=fig.transFigure, facecolor="#F7F7F5",
-                                      edgecolor=GREY, lw=0.4, zorder=-10))
+    if not args.no_boxes:
+        fig.patches.append(FancyBboxPatch((0.008, 0.02), 0.984, 0.96,
+                                          boxstyle="round,pad=0,rounding_size=0.012",
+                                          transform=fig.transFigure, facecolor="#F7F7F5",
+                                          edgecolor=GREY, lw=0.4, zorder=-10))
     fig.add_artist(Line2D([0.505, 0.505], [0.09, 0.91], color=GREY, lw=0.4,
                           transform=fig.transFigure, zorder=-5))
     for _x, _lab in ((0.030, "a"), (0.530, "b")):

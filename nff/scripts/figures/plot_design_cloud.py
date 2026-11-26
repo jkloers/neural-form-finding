@@ -7,7 +7,15 @@ onto that plane, and the sheets are the designs at either end of them.
 
     JAX_PLATFORMS=cpu conda run -n kgnn_mac python \
         nff/scripts/figures/plot_design_cloud.py \
-        --run data/outputs/design_cloud/circle_7x7_n200_s1
+        --run data/outputs/design_cloud/circle_7x7_n200_s1 --projection all --paper-dir paper
+
+WARNING: the manuscript's plate is the `all` projection, NOT the `pca` default. Its caption says
+"the plane of the two leading principal components of the starting and converged patterns
+together", which is what `all` spans; `pca` spans the converged spread alone and puts the two
+families in different places under a different objective slice. Running the default and copying
+the result into paper/Images REPLACES the published figure with a different one, and nothing in
+the output says so -- both write a file called solution_set.pdf. Always pass --projection all
+when regenerating for the paper.
 """
 
 import argparse
@@ -89,6 +97,9 @@ def lda_plane(vectors, groups, shrink="auto"):
     residual = np.linalg.norm((X - mean) - coords @ basis, axis=1)
     return {"mean": mean, "basis": basis, "coords": coords, "kept": float("nan"),
             "residual": residual}
+
+
+FIG_W_DEFAULT = page_bp(1.0, 1.0)[0]   # the page column, the default canvas width
 
 
 def axis_scales_mm(basis, jacobian):
@@ -417,13 +428,20 @@ def panel_cloud(ax, plane_xy, traj_xy, labels, tiles_end, tiles_start, start_xy,
     return cs
 
 
-def panel_convergence(ax, steps, errors, labels, seeds, keep, scale=1.0, n_marks=7):
+def panel_convergence(ax, steps, errors, labels, seeds, keep, radius, scale=1.0, n_marks=7):
     """Outline error against step, for the two runs highlighted in panel a.
 
     The same pair, seen the other way round: panel a shows where those two designs went,
     this shows what it cost them. Their family medians sit behind as context, so a reader
     can tell whether the two exemplars are typical of their families.
+
+    The error is drawn as a fraction of the target radius, not in millimetres. This ensemble is
+    purely geometric -- a closed-form deployment with no material and no load -- so a millimetre
+    would put a physical size on a run that has none. The denominator is the one the validity
+    ladder already prints in its own 'Chamfer / radius' row.
     """
+    errors = [100.0 * np.asarray(e, dtype=float) / radius for e in errors]
+
     for c in np.unique(labels):
         colour = FAMILY_COLOURS[c % len(FAMILY_COLOURS)]
         members = np.flatnonzero(labels == c)
@@ -443,12 +461,12 @@ def panel_convergence(ax, steps, errors, labels, seeds, keep, scale=1.0, n_marks
                 label=f"family {chr(65 + labels[k])}")
     ax.set_xscale("symlog", linthresh=200)
     ax.set_yscale("log")
-    from matplotlib.ticker import FixedLocator, ScalarFormatter
-    ax.yaxis.set_major_locator(FixedLocator([70, 100, 150, 200, 300, 400]))
+    from matplotlib.ticker import FixedLocator, FuncFormatter
+    ax.yaxis.set_major_locator(FixedLocator([3, 5, 7, 10, 15, 20]))
     ax.yaxis.set_minor_locator(FixedLocator([]))
-    ax.yaxis.set_major_formatter(ScalarFormatter())
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}%"))
     ax.set_xlabel("optimisation step")
-    ax.set_ylabel("outline error (mm)")
+    ax.set_ylabel("outline error / target radius")
     ax.legend(loc="upper right", fontsize=FS_ANNOT / scale, handletextpad=0.4,
               borderpad=0.35, labelspacing=0.25)
     ax.tick_params(length=2.4, pad=1.5)
@@ -458,7 +476,7 @@ def panel_convergence(ax, steps, errors, labels, seeds, keep, scale=1.0, n_marks
 # Plate
 # ══════════════════════════════════════════════════════════════════════════════
 
-def build_figure(run_dir, out_path, projection="pca"):
+def build_figure(run_dir, out_path, projection="pca", scale=1.0, width_bp=None, aspect=1.48):
     import jax
     import jax.flatten_util
     import jax.numpy as jnp
@@ -562,12 +580,20 @@ def build_figure(run_dir, out_path, projection="pca"):
     tiles_end = [np.asarray(r["flat_tiles"]) - statics["centre"] for r in records]
     tiles_start = [np.asarray(r["flat_tiles_start"]) - statics["centre"] for r in records]
 
-    scale = 1.0
-    w_bp, h_bp = page_bp(1.0, aspect=1.48)
+    # A page column at aspect 1.48 is height-bound on a 16:9 body and reaches little more than
+    # half the measure. None of the three axes fixes a data aspect, so a flatter canvas simply
+    # gives them more width.
+    w_bp = float(width_bp) if width_bp else FIG_W_DEFAULT
+    h_bp = w_bp / float(aspect)
     apply_charter(**paper_rc(scale))
     fig = plt.figure(figsize=figsize_in(w_bp, h_bp))
 
-    ax_a = fig.add_axes([0.098, 0.205, 0.470, 0.745])
+    # The left gutter holds the PC2 label, and paper_rc(scale) enlarges type without moving any
+    # layout constant, so at scale 0.72 the label ran 13 bp off the canvas. Reserve the gutter in
+    # proportion to the type instead of pinning it: identity at scale 1.0, so the page figure is
+    # unchanged. The margin audit is what catches this if the coefficient is ever wrong.
+    _gut = 0.090 * (1.0 / float(scale) - 1.0)
+    ax_a = fig.add_axes([0.098 + _gut, 0.205, 0.470 - _gut, 0.745])
     ax_b = fig.add_axes([0.735, 0.645, 0.250, 0.320])
     ax_c = fig.add_axes([0.735, 0.205, 0.250, 0.320])
 
@@ -585,7 +611,10 @@ def build_figure(run_dir, out_path, projection="pca"):
     steps = [np.asarray(r["traj_steps"], dtype=float) for r in records]
     errors = [np.asarray(r["traj_error"], dtype=float) for r in records]
     seeds = np.array([int(r["seed"]) for r in records])
-    panel_convergence(ax_c, steps, errors, labels, seeds, pair, scale)
+    # The target radius, taken from the config actually deployed against rather than from the
+    # summary, so the denominator cannot drift from the circle the panel is scored on.
+    # `fixed_scale` is the target DIAMETER: target_unit has unit height.
+    panel_convergence(ax_c, steps, errors, labels, seeds, pair, 0.5 * cfg.fixed_scale, scale)
 
     for ax, letter, x in ((ax_a, "a", -0.135), (ax_b, "b", -0.250), (ax_c, "c", -0.250)):
         panel_letter(ax, letter, x=x, y=1.03, scale=scale)
@@ -626,6 +655,12 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--run", required=True, help="ensemble run folder")
+    ap.add_argument("--width-bp", type=float, default=None,
+                    help="canvas width. Default is the page column")
+    ap.add_argument("--aspect", type=float, default=1.48,
+                    help="canvas width / height")
+    ap.add_argument("--scale", type=float, default=1.0,
+                    help="printed width / authored width. Type is authored at target/scale so it PRINTS at the ladder size. A plate shown on a slide at 0.75 of its authored width takes its 8pt labels to 6pt unless this is set")
     ap.add_argument("--out", default=None)
     ap.add_argument("--paper-dir", default=None,
                     help="also write <dir>/Images/solution_set.{pdf,png,txt} for the "
@@ -639,7 +674,8 @@ def main():
     default = {"pca": "design_cloud.pdf", "all": "design_cloud_all.pdf",
                "lda": "design_cloud_lda.pdf"}[args.projection]
     out = args.out or os.path.join(args.run, default)
-    pdf, info = build_figure(args.run, out, projection=args.projection)
+    pdf, info = build_figure(args.run, out, projection=args.projection, scale=args.scale,
+                             width_bp=args.width_bp, aspect=args.aspect)
     print(f"  wrote {pdf}")
     for k, v in info.items():
         print(f"    {k}: {v}")

@@ -169,6 +169,8 @@ def free_path_jobs(data_npz):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--scale", type=float, default=1.0,
+                    help="printed width / authored width. Type is authored at target/scale so it PRINTS at the ladder size. A plate shown on a slide at 0.75 of its authored width takes its 8pt labels to 6pt unless this is set")
     ap.add_argument("--ckpt", default="data/surrogates/hinge_surrogate_pet_v3.pkl")
     ap.add_argument("--data", default="data/fea/hinge_dataset_pet_merged.npz")
     ap.add_argument("--quantity", choices=["energy", "moment"], default="energy")
@@ -233,7 +235,7 @@ def main():
                                             theta_max_rad=np.radians(args.theta_max))
     uz = build_uz_field(args.data, theta, w_ligs, args.thickness, kin_tol=args.uz_kin_tol)
     Y = W if args.quantity == "energy" else M
-    ylabel = (r"stored energy  $W$  [N$\cdot$mm]" if args.quantity == "energy"
+    ylabel = (r"stored energy  $\mathcal{W}$  [N$\cdot$mm]" if args.quantity == "energy"
               else r"restoring moment  $M=\mathrm{d}W/\mathrm{d}\theta$  [N$\cdot$mm]")
 
     def curve(w):                                              # nearest gridded trajectory for a width
@@ -242,7 +244,7 @@ def main():
     def dcurve(w):                                             # ductile damage along that trajectory
         return D[int(np.argmin(np.abs(w_ligs - w)))]
 
-    apply_charter(**paper_rc())
+    apply_charter(**paper_rc(args.scale))
     fig, ax = plt.subplots(figsize=figsize_in(FIG_W_BP, FIG_H_BP))
     # PET tops out around D=0.03 on this slice, so by default nothing is capped: the landscape is
     # drawn over its own full damage range and the colorbar's SMALLNESS is the message.
@@ -426,7 +428,7 @@ def main():
         if args.compare:                                   # thin lower path, for the matched-theta pair
             place_hinge(w_lo, args.hinge_prefix2, tx, f"th{tx:g}", below=True)
 
-    ax.set_xlabel(r"hinge rotation  $\theta$  [deg]")
+    ax.set_xlabel(r"hinge rotation  $\vartheta$  [deg]")
     ax.set_ylabel(ylabel)
     ax.set_xlim(0, xhi)
     ax.set_ylim(0, ymax)
@@ -467,17 +469,17 @@ def main():
              plt.Line2D([], [], color=SLATE, lw=dw(0.8)),
              plt.Line2D([], [], color=ROM_GREY, lw=dw(1.6), ls=(0, (5, 2)))]
     leg_l = ["load path (fixed $w_\\mathrm{lig}$)", r"out-of-plane buckle  $u_z/t$",
-             r"paraboloid ROM  $\frac{1}{2}k\theta^2$"]
+             r"quadratic model  $\frac{1}{2}k\vartheta^2$"]
     if fea_handle is not None:
         tol = args.fea_alpha_tol
         leg_h.append(plt.Line2D([], [], marker="o", markerfacecolor="#707070", markeredgecolor="none",
                                 markersize=dw(3.5), alpha=0.55, linestyle="none"))
-        fam = "" if args.route == "all" else ", prescribed route"
-        leg_l.append(rf"FEA data  ($\alpha \in [{90 - tol:g},\,{90 + tol:g}]^\circ${fam})")
+        fam = "" if args.route == "all" else ", prescribed path"
+        leg_l.append(rf"finite-element data  ($\alpha \in [{90 - tol:g},\,{90 + tol:g}]^\circ${fam})")
     if free_handle is not None:
         leg_h.append(plt.Line2D([], [], marker="o", markerfacecolor="none", markeredgecolor=RED,
                                 markersize=dw(4.5), linestyle="none"))
-        leg_l.append(rf"free-route FEA ({n_free}) -- not modelled here")
+        leg_l.append(rf"free-path finite-element ({n_free}) -- not modelled here")
     # Tightened on every axis. At printed size the legend is real 6.6 pt type rather than the 4.1 pt
     # it used to reduce to, so its default padding costs plot area the fan needs.
     leg = ax.legend(leg_h, leg_l, loc="upper left", fontsize=FS_ANNOT, handlelength=1.5,

@@ -557,7 +557,7 @@ def plot_hinge_dimensions(w_lig=10.0, w_c=3.0, alpha_deg=62.0, fillet=2.0, thick
         ax.annotate(label, p_to, color=ink, fontsize=fs, ha="left", va="center", zorder=7)
 
     # w_lig: the ligament gap (main-cut tip -> secondary cut), on the right
-    _dim_linear((wc/2+0.3*wl, -wl), (wc/2+0.3*wl, 0.0), off=0.9*wl, label=r"$w_{lig}$", side=1)
+    _dim_linear((wc/2+0.3*wl, -wl), (wc/2+0.3*wl, 0.0), off=0.9*wl, label=r"$w_{\mathrm{lig}}$", side=1)
     # w_c (kerf): the cut is too thin for an in-place dimension arrow -> leader callout pointing AT it
     _cut_pt = tip + 2.05*wl*um + (wc/2)*np.array([-um[1], um[0]])       # a point on the main-cut edge
     _lab_pt = _cut_pt + np.array([0.62*wl, -0.10*wl])                   # label just off the cut
@@ -565,8 +565,12 @@ def plot_hinge_dimensions(w_lig=10.0, w_c=3.0, alpha_deg=62.0, fillet=2.0, thick
                                  color=dim, lw=1.0, zorder=7, shrinkA=3, shrinkB=0))
     ax.annotate(r"$w_c$", _lab_pt + np.array([0.05*wl, 0.0]), color=ink, fontsize=fs,
                 ha="left", va="center", zorder=7)
-    # green-region width (the meshed RVE width) as a parameter, along the secondary cut
-    _dim_linear((-Rw, 0.0), (Rw, 0.0), off=1.3*wl, label=r"$w_{mesh}$", side=1)
+    # The window RADIUS, from the disc centre out to the rim. It was the full width, labelled
+    # w_mesh: a second symbol for an object the manuscript dimensions by its radius r_win
+    # everywhere else, and "mesh" reads it as a discretisation when it is a domain. The
+    # extension line _dim_linear drops at the first point marks the centre, so the half-span
+    # reads as a radius rather than an arbitrary chord.
+    _dim_linear((0.0, 0.0), (Rw, 0.0), off=1.3*wl, label=r"$r_{\mathrm{win}}$", side=1)
     # alpha = angle between the main cut and the secondary cut, drawn AT THE TOP of the main cut
     # (its tip) against a short reference line PARALLEL to the secondary cut. Placing it at the tip
     # makes it independent of the ligament w_lig (the uncut strip is a separate parameter).
@@ -587,8 +591,8 @@ def plot_hinge_dimensions(w_lig=10.0, w_c=3.0, alpha_deg=62.0, fillet=2.0, thick
     ax.annotate(r"$R=\rho$", tip + (fillet + 0.62*wl)*u_r, color=ink, fontsize=fs,
                 ha="right", va="center", zorder=9)
     # cut-length labels — plain text, next to their voids (they mark the cuts, not dimensions)
-    ax.annotate(r"$L_{main}$", (wc/2 + 0.35*wl, -2.5*wl), color=dim, fontsize=0.92*fs, ha="left", va="center")
-    ax.annotate(r"$L_{sec}$", (Rw + 0.15*wl, wc/2), color=dim, fontsize=0.92*fs, ha="left", va="center")
+    ax.annotate(r"$L_{\mathrm{main}}$", (wc/2 + 0.35*wl, -2.5*wl), color=dim, fontsize=0.92*fs, ha="left", va="center")
+    ax.annotate(r"$L_{\mathrm{sec}}$", (Rw + 0.15*wl, wc/2), color=dim, fontsize=0.92*fs, ha="left", va="center")
 
     # scale bar (all lengths are in millimetres)
     if scale_bar:

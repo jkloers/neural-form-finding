@@ -78,6 +78,28 @@ def page_bp(width_frac=1.0, aspect=1.0):
     return w, w / float(aspect)
 
 
+SLIDE_W_BP = 408.0    # 16:9 beamer text block at aspectratio=169: 144 mm, in PostScript points
+
+
+def slide_bp(width_frac=1.0, aspect=1.0):
+    """Canvas size in points for a graphic shown at ``width_frac`` of a 16:9 slide's text block.
+
+    The counterpart of ``page_bp`` for the other medium this project publishes into. A slide is
+    both wider and far shallower than a column, so a plate authored for the page is scaled down to
+    fit a slide's height and its type shrinks with it; authoring against this width instead keeps
+    an authored point size a projected point size, exactly as ``page_bp`` does for print.
+
+    Args:
+        width_frac: fraction of the slide text block the graphic is shown at.
+        aspect: width / height of the intended canvas.
+
+    Returns:
+        ``(width_bp, height_bp)``.
+    """
+    w = float(width_frac) * SLIDE_W_BP
+    return w, w / float(aspect)
+
+
 def figsize_in(w_bp, h_bp):
     """Points to the inches matplotlib wants for ``figsize``."""
     return (w_bp / 72.0, h_bp / 72.0)
@@ -129,11 +151,37 @@ def text_width_bp(text, fontsize, weight="normal", family="sans-serif"):
     return float(TextPath((0, 0), text, prop=prop).get_extents().width)
 
 
+PANEL_LETTERS = None    # None -> read the environment on every call
+
+
+def _panel_letters_on():
+    """Whether ``panel_letter`` draws anything.
+
+    A panel letter is print furniture: it is there so running prose can write "see (b)". A speaker
+    names the panel out loud instead, so a deck build exports ``NFF_SLIDE_FIGURES=1`` and every
+    generator that goes through ``panel_letter`` loses its letters without needing a flag of its
+    own. Assign a bool to ``PANEL_LETTERS`` to decide it in process, for a notebook or a test.
+    """
+    if PANEL_LETTERS is not None:
+        return bool(PANEL_LETTERS)
+    import os
+    return os.environ.get("NFF_SLIDE_FIGURES", "") != "1"
+
+
+def panel_letters_on():
+    """Whether ``panel_letter`` will draw. For a caller that reserves space for a letter."""
+    return _panel_letters_on()
+
+
 def panel_letter(target, letter, x=None, y=None, scale=1.0, color=INK, **kwargs):
     """Draw a panel letter in the house form: bare, bold, ``FS_PANEL``.
 
     Bare rather than parenthesised on the plate itself; the caption keeps ``\\textbf{(a)}`` because
     there the parentheses do syntactic work in running prose.
+
+    Drawn as an empty string when ``_panel_letters_on()`` is false, rather than skipped: the Text
+    artist still exists, so ``audit_type``, ``audit_margins`` and any caller that keeps the return
+    value behave exactly as they do with letters on.
 
     Args:
         target: an Axes (letter placed in axes coordinates) or a Figure (figure coordinates).
@@ -152,6 +200,8 @@ def panel_letter(target, letter, x=None, y=None, scale=1.0, color=INK, **kwargs)
         x = -0.20 if on_axes else 0.02
     if y is None:
         y = 1.06 if on_axes else 0.98
+    if not _panel_letters_on():
+        letter = ""
     return target.text(x, y, letter, transform=transform, color=color,
                        fontsize=printed_pt(FS_PANEL, scale), fontweight="bold",
                        ha=kwargs.pop("ha", "left"), va=kwargs.pop("va", "baseline"), **kwargs)
