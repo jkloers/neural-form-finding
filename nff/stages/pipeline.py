@@ -3,14 +3,16 @@ Forward pipeline for neural form-finding.
 
 The pipeline is composed of three sequential stages:
 
-    Stage 0 — Initial Mapping
-        Maps the flat Kirigami tessellation into a target shape.
+    Stage 0 — Mapping
+        Design parameters -> flat sheet. `closed_les` (the closed chart, valid by construction)
+        or `direct_vertices` (free vertices, the ablation baseline).
 
     Stage 1 — Geometric Validity
-        Optimizes face positions to satisfy geometric constraints (no intersections, closed hinges).
+        `none` for the closed chart; `alternating_projection` repairs a free-vertex sheet
+        (ablation only).
 
     Stage 2 — Static Physics Solver
-        Solves static equilibrium by minimizing total potential energy.
+        Deploys the sheet: minimises the total potential energy under the applied loads.
 
 The pipeline is fully differentiable end-to-end via JAX.
 """
@@ -21,8 +23,7 @@ from typing import Any, Optional
 from nff.stages.state import CentroidalState
 from nff.stages.geometry import reconstruct_vertices
 from nff.stages.mapping import (
-    build_mapping_fn, apply_mapping,
-    apply_direct_mapping, apply_direct_transform_mapping,
+    apply_direct_mapping,
     apply_closed_les_mapping,
 )
 from nff.stages.physics.energy import (
@@ -40,7 +41,6 @@ from nff.stages.physics.displacement import (
     compute_reaction_forces,
     ReactionReport,
 )
-from nff.config.targets import get_target_points
 from nff.config.experiment import TargetConfig, PhysicsConfig, ValidityConfig
 
 
@@ -126,40 +126,21 @@ def _execute_stage0_mapping(
         static_features: Optional[dict],
         domain_restriction: str):
     
-    target_params = {
-        'type': target_cfg.type,
-        'center': target_cfg.center,
-        'radius': target_cfg.radius
-    }
-
-    if map_type.startswith('gnn_'):
-        raise ValueError(
-            f"map_type {map_type!r}: the GNN mappings are archived in legacy/gnn/; "
-            "run them from tag pre-cleanup-2026-11.")
-    elif map_type == 'direct_vertices':
-        mapped_state = apply_direct_mapping(initial_state, map_params)
-        mapping_fn = None
-    elif map_type == 'direct_transform':
-        mapped_state = apply_direct_transform_mapping(initial_state, map_params)
-        mapping_fn = None
-    elif map_type == 'closed_les':
+    # use_shirley_chiu / strict_boundary_fit / domain_restriction only parameterised the analytic
+    # open-pattern maps (legacy/open_pipeline/); they are accepted and ignored so callers stay valid.
+    if map_type == 'closed_les':
         # Closed-state RDPQK builder: design params -> flat sheet via LES.
         # Stage 1 is bypassed (validity_method: none); Stage 2 deploys via physics.
         mapped_state = apply_closed_les_mapping(initial_state, map_params, static_features)
-        mapping_fn = None
+    elif map_type == 'direct_vertices':
+        # Free-vertex ablation baseline (nff/closed/chart_ablation.py); needs Stage-1 projection.
+        mapped_state = apply_direct_mapping(initial_state, map_params)
     else:
-        mapping_fn = build_mapping_fn(
-            initial_state, target_params,
-            map_type=map_type,
-            domain_restriction=domain_restriction,
-            use_shirley_chiu=use_shirley_chiu,
-            strict_boundary_fit=strict_boundary_fit
-        )
-        mapped_state = apply_mapping(
-            initial_state, mapping_fn,
-            map_params=map_params,
-        )
-    return mapped_state, mapping_fn
+        raise ValueError(
+            f"map_type {map_type!r} is not in the live pipeline (closed_les | direct_vertices). "
+            "GNN maps are archived in legacy/gnn/, analytic open maps in legacy/open_pipeline/; "
+            "run them from tag pre-cleanup-2026-11.")
+    return mapped_state, None
 
 
 def _execute_stage1_validity(mapped_state, target_cfg, validity_cfg):
@@ -169,17 +150,11 @@ def _execute_stage1_validity(mapped_state, target_cfg, validity_cfg):
         from nff.stages.projection import solve_alternating_projections
         valid_state = solve_alternating_projections(
             mapped_state, n_iters=validity_cfg.n_proj_iters)
-    else:  # 'lbfgs' -- the ONLY branch that reads the cloud, so it is built here and not
-           # above: the closed pipeline runs 'none' and was generating then discarding 200 points
-           # on every trace.
-        from nff.stages.validity import solve_geometric_validity
-        target_cloud = jnp.array(get_target_points({
-            'type': target_cfg.type,
-            'center': target_cfg.center,
-            'radius': target_cfg.radius,
-        }, n_points=200))
-        valid_state = solve_geometric_validity(
-            mapped_state, target_cloud, validity_cfg=validity_cfg)
+    else:
+        raise ValueError(
+            f"validity_method {validity_cfg.validity_method!r}: the live pipeline supports 'none' "
+            "and 'alternating_projection'. The L-BFGS validity solver is archived in "
+            "legacy/open_pipeline/validity_lbfgs.py.")
 
     return valid_state
 

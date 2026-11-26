@@ -19,19 +19,19 @@ marked **(needs the author)**.
    Ask the author once; delete only on that yes.
 4. Write `data/README.md` describing every surviving folder.
 
-## Session 3 — close Stage 1
+## Session 3 — close Stage 1 — DONE 2026-11-26
 
-Stage 1 (`stages/validity.py`, `projection.py`, `constraints.py`) and the open-pattern maps
-(`direct_*`, analytic maps in `stages/mapping.py`) remain in core only because
-`nff/closed/chart_ablation.py` uses them for the validity-ladder ablation (Fig. `validity_ladder`).
+Finding: the chart ablation does not just *read* Stage 1, it runs its free-vertex arms through the
+live `forward_pipeline` / `compute_end_to_end_loss` with `map_type: direct_vertices` and
+`validity_method: alternating_projection`, and four core diagnostics (Taylor test, gradient quality,
+regularity, landscape spectra) are built on it. Moving that path out would have broken the evidence
+for the closed chart, so the **ablation baseline stays live** and only the dead parts went:
 
-1. Freeze the ladder's inputs (`data/outputs/validity_ladder/ladder_7x7_r2295.pkl` is the published one).
-2. Move `chart_ablation.py`, the Stage-1 modules and the open maps to `legacy/open_pipeline/` (or
-   `nff_paper/` if the ladder must stay regenerable from the live tree).
-3. Remove the Stage-1 dispatch from `pipeline.py` and `constraints` from `loss.py`
-   (`hinge_connectivity` moves next to its only user). `pipeline.py` is a plan-required file:
-   write the diff plan first.
-4. `diagnostics/taylor_test.py` imports `chart_ablation`; give it the closed arms only.
+- archived to `legacy/open_pipeline/`: the L-BFGS validity solver, the open-pattern penalties
+  (`constraints.py` keeps only `hinge_connectivity`), the analytic open maps and `direct_transform`;
+- `pipeline.py` Stage 0 accepts `closed_les | direct_vertices`, Stage 1 `none | alternating_projection`;
+  anything else raises with a pointer to `legacy/`;
+- `tests/test_chart_ablation_path.py` now guards arm D (it had no test before).
 
 ## Session 4 — core hardening
 
