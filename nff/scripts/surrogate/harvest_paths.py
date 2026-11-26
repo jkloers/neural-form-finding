@@ -28,10 +28,10 @@ jax.config.update("jax_enable_x64", True)
 import numpy as np
 
 from nff.config.experiment import load_and_parse_config
-from nff.closed.path_dataset import harvest_paths, save_dataset
-from nff.closed.hinge_path_ensemble import (PathEnsemble, EnsembleSample, ensemble_statistics,
+from nff.hinge.path_dataset import harvest_paths, save_dataset
+from nff.hinge.path_ensemble import (PathEnsemble, EnsembleSample, ensemble_statistics,
                                             sampling_spec)
-from nff.closed.hinge_paths import HingePaths
+from nff.hinge.paths import HingePaths
 
 
 def _as_ensemble(ds) -> PathEnsemble:
@@ -88,7 +88,7 @@ def main():
     out_dir = args.out or os.path.join("data", "fea", "path_priors",
                                        f"{name}_n{args.n}_s{args.noise:g}")
 
-    from nff.closed.path_dataset import grip_pairs, calibrate_grip_loads, merge_datasets
+    from nff.hinge.path_dataset import grip_pairs, calibrate_grip_loads, merge_datasets
     grips = None if args.fixed_grip else 'all'
     pairs = grip_pairs(config) if grips == 'all' else [(int(config.topology['bc_clamped'][0]),
                                                         int(config.topology['loads'][0]['face']))]

@@ -126,16 +126,16 @@ def extract_spine(config_name):
     from nff.stages.geometry import reconstruct_vertices, deformed_vertices
     from nff.stages.physics.kinematics import face_to_node_kinematics_fn
     from nff.stages.physics.energy import ligament_strains_linearized
-    from nff.closed.setup import (build_closed_initial_state, init_closed_les_params,
-                                  build_surrogate_energy)
+    from nff.closed.setup import build_closed_initial_state, init_closed_les_params
+    from nff.hinge import build_hinge_model
     from nff.closed.deploy import _deployed_hinge_xy, _boundary_cloud, _fit_circle
     from nff.topology.closed_builder_jax import solve_cut_vertices_jax, boundary_flat_from_logits
-    from nff.topology.cut_pattern import build_cut_geometry
+    from nff.fabrication.cut_pattern import build_cut_geometry
 
     cfg = load_and_parse_config(f"data/configs/closed/{config_name}.yaml")
     state, tess = build_closed_initial_state(cfg)
     params, sf = init_closed_les_params(cfg)
-    bond_energy, *_ = build_surrogate_energy(cfg, sf, state, params)
+    bond_energy, *_ = build_hinge_model(cfg, sf, state, params)
 
     bp_path = _find_best_params(config_name)
     if bp_path is None:

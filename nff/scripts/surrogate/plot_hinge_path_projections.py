@@ -43,7 +43,7 @@ def build_path_projection_figure(ds, out_png: str, *, max_paths: int = 1500, see
     """Draw the harvested polylines in the three 2-D projections.
 
     Args:
-        ds: a ``PathDataset`` (``nff.closed.path_dataset``) or anything exposing ``polylines()``.
+        ds: a ``PathDataset`` (``nff.hinge.path_dataset``) or anything exposing ``polylines()``.
         out_png: output path.
         max_paths: subsample cap. Thousands of overlapping translucent curves stop adding
             information and start costing minutes of render time; a random subsample of the paths
@@ -130,7 +130,7 @@ def build_path_projection_figure(ds, out_png: str, *, max_paths: int = 1500, see
 
 def main():
     import argparse
-    from nff.closed.path_dataset import load_dataset
+    from nff.hinge.path_dataset import load_dataset
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--dataset", required=True, help="a harvest directory (holds paths.npz)")

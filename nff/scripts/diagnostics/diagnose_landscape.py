@@ -63,8 +63,8 @@ from nff.stages.pipeline import forward_pipeline
 from nff.stages.geometry import deformed_vertices
 from nff.stages.physics.kinematics import face_to_node_kinematics_fn
 from nff.training.loss import compute_end_to_end_loss
-from nff.closed.setup import (build_closed_initial_state, init_closed_les_params,
-                                      build_surrogate_energy)
+from nff.closed.setup import build_closed_initial_state, init_closed_les_params
+from nff.hinge import build_hinge_model
 from nff.closed.deploy import _boundary_cloud, _fit_circle, _global_verts, _deployed_hinge_xy
 
 
@@ -80,7 +80,7 @@ def _closed_target_and_energy(config, initial_state, static_features, init_param
     surrogate calibration and the deploy-fitted target are bit-reproducible.
     """
     load_specs = config.topology.get('loads', [])
-    bond_energy, hinge_probe_fn, geometry_fn, damage_fn, w_lig_logit0 = build_surrogate_energy(
+    bond_energy, hinge_probe_fn, geometry_fn, damage_fn, w_lig_logit0 = build_hinge_model(
         config, static_features, initial_state, init_params)
 
     circle_fit = config.training.geometric_loss_type == "circle_fit"

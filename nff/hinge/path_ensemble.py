@@ -1,6 +1,6 @@
 """What DISTRIBUTION of ``(a, s, theta)`` paths does a tessellation ride, over random starts?
 
-``nff.closed.hinge_paths`` measures the paths of ONE deployment. That is a single sample of a
+``nff.hinge.paths`` measures the paths of ONE deployment. That is a single sample of a
 random variable: the design (where the cuts sit, hence where the tiles start) is one particular
 point, and the twelve hinge paths it produces are correlated by that shared geometry. Training the
 surrogate on it would aim the oracle at one sheet rather than at the family.
@@ -37,7 +37,7 @@ import os
 
 import numpy as np
 
-from nff.closed.hinge_paths import (HingePaths, build_hinge_geometry_fn, extract_hinge_paths,
+from nff.hinge.paths import (HingePaths, build_hinge_geometry_fn, extract_hinge_paths,
                                     path_diagnostics, straightness, save_paths)
 from nff.models.hinge_surrogate import DOMAIN
 
@@ -115,8 +115,8 @@ def run_path_ensemble(config, *, n_samples: int = 24, noise: float = 0.5, seed0:
         aborting the sweep -- a random start can be geometrically valid yet numerically awkward,
         and losing the whole ensemble to one of them would be worse than reporting the attrition.
     """
-    from nff.closed.setup import (build_closed_initial_state, init_closed_les_params,
-                                  build_surrogate_energy)
+    from nff.closed.setup import build_closed_initial_state, init_closed_les_params
+    from nff.hinge import build_hinge_model
     from nff.stages.pipeline import forward_pipeline
 
     config = copy.deepcopy(config)
@@ -134,7 +134,7 @@ def run_path_ensemble(config, *, n_samples: int = 24, noise: float = 0.5, seed0:
     config.topology['init_noise'] = float(noise)
     config.topology['init_seed'] = int(seed0)
     params0, static_features = init_closed_les_params(config)
-    bond_energy, _, geometry_fn_sur, _, w_lig_logit0 = build_surrogate_energy(
+    bond_energy, _, geometry_fn_sur, _, w_lig_logit0 = build_hinge_model(
         config, static_features, initial_state, params0)
     geometry_from_design = build_hinge_geometry_fn(config, static_features, initial_state)
     length_scale = resolve_length_scale(config)
@@ -381,7 +381,7 @@ def save_ensemble(ens: PathEnsemble, out_dir: str, meta: Optional[dict] = None) 
 
 def load_ensemble(out_dir: str) -> PathEnsemble:
     """Inverse of ``save_ensemble`` (paths only; statistics are recomputed on demand)."""
-    from nff.closed.hinge_paths import load_paths
+    from nff.hinge.paths import load_paths
     with open(os.path.join(out_dir, "distribution.json")) as f:
         summary = json.load(f)
     ens = PathEnsemble(config_path=summary.get('config', ''),

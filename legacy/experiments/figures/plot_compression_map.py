@@ -39,7 +39,7 @@ from matplotlib.colors import TwoSlopeNorm                         # noqa: E402
 from nff.config.experiment import load_and_parse_config            # noqa: E402
 from nff.closed.setup import (build_closed_initial_state, init_closed_les_params,  # noqa: E402
                               build_surrogate_energy)
-from nff.closed.hinge_paths import (build_hinge_geometry, extract_hinge_paths,      # noqa: E402
+from nff.hinge.paths import (build_hinge_geometry, extract_hinge_paths,      # noqa: E402
                                     resolve_length_scale)
 from nff.closed.deploy import _deployed_hinge_xy                   # noqa: E402
 from nff.stages.pipeline import forward_pipeline                   # noqa: E402

@@ -1,4 +1,4 @@
-"""Path distribution over randomized starting tile positions (``nff.closed.hinge_path_ensemble``).
+"""Path distribution over randomized starting tile positions (``nff.hinge.path_ensemble``).
 
 Two things carry the weight here. First, the variance decomposition must actually separate
 between-design from within-design spread -- it is the statistic the whole exercise turns on ("does
@@ -13,8 +13,8 @@ import jax
 jax.config.update("jax_enable_x64", True)   # the pipeline runs in x64; keep this file self-sufficient
 import pytest
 
-from nff.closed.hinge_paths import HingePaths
-from nff.closed.hinge_path_ensemble import (EnsembleSample, PathEnsemble, ensemble_statistics,
+from nff.hinge.paths import HingePaths
+from nff.hinge.path_ensemble import (EnsembleSample, PathEnsemble, ensemble_statistics,
                                             sampling_spec, save_ensemble, load_ensemble,
                                             run_path_ensemble, resolve_length_scale)
 
@@ -183,7 +183,7 @@ def test_length_scale_prefers_the_declared_panel_pitch(rom_config):
 def test_geometry_fn_matches_the_one_shot_builder(rom_config):
     """The hoisted-static-work closure must equal the convenience wrapper it replaced."""
     from nff.closed.setup import build_closed_initial_state, init_closed_les_params
-    from nff.closed.hinge_paths import build_hinge_geometry, build_hinge_geometry_fn
+    from nff.hinge.paths import build_hinge_geometry, build_hinge_geometry_fn
     state, _ = build_closed_initial_state(rom_config)
     params, sf = init_closed_les_params(rom_config)
     a = build_hinge_geometry(rom_config, sf, state, params)

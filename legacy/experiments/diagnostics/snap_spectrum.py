@@ -67,7 +67,7 @@ def emit_states(args):
     The sweeps kept per-tile scalars but never node positions, so anything that draws the sheet has
     to re-solve. Saving the corners once means a figure never re-solves again.
     """
-    from nff.closed.load_paths import deployed_nodes
+    from nff.analysis.load_paths import deployed_nodes
 
     config, params_path = build_arm_config(args.arm, args.config)
     config.physics.solver_tol = float(args.solver_tol)

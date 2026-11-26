@@ -14,7 +14,7 @@ the parts of it that the live pipeline no longer uses:
 - `notebooks/` — exploration of those maps.
 
 Still live in `nff/`: the free-vertex map (`direct_vertices`) and Stage-1 alternating projections
-(`nff/stages/projection.py`), because the chart ablation (`nff/closed/chart_ablation.py`) that
+(`nff/stages/projection.py`), because the chart ablation (`nff/analysis/chart_ablation.py`) that
 measures what the closed chart buys runs its free-vertex arms through the live pipeline.
 
 Run any of this from tag `pre-cleanup-2026-11`.

@@ -177,7 +177,7 @@ class DeploymentPath:
     routes to the same endpoint do not carry the same energy or the same accumulated damage. A
     surrogate fitted as a state function ``W(a, s, theta)`` is therefore only legitimate if it is
     trained along paths resembling the ones the deployed sheet actually rides -- hence replay of
-    the harvested polylines (``nff.closed.path_dataset``) instead of proportional rays.
+    the harvested polylines (``nff.hinge.path_dataset``) instead of proportional rays.
 
     ``polyline`` is PHYSICAL: (a, s) in mm, theta in rad, one row per state, origin NOT included
     (the undeformed state is implicit at t = 0).

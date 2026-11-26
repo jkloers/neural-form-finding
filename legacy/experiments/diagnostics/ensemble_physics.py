@@ -33,13 +33,13 @@ import numpy as np                                                   # noqa: E40
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.dirname(os.path.abspath(__file__))))))
 
-from nff.closed.chart_ablation import (deploy_validity, flat_validity,  # noqa: E402
+from nff.analysis.chart_ablation import (deploy_validity, flat_validity,  # noqa: E402
                                        geom_coords, geom_shape, hinge_gap_operator,
                                        rms_displacement)
 from nff_paper.closed_support.design_ensemble import (build_symmetry, canonical_distance,  # noqa: E402
                                         circle_problem, distance_matrix, problem_statics,
                                         split_families)
-from nff.closed.hinge_path_ensemble import resolve_length_scale       # noqa: E402
+from nff.hinge.path_ensemble import resolve_length_scale       # noqa: E402
 from nff.closed.setup import _flat_coords_from_design                 # noqa: E402
 from nff.config.experiment import load_and_parse_config               # noqa: E402
 from legacy.experiments.diagnostics.ensemble_charts import _setup            # noqa: E402

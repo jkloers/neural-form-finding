@@ -19,7 +19,7 @@ CONFIG = "data/configs/closed/sheet_5x5_circle.yaml"      # the validity ladder'
 @pytest.mark.skipif(not os.path.exists(CONFIG), reason="closed config not present")
 def test_free_vertex_arm_projects_and_deploys():
     from nff.config.experiment import load_and_parse_config
-    from nff.closed.chart_ablation import (
+    from nff.analysis.chart_ablation import (
         arm_validity_cfg, deploy_validity, init_direct_from_closed, project_if_needed)
     from nff.closed.setup import build_closed_initial_state, init_closed_les_params
     from nff.stages.constraints import hinge_connectivity

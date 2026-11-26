@@ -12,7 +12,7 @@ Two concerns live here, both about turning the SIMULATED design into something y
    PNG and the A4 PDF.
 
 Kept out of ``run_closed`` (thin call site) and out of ``nff/topology`` (which must not depend on
-``nff/stages``). The pure Shapely geometry engine stays in ``nff.topology.cut_pattern``.
+``nff/stages``). The pure Shapely geometry engine stays in ``nff.fabrication.cut_pattern``.
 
 Print settings: 100% / "Actual size" (NOT "fit to page"); then measure the calibration bar.
 """
@@ -22,7 +22,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import FancyArrowPatch, Circle
 
-from nff.topology.cut_pattern import build_cut_geometry, measure_cut_geometry, cut_sheet
+from nff.fabrication.cut_pattern import build_cut_geometry, measure_cut_geometry, cut_sheet
 
 # A4 portrait [mm]; Princeton palette (kept consistent with the other figures)
 _A4_W, _A4_H = 210.0, 297.0
@@ -243,13 +243,13 @@ def reconstruct_run_geometry(config, params_override=None, w_c_mm=None, geom_sca
     # (``write_cut_patterns`` from a finished run) must stay importable without paying for it.
     import jax
     import jax.numpy as jnp
-    from nff.closed.setup import (build_closed_initial_state, init_closed_les_params,
-                                  build_surrogate_energy)
+    from nff.closed.setup import build_closed_initial_state, init_closed_les_params
+    from nff.hinge import build_hinge_model
     from nff.topology.closed_builder_jax import solve_cut_vertices_jax, boundary_flat_from_logits
 
     initial_state, _ = build_closed_initial_state(config)
     params, static_features = init_closed_les_params(config)
-    _, _, geometry_fn, _, w_lig_logit0 = build_surrogate_energy(
+    _, _, geometry_fn, _, w_lig_logit0 = build_hinge_model(
         config, static_features, initial_state, params)
     if w_lig_logit0 is not None:
         params = {**params, 'w_lig_logit': w_lig_logit0}
@@ -302,7 +302,7 @@ def write_cut_patterns(run_dir, *, initial_state, cut_coords, struct, config, hi
         return None
 
     try:                                                # laser DXF (1:1, mm) — additive, independent
-        from nff.topology.cut_dxf import export_cut_geometry_dxf
+        from nff.fabrication.cut_dxf import export_cut_geometry_dxf
         dxf = export_cut_geometry_dxf(geom, os.path.join(run_dir, "cut_pattern.dxf"))
         print(f"  [cut_pattern] DXF: {dxf['n_loops']} loops, "
               f"sheet {dxf['sheet_mm'][0]:.0f}x{dxf['sheet_mm'][1]:.0f}mm @ 1:1 -> cut_pattern.dxf")

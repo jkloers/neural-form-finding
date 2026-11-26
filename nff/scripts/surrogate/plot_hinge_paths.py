@@ -25,7 +25,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 
-from nff.closed.hinge_paths import load_paths
+from nff.hinge.paths import load_paths
 from nff.models.hinge_surrogate import DOMAIN
 
 ORANGE, INK, GREY, RED = "#F58025", "#1A1A1A", "#6C757D", "#D62828"

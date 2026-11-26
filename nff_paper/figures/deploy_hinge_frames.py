@@ -88,7 +88,7 @@ def _resample(polyline, n):
 def _load_polyline(stem, hinge):
     """``(polyline, w_lig, alpha_deg)`` for one ligament of a saved hinge-path archive.
 
-    Read as a plain npz rather than through ``nff.closed.hinge_paths.load_paths``: that module
+    Read as a plain npz rather than through ``nff.hinge.paths.load_paths``: that module
     imports JAX at module level and this script runs in the ``ccx`` environment, which has none.
     The archive layout is the one ``save_paths`` writes.
 

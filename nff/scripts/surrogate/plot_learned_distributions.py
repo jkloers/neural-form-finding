@@ -19,7 +19,8 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 
 from nff.config.experiment import load_and_parse_config
-from nff.closed.setup import build_closed_initial_state, init_closed_les_params, build_surrogate_energy
+from nff.closed.setup import build_closed_initial_state, init_closed_les_params
+from nff.hinge import build_hinge_model
 
 
 def main():
@@ -34,7 +35,7 @@ def main():
 
     state, _ = build_closed_initial_state(cfg)
     params, sf = init_closed_les_params(cfg)
-    _, _, geometry_fn, _, _ = build_surrogate_energy(cfg, sf, state, params)
+    _, _, geometry_fn, _, _ = build_hinge_model(cfg, sf, state, params)
 
     geo = geometry_fn(bp)                                  # trained HingeGeometry (per-hinge, bond order)
     w_lig = np.asarray(geo.w_lig)

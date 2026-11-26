@@ -26,8 +26,8 @@ CONFIG = "data/configs/closed/rect_a4_beam_surrogate_v2.yaml"
 
 def _build_step():
     from nff.config.experiment import load_and_parse_config
-    from nff.closed.setup import (
-        build_closed_initial_state, init_closed_les_params, build_surrogate_energy)
+    from nff.closed.setup import build_closed_initial_state, init_closed_les_params
+    from nff.hinge import build_hinge_model
     from nff.training.trainer import create_train_step, TrainState
 
     cfg = load_and_parse_config(CONFIG)
@@ -37,7 +37,7 @@ def _build_step():
 
     state0, _ = build_closed_initial_state(cfg)
     params, sf = init_closed_les_params(cfg)
-    bond, probe, geometry_fn, _damage_fn, w_lig_logit0 = build_surrogate_energy(
+    bond, probe, geometry_fn, _damage_fn, w_lig_logit0 = build_hinge_model(
         cfg, sf, state0, params)
     if w_lig_logit0 is not None:
         params = {**params, "w_lig_logit": w_lig_logit0}

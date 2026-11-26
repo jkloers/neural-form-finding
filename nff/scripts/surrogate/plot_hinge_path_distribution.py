@@ -43,7 +43,7 @@ def _rect(ax, xr, yr, **kw):
 
 def build_distribution_figure(ens, out_png: str, label: str = "") -> str:
     """Render the three-row distribution figure for a ``PathEnsemble``."""
-    from nff.closed.hinge_path_ensemble import ensemble_statistics, sampling_spec
+    from nff.hinge.path_ensemble import ensemble_statistics, sampling_spec
 
     st = ensemble_statistics(ens)
     spec = sampling_spec(ens)['sample_jobs_kwargs']
@@ -105,7 +105,7 @@ def build_distribution_figure(ens, out_png: str, label: str = "") -> str:
     ax.spines[['top', 'right']].set_visible(False)
 
     ax = axes[2][1]
-    from nff.closed.hinge_paths import straightness
+    from nff.hinge.paths import straightness
     strn = np.concatenate([[straightness(s.paths.eta[:, h, :]) for h in range(s.paths.n_hinges)]
                            for s in ens.samples])
     ax.hist(strn, bins=30, color=ORANGE, alpha=0.85)
@@ -156,8 +156,8 @@ def ensemble_from_deployment(paths_dir: str):
     more than enough for a density. The row-3 panels that compare designs (endpoint clusters, the
     ICC) are degenerate with one sample and should be read as blank rather than as a measurement.
     """
-    from nff.closed.hinge_paths import load_paths
-    from nff.closed.hinge_path_ensemble import PathEnsemble, EnsembleSample
+    from nff.hinge.paths import load_paths
+    from nff.hinge.path_ensemble import PathEnsemble, EnsembleSample
     paths = load_paths(os.path.join(paths_dir, "hinge_paths"))
     return PathEnsemble(samples=[EnsembleSample(seed=0, noise=0.0, paths=paths)],
                         config_path=paths_dir, length_scale=float(paths.length_scale),
@@ -175,7 +175,7 @@ def main():
 
     src_dir = args.ensemble or args.paths
     if args.ensemble:
-        from nff.closed.hinge_path_ensemble import load_ensemble
+        from nff.hinge.path_ensemble import load_ensemble
         ens = load_ensemble(args.ensemble)
     else:
         ens = ensemble_from_deployment(args.paths)

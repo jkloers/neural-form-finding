@@ -88,7 +88,7 @@ def measure_physics(run, config_path, pairs):
     """Equilibrium arm: one Stage-2 solve per design, so this is the slow half."""
     import jax.numpy as jnp
 
-    from nff.closed.chart_ablation import fixed_target
+    from nff.analysis.chart_ablation import fixed_target
     from nff.closed.setup import build_closed_initial_state, init_closed_les_params
     from nff.config.experiment import load_and_parse_config
     from nff.stages.geometry import deformed_vertices

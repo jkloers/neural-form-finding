@@ -36,7 +36,7 @@ from nff.closed.setup import (build_closed_initial_state, build_surrogate_energy
 from nff.closed import force_stats as FS
 from nff.closed import one_dof as OD
 from nff.closed import void_geometry as VG
-from nff.closed.load_paths import (deployed_nodes, extract_force_field, force_budget,
+from nff.analysis.load_paths import (deployed_nodes, extract_force_field, force_budget,
                                    interface_decomposition)
 from nff_paper.closed_support.shield_kinematics import _checkerboard_signs, build_deploy_plan
 from nff.stages.pipeline import forward_pipeline

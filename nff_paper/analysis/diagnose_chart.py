@@ -22,11 +22,11 @@ import numpy as np
 import jax.numpy as jnp
 
 from nff.config.experiment import load_and_parse_config
-from nff.closed.chart_ablation import (
+from nff.analysis.chart_ablation import (
     chart_basis, chart_dims, chart_jacobian, closed_start_geometry, flat_validity,
     geom_coords, geom_shape, hinge_gap_operator, rms_displacement,
 )
-from nff.closed.hinge_path_ensemble import resolve_length_scale
+from nff.hinge.path_ensemble import resolve_length_scale
 from nff.stages.mapping import apply_closed_les_mapping
 
 
@@ -187,7 +187,7 @@ def phase1(config, out_dir: str, eps_list=(3e-4, 1e-3, 3e-3)) -> dict:
     subspaces of the same Euclidean space in the same units.
     """
     from nff.scripts.diagnostics.diagnose_landscape import fd_hessian, spectrum_stats
-    from nff.closed.chart_ablation import build_arm_loss_fn, build_geom_loss_fn
+    from nff.analysis.chart_ablation import build_arm_loss_fn, build_geom_loss_fn
 
     length_scale = resolve_length_scale(config)
     loss_geom, y0, state, _ = build_geom_loss_fn(config)
@@ -278,7 +278,7 @@ def phase2(config, out_dir: str, n_dir: int = 24, n_steps: int = 22,
     scaled by their INDUCED geometric displacement rather than by parameter norm, so the arms
     overlay on one axis (the physical analogue of filter normalisation).
     """
-    from nff.closed.chart_ablation import (build_arm_loss_fn, build_geom_loss_fn, deploy_validity,
+    from nff.analysis.chart_ablation import (build_arm_loss_fn, build_geom_loss_fn, deploy_validity,
                                            init_direct_from_closed, lift_geom)
 
     length_scale = resolve_length_scale(config)

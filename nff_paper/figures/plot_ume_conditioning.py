@@ -34,8 +34,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 
 from nff.closed.deploy import _boundary_cloud                               # noqa: E402
-from nff.closed.hinge_paths import resolve_length_scale                     # noqa: E402
-from nff.closed.load_paths import solve_deployed_state                      # noqa: E402
+from nff.hinge.paths import resolve_length_scale                     # noqa: E402
+from nff.analysis.load_paths import solve_deployed_state                      # noqa: E402
 from nff_paper.closed_support.one_dof import fit_one_dof                                  # noqa: E402
 from nff_paper.closed_support.shield_kinematics import (_checkerboard_signs,              # noqa: E402
                                           build_deploy_plan, deploy_tiles)

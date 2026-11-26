@@ -30,7 +30,7 @@ jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 import numpy as np
 
-from nff.closed.chart_ablation import (arm_validity_cfg, build_geom_loss_fn, chart_basis,
+from nff.analysis.chart_ablation import (arm_validity_cfg, build_geom_loss_fn, chart_basis,
                                        chart_jacobian, closed_start_geometry, geom_shape)
 from nff.config.experiment import load_and_parse_config
 

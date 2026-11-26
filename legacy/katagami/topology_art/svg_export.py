@@ -5,7 +5,7 @@ the geometry arrives as exact control points and leaves as ``M``/``L``/``Q``/``C
 so the only quantisation anywhere is the decimal precision of the emitted numbers (6 decimals at mm
 scale is 1 nm).
 
-One user unit is one millimetre, matching the convention ``nff.topology.cut_dxf`` already uses. The
+One user unit is one millimetre, matching the convention ``nff.fabrication.cut_dxf`` already uses. The
 project works y-up and SVG is y-down, which is handled by a single wrapping transform rather than by
 negating coordinates -- an isometry maps a quadratic Bezier's control points to the image curve's
 control points, so nothing is resampled and the numbers in the file stay readable as world values.

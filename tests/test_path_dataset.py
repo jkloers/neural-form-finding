@@ -1,4 +1,4 @@
-"""Harvested path dataset (``nff.closed.path_dataset``).
+"""Harvested path dataset (``nff.hinge.path_dataset``).
 
 The dataset is the hand-off to the next surrogate campaign, so the properties worth pinning are the
 ones that would silently corrupt that hand-off: the FULL polyline must survive a save/load round
@@ -17,7 +17,7 @@ import pytest
 # the fast suite, `pytest -m "not slow"`.
 pytestmark = pytest.mark.slow
 
-from nff.closed.path_dataset import (PathExample, PathDataset, save_dataset, load_dataset,
+from nff.hinge.path_dataset import (PathExample, PathDataset, save_dataset, load_dataset,
                                      harvest_paths)
 
 
@@ -112,7 +112,7 @@ def test_harvest_records_the_grip_and_force_of_every_example(cfg):
 
 def test_grip_pairs_are_always_on_opposite_sides(cfg):
     """The clamped tile comes from one edge row and the pulled tile from the opposite one."""
-    from nff.closed.path_dataset import grip_pairs
+    from nff.hinge.path_dataset import grip_pairs
     M, N = int(cfg.topology['M']), int(cfg.topology['N'])
     pairs = grip_pairs(cfg)
     assert len(pairs) == M * M                       # 3 bottom x 3 top for the standard 3x3
@@ -125,7 +125,7 @@ def test_grip_pairs_are_always_on_opposite_sides(cfg):
 
 def test_harvest_varies_grip_and_force_together(cfg):
     """The ensemble spans design x force x grip; each axis must actually move."""
-    from nff.closed.path_dataset import grip_pairs
+    from nff.hinge.path_dataset import grip_pairs
     pairs = grip_pairs(cfg)
     ds = harvest_paths(cfg, n_examples=6, noise=0.5, seed0=0, n_load_steps=12,
                        grips=pairs[:3], load_range=(10.0, 200.0), verbose=False)
@@ -142,7 +142,7 @@ def test_contact_keeps_every_harvested_deployment_free_of_interpenetration(cfg):
     and it showed up as NEGATIVE relative hinge rotation. Both must now be absent -- and the check
     is on the GEOMETRY, because trusting the sign of theta is what let it through the first time.
     """
-    from nff.closed.path_dataset import _overlap_fraction
+    from nff.hinge.path_dataset import _overlap_fraction
     ds = harvest_paths(cfg, n_examples=6, noise=0.5, seed0=0, n_load_steps=30,
                        grips='all', load_range=(20.0, 400.0), verbose=False)
     # The contract is NOT "nothing is ever rejected" -- contact is a barrier, not a hard

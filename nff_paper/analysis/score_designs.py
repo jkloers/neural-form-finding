@@ -7,7 +7,7 @@ Two reasons, both load-bearing:
 ``best = (tot, state.params, ch)`` where ``state`` is the POST-update state and ``aux`` the metrics
 evaluated BEFORE that update, so the saved design sits one Adam step past its logged row.
 
-⚠ A design trained without a path penalty has no hinge metrics at all. ``build_surrogate_energy``
+⚠ A design trained without a path penalty has no hinge metrics at all. ``build_hinge_model``
 builds the ROM kinematic probe only when a probe-backed weight is already non-zero, so a control run
 with ``compression: 0`` logs no ``eta_a`` / ``eta_s``. ``extract_hinge_paths`` reads them off the
 corotated hinge frame of a solved state instead, which is independent of whatever objective found
@@ -38,9 +38,9 @@ jax.config.update("jax_enable_x64", True)   # ⚠ before any solve: float32 move
 import numpy as np                                                          # noqa: E402
 
 from nff.closed.deploy import _boundary_cloud                               # noqa: E402
-from nff.closed.hinge_paths import (build_hinge_geometry, extract_hinge_paths,               # noqa: E402
+from nff.hinge.paths import (build_hinge_geometry, extract_hinge_paths,               # noqa: E402
                                     resolve_length_scale)
-from nff.closed.load_paths import extract_force_field, solve_deployed_state  # noqa: E402
+from nff.analysis.load_paths import extract_force_field, solve_deployed_state  # noqa: E402
 from nff_paper.closed_support.one_dof import fit_configuration, fit_one_dof               # noqa: E402
 from nff.closed.setup import build_closed_initial_state, init_closed_les_params  # noqa: E402
 from nff_paper.closed_support.shield_kinematics import (_checkerboard_signs,              # noqa: E402

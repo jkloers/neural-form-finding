@@ -24,7 +24,7 @@ jax.config.update("jax_enable_x64", True)
 
 import numpy as np
 from nff.config.experiment import load_and_parse_config
-from nff.closed.hinge_path_ensemble import (run_path_ensemble, ensemble_statistics, sampling_spec,
+from nff.hinge.path_ensemble import (run_path_ensemble, ensemble_statistics, sampling_spec,
                                             save_ensemble)
 from nff.scripts.surrogate.plot_hinge_path_distribution import build_distribution_figure
 

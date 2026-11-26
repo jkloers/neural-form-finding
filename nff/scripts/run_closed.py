@@ -49,11 +49,11 @@ from nff.utils.visualization import (
 )
 from nff.utils.pipeline_viz import visualize_pipeline_results, plot_loss_history
 from nff.topology.closed_builder_jax import solve_cut_vertices_jax, boundary_flat_from_logits
-from nff.closed.cut_export import write_cut_patterns
-from nff.closed.setup import (build_closed_initial_state, init_closed_les_params,
-                              build_surrogate_energy)
+from nff.fabrication.cut_export import write_cut_patterns
+from nff.closed.setup import build_closed_initial_state, init_closed_les_params
+from nff.hinge import build_hinge_model
 from nff.closed.deploy import _fit_circle, _boundary_cloud, _global_verts, _deployed_hinge_xy
-from nff.closed.hinge_path_ensemble import resolve_length_scale   # mm per pipeline unit, for reporting
+from nff.hinge.path_ensemble import resolve_length_scale   # mm per pipeline unit, for reporting
 
 
 def _overlap(tess):
@@ -68,7 +68,7 @@ def _overlap(tess):
 def _cut_axis_or_none(config, state, static_features, map_params):
     """The per-hinge cut axis for this design, or None if it cannot be built."""
     try:
-        from nff.closed.setup import hinge_cut_axis
+        from nff.hinge.frame import hinge_cut_axis
         return hinge_cut_axis(config, state, static_features, map_params)
     except Exception:
         return None
@@ -84,8 +84,8 @@ def _emit_load_path(result, config, deployed_tess, run_dir, bond_energy, hinge_g
     """
     import traceback
 
-    from nff.closed.load_path_viz import plot_load_path
-    from nff.closed.load_paths import extract_force_field, save_field
+    from nff.analysis.load_path_viz import plot_load_path
+    from nff.analysis.load_paths import extract_force_field, save_field
 
     try:
         field = extract_force_field(result, config.physics, bond_energy_fn=bond_energy,
@@ -144,8 +144,8 @@ def _emit_compression_shift(config, static_features, initial_state, params_untra
     """
     import traceback
 
-    from nff.closed.compression_shift_viz import build_figure
-    from nff.closed.hinge_paths import build_hinge_geometry, extract_hinge_paths
+    from nff.analysis.compression_shift_viz import build_figure
+    from nff.hinge.paths import build_hinge_geometry, extract_hinge_paths
 
     if res_untrained is None:
         print("  compression shift SKIPPED: no untrained deploy was computed (circle_fit target).")
@@ -157,7 +157,7 @@ def _emit_compression_shift(config, static_features, initial_state, params_untra
             geom = build_hinge_geometry(config, static_features, initial_state, design)
             pair.append(extract_hinge_paths(res['solution'], res['valid_state'], geom, ls,
                                             reference_bond_vectors=res.get('reference_bond_vectors')))
-        from nff.closed.compression_shift_viz import GRIDSIZE, GRIDSIZE_ENDPOINTS
+        from nff.analysis.compression_shift_viz import GRIDSIZE, GRIDSIZE_ENDPOINTS
         use_ep = int(pair[0].n_hinges) >= _ENDPOINT_MIN_HINGES
         out, stats = build_figure([tuple(pair)], os.path.join(run_dir, "compression_shift.png"),
                                   use_endpoints=use_ep,
@@ -274,7 +274,7 @@ def main():
 
     initial_state, tessellation = build_closed_initial_state(config)
     params, static_features = init_closed_les_params(config)
-    bond_energy, hinge_probe_fn, geometry_fn, damage_fn, w_lig_logit0 = build_surrogate_energy(
+    bond_energy, hinge_probe_fn, geometry_fn, damage_fn, w_lig_logit0 = build_hinge_model(
         config, static_features, initial_state, params)
     if w_lig_logit0 is not None:                        # learnable per-hinge ligament width (option A)
         params = {**params, 'w_lig_logit': w_lig_logit0}

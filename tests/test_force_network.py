@@ -9,8 +9,8 @@ import networkx as nx
 import numpy as np
 import pytest
 
-from nff.closed import force_network as fnet
-from nff.closed.load_paths import ForceField, transmitted_moment
+from nff.analysis import force_network as fnet
+from nff.analysis.load_paths import ForceField, transmitted_moment
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────────────────────

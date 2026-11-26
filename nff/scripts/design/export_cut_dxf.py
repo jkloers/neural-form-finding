@@ -31,9 +31,9 @@ import jax
 jax.config.update("jax_enable_x64", True)
 
 from nff.config.experiment import load_and_parse_config
-from nff.closed.cut_export import reconstruct_run_geometry
-from nff.topology.cut_dxf import export_cut_geometry_dxf, render_dxf_png
-from nff.topology.cut_pattern import measure_cut_geometry
+from nff.fabrication.cut_export import reconstruct_run_geometry
+from nff.fabrication.cut_dxf import export_cut_geometry_dxf, render_dxf_png
+from nff.fabrication.cut_pattern import measure_cut_geometry
 
 
 def main():

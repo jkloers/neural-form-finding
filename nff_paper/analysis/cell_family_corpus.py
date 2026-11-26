@@ -41,11 +41,11 @@ jax.config.update("jax_enable_x64", True)
 
 import numpy as np                                                       # noqa: E402
 
-from nff.closed import force_stats as FS                                 # noqa: E402
+from nff.analysis import force_stats as FS                                 # noqa: E402
 from nff_paper.closed_support import one_dof as OD                                     # noqa: E402
 from nff_paper.closed_support.cell_families import (cell_descriptors, cell_face_values,  # noqa: E402
                                       cell_lattice, family_map, fit_families)
-from nff.closed.load_paths import (deployed_nodes, extract_force_field,  # noqa: E402
+from nff.analysis.load_paths import (deployed_nodes, extract_force_field,  # noqa: E402
                                    force_budget, interface_decomposition,
                                    solve_deployed_state)
 from nff_paper.closed_support.shield_kinematics import _checkerboard_signs             # noqa: E402

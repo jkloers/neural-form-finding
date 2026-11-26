@@ -28,12 +28,12 @@ jax.config.update("jax_enable_x64", True)
 import numpy as np
 
 from nff.config.experiment import load_and_parse_config
-from nff.closed.chart_ablation import (
+from nff.analysis.chart_ablation import (
     arm_extra_loss, arm_training_cfg, arm_validity_cfg, closed_start_geometry, deploy_validity,
     deployed_boundary, fixed_target, flat_validity, geom_coords, geom_shape, hinge_gap_operator,
     init_direct_from_closed, project_if_needed, r_interval, rms_displacement,
 )
-from nff.closed.hinge_path_ensemble import resolve_length_scale
+from nff.hinge.path_ensemble import resolve_length_scale
 from nff.stages.mapping import apply_closed_les_mapping, apply_direct_mapping
 from nff.training.trainer import TrainState, create_train_step
 

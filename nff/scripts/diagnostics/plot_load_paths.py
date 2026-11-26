@@ -2,7 +2,7 @@
 
 Tension is drawn as routes because it is path-like, compression as a shaded tile field because its
 links form no chains, and shear as SLIP PLANES normal to the hinge axis -- three channels, three
-representations. The figure itself lives in :mod:`nff.closed.load_path_viz` so ``run_closed``
+representations. The figure itself lives in :mod:`nff.analysis.load_path_viz` so ``run_closed``
 can emit it alongside the run's other visuals -- this is only the standalone entry point.
 
 ⚠ Hold the sheet against rotation before reading a load path from it. A single pin leaves a
@@ -29,8 +29,8 @@ from nff.utils.figstyle import use_agg                                # noqa: E4
 use_agg()
 
 from nff.config.experiment import load_and_parse_config               # noqa: E402
-from nff.closed.load_path_viz import plot_load_path                   # noqa: E402
-from nff.closed.load_paths import (extract_force_field, format_checks, load_field,  # noqa: E402
+from nff.analysis.load_path_viz import plot_load_path                   # noqa: E402
+from nff.analysis.load_paths import (extract_force_field, format_checks, load_field,  # noqa: E402
                                    orientation_confound, save_field, solve_deployed_state)
 
 

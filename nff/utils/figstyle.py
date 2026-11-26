@@ -1,6 +1,6 @@
 """Shared figure styling: one charter, one palette, one backend switch.
 
-Every plotting script in ``nff/scripts/figures/`` draws from here. Before this module the rcParams
+Every plotting script (``nff_paper/figures/`` and the core diagnostics) draws from here. Before this module the rcParams
 block was copy-pasted verbatim into 16 scripts, ``apply_charter`` was defined four times, and two
 palettes disagreed on what "ink" means (``#1A1A1A`` vs ``#212529``). The charter value wins.
 

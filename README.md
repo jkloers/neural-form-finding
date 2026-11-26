@@ -34,11 +34,27 @@ design parameters  {z: per-cut aspect ratios r = sigmoid(z),  boundary sliders}
           + optional hinge terms: compression, damage, path maximum, regularisation
 ```
 
-The hinge energy is a config switch (`hinge_model.type`):
+### The hinge energy is swappable: `nff/hinge/`
 
-| `rom` | the classical linear-spring hinge (`k_stretch`, `k_shear`, `k_rot`), constants condensed from FEA (`nff/stages/physics/energy.py`) |
-|---|---|
-| `surrogate` | a learned condensed hinge energy `W(a, s, θ; w_lig, α)` trained on CalculiX simulations of a single cut hinge, with damage and an out-of-domain barrier (`nff/models/hinge_surrogate.py`) |
+One config key picks the hinge physics; nothing else in the pipeline changes.
+
+| `hinge_model.type` | Hinge energy | Code |
+|---|---|---|
+| `rom` | the classical linear-spring hinge (`k_stretch`, `k_shear`, `k_rot`), constants condensed from FEA | `nff/hinge/rom.py` → `ligament_energy_linearized` in `nff/stages/physics/energy.py` |
+| `surrogate` | a learned condensed energy `W(a, s, θ; w_lig, α)` trained on CalculiX simulations of one cut hinge, with damage and an out-of-domain barrier | `nff/hinge/surrogate.py` → network in `nff/models/hinge_surrogate.py` |
+
+```python
+from nff.hinge import build_hinge_model
+hinge = build_hinge_model(config, static_features, state, params)   # -> HingeModel
+# hinge.bond_energy_fn is None for the ROM: Stage 2 then integrates the springs.
+optimizer, step = create_train_step(state, ..., bond_energy_fn=hinge.bond_energy_fn,
+                                    hinge_probe_fn=hinge.probe_fn, hinge_geometry_fn=hinge.geometry_fn)
+```
+
+The seam is a single per-hinge energy function handed to `build_potential_energy`
+(`nff/stages/physics/energy.py`). Both models read hinge kinematics in the same per-hinge cut frame
+(`nff/hinge/frame.py`), so the design loss's hinge terms (compression, shear path, damage) work
+unchanged on either.
 
 The surrogate is built by a separate data loop:
 
@@ -97,12 +113,17 @@ python nff/scripts/design/export_cut_dxf.py ...     # laser-cut DXF
 
 ```
 nff/                      the research pipeline
-├── topology/             closed RDPQK builder (numpy + differentiable JAX), cut pattern, hinge descriptor
+├── topology/             closed RDPQK builder (numpy + differentiable JAX), hinge descriptor
 ├── config/               ExperimentConfig, targets, conditions
-├── stages/               pipeline, mapping (Stage 0), physics/ (Stage 2), state; validity/projection (Stage 1, ablations only)
-├── models/               hinge_surrogate.py
+├── stages/               pipeline, mapping (Stage 0), physics/ (Stage 2: energy, statics), state;
+│                         projection (Stage 1, only for the chart ablation's free-vertex arm)
+├── closed/               the closed-sheet problem: setup (flat sheet + design params), deploy
+├── hinge/                ★ the swappable hinge energy: model.py (switch), rom.py, surrogate.py, frame.py;
+│                         paths*: the hinge paths a deployment takes (they aim the surrogate's data)
+├── models/               hinge_surrogate.py (the network)
 ├── training/             loss registry, trainer
-├── closed/               closed-pipeline glue: setup, deploy, cut export/layout, hinge paths, load paths, force stats
+├── fabrication/          cut pattern geometry, DXF, cut export and hand-cutting layouts
+├── analysis/             load paths, force statistics, chart ablation, gradient checks
 ├── rve/                  CalculiX hinge oracle: geometry, solver, damage, materials (steel, PET, paper), dataset, path prior
 ├── calibration/          tensile-coupon analysis (Bluehill, compliance, video extensometer) behind the PET material law
 ├── utils/                linalg, figure style, run visualisation, splits, routes

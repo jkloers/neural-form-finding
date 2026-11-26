@@ -5,8 +5,8 @@ scale is exact, the type is sized to be read at arm's length on a bench, and the
 black on white with red reserved for the two things that ruin a sheet -- the scaling caveat and the
 grip marks.
 
-Consumes the schedule from ``nff.closed.cut_layout`` and the geometry from
-``nff.topology.cut_pattern``; writes PDFs.
+Consumes the schedule from ``nff.fabrication.cut_layout`` and the geometry from
+``nff.fabrication.cut_pattern``; writes PDFs.
 """
 
 import numpy as np

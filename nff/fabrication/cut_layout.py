@@ -1,6 +1,6 @@
 """Workshop layout schedule for a flat cut pattern: datum, marking points, cut and hole tables.
 
-Turns the Shapely cut geometry (``nff.topology.cut_pattern.build_cut_geometry``) into the numbers a
+Turns the Shapely cut geometry (``nff.fabrication.cut_pattern.build_cut_geometry``) into the numbers a
 person needs to lay the pattern out on a real sheet with a tape measure, a straightedge and a knife.
 
 What gets tabulated is the LATTICE VERTICES — the crossings where cuts meet — not the retracted cut
@@ -13,7 +13,7 @@ Each point carries both a rectangular ordinate ``(x, y)`` from the datum corner 
 two datum corners. The distances let a large sheet be laid out by striking two tape arcs, which needs
 no square -- squaring off a 2.4 m edge is where hand layout usually goes wrong.
 
-Pure geometry: numpy + shapely only. Rendering lives in ``nff.closed.cut_layout_render``.
+Pure geometry: numpy + shapely only. Rendering lives in ``nff.fabrication.cut_layout_render``.
 """
 
 import csv

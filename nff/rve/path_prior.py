@@ -1,6 +1,6 @@
 """Aim the oracle campaign at the region the deployed sheet actually visits.
 
-The harvest (``nff.closed.path_dataset``) records every hinge's displacement path under the
+The harvest (``nff.hinge.path_dataset``) records every hinge's displacement path under the
 linear-spring ROM. Two things about it are trustworthy and one is not:
 
 * trustworthy -- the **envelope**: how far the hinge translates and rotates, and in which
