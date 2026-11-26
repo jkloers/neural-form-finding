@@ -1,0 +1,94 @@
+# Test Experiment Configuration for Hierarchical Settings
+# Unit system: generic
+
+tessellation:
+  width: 2
+  height: 2
+  pattern: "unit_RDQK_D"
+
+target:
+  type: "circle"
+  center: [0.0, 0.0]
+  radius: 1
+
+#(Stage 0)
+mapping:
+  map_type: "asymmetric_roots" #conformal_polynomial" # ou "elliptical_grip", "homothetic", etc.
+  # Paramètres généraux gérés par le Wrapper (Étape 2)
+  scale_factor: 1.0
+  domain_restriction: 1
+  # Ce dictionnaire est passé tel quel à map_params
+  map_params:
+    tx: 0.0
+    ty: 0.0
+    # theta est bloqué à 0 en interne comme demandé
+    s_val: 1.0
+    # Ordre 5 (capacité max = 5 racines)
+    roots: [10.0, 0.0, 0.0, 10.0, -10.0, 0.0, 0.0, -10.0, 10.0, 10.0] # [Re, Im] x 5
+    weights: [1.0, 0.8, 0.5, 0.2, 0.0] # Poids d'activation continus [0, 1]
+
+optimization_weights:
+  connectivity: 100.0
+  non_intersection: 0
+  target: 0
+  arm_symmetry: 0
+  void_length: 1.0
+  void_collinear: 1.0
+  boundary_rigidity: 0
+
+physics:
+  use_contact: true
+  linearized_strains: true
+  k_contact: 5000.0
+  min_angle: 1.0     # degrees
+  cutoff_angle: 10.0  # degrees
+  incremental: true
+  num_load_steps: 10
+  solver_maxiter: 1000
+  solver_tol: 1e-5
+
+material:
+  k_stretch: 18750.0
+  k_shear: 6250.0
+  k_rot: 0.01
+  density: 1.2
+
+boundary_conditions:
+  clamped_faces: [0]
+
+loads:
+  - face: [14]
+    dof: 1
+    value: -100.0
+  - face: [12]
+    dof: 2
+    value: 75.0
+
+training:
+  num_epochs: 500
+  learning_rate: 0.1
+  optimizer: "adam"
+  save_plots: true
+  geometric_loss_type: "boundary_vertices"  # centroids or boundary_vertices
+
+# Nouveaux coefficients de pondération ajustables :
+loss_weights:
+  geometric: 100.0       # Poids de la Chamfer distance
+  physics: 0.1         # Poids de l'énergie physique interne (stress, contact)
+  regularization: 0.001 # Poids de la régularisation L2 des paramètres
+
+visualization:
+  stage0: true
+  stage1: true
+  stage2: true
+  energy_plot: true
+  animation: true
+  show_plots: true
+  save_outputs: true
+  
+  # Nouveaux paramètres de détails (valeurs par défaut)
+  show_hinges: true               # Dessiner les charnières et leurs points
+  show_hinge_indices: false        # Afficher 'h0', 'h1', etc.
+  show_face_indices: true         # Afficher '0', '1' au centre des faces
+  show_external_forces: true     # (Pour plus tard)
+  show_kinematic_blocks: true

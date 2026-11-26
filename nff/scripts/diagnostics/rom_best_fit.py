@@ -11,6 +11,7 @@ eq:total-energy requires.
     PYTHONPATH=$(pwd) JAX_PLATFORMS=cpu conda run -n kgnn_mac \
         python nff/scripts/diagnostics/rom_best_fit.py
 """
+import numpy as np
 from scipy.optimize import nnls
 from nff.scripts.figures._surrogate_eval import (load_scored, rom_energy, rel_rmse, ROM_BAND,
                                                  ROM_K_A, ROM_K_S, ROM_K_THETA)

@@ -1,0 +1,76 @@
+# Architecture: 2×2 RDQK_D grid — direct vertex parameterization, full pipeline
+#
+# Stage 0: learn centroid positions + CNVs directly (no GNN, no analytical map).
+# Stage 1: L-BFGS geometric validity (light weights — connectivity + non-intersection).
+# Stage 2: incremental static physics solver with contact.
+#
+# This is the baseline for the compressive suite: gradient flows through
+# Stage 0 → Stage 1 → Stage 2 without any parametric map bottleneck.
+
+tessellation:
+  width: 2
+  height: 2
+  pattern: "unit_RDQK_D"
+  total_area: 3.0
+
+target:
+  type: "circle"
+  center: [0.0, 0.0]
+  radius: 1.0
+
+mapping:
+  map_type: direct_vertices
+  domain_restriction: 1.0
+  use_shirley_chiu: false
+  strict_boundary_fit: false
+  learn_global_scale: false
+
+# Stage 1 is disabled: the direct_vertices parameters already define the
+# geometry, so the L-BFGS validity solver would only obstruct gradient flow
+# (it converges to the same fixed point regardless of the input).
+# Geometric consistency is enforced via the chamfer + hinge_gap loss terms.
+optimization_weights:
+  validity_method: none
+  connectivity: 0.0
+  non_intersection: 0.0
+  target: 0.0
+  arm_symmetry: 0.0
+  void_length: 0.0
+  void_collinear: 0.0
+  boundary_rigidity: 0.0
+  face_area: 0.0
+  anchoring: 0.0
+
+training:
+  num_epochs: 500
+  learning_rate: 0.005
+  optimizer: "adam"
+  lr_schedule: "cosine"
+  geometric_loss_type: "boundary_vertices"
+  grad_clip: 1.0
+
+loss_weights:
+  chamfer: 5000.0
+  coverage: 5000.0
+  material_area: 0.0
+  stretching: 100.0
+  shearing: 100.0
+  bending: 0.0
+  contact: 0.0
+  regularization: 0.0
+  hinge_gap: 0.0
+  openness: 20.0
+  deformation: 15.0
+
+visualization:
+  stage0: true
+  stage1: true
+  stage2: true
+  energy_plot: true
+  animation: true
+  show_plots: false
+  save_outputs: true
+  show_hinges: true
+  show_hinge_indices: false
+  show_external_forces: true
+  show_kinematic_blocks: true

@@ -32,3 +32,8 @@ include = ["nff*"]
 
 [project.scripts]
 nff-train = "nff.scripts.train:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# `test_*.py` only: diagnostics such as taylor_test.py are scripts, not test modules.
+python_files = ["test_*.py"]

@@ -286,7 +286,7 @@ def apply_gnn_mapping(
     Returns:
         CentroidalState with updated face_centroids and centroid_node_vectors.
     """
-    from nff.models.graph_builder import state_to_graph
+    from legacy.gnn.models.graph_builder import state_to_graph
 
     graph = state_to_graph(state, static_features)
     h = graph.nodes['h']
@@ -296,13 +296,13 @@ def apply_gnn_mapping(
     n_faces      = static_features['n_nodes']
 
     if map_type == 'gnn_egnn':
-        from nff.models.egnn import apply_egnn
+        from legacy.gnn.models.egnn import apply_egnn
         num_layers = static_features.get('num_layers') or sum(
             1 for k in gnn_params if k.endswith('_phi_x_W'))
         new_centroids, _, local_transform = apply_egnn(
             gnn_params, h, x, senders_np, receivers_np, n_faces, num_layers)
     elif map_type == 'gnn_mpnn':
-        from nff.models.mpnn import apply_mpnn
+        from legacy.gnn.models.mpnn import apply_mpnn
         num_layers  = static_features.get('num_layers') or sum(
             1 for k in gnn_params if k.endswith('_phi_e_W1'))
         inner_depth = static_features.get('inner_depth', 2)

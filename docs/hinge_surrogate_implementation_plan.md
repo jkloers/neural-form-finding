@@ -29,7 +29,7 @@ afterthought). Every figure:
 - is **rendered and eyeballed, then iterated** (open the PNG, fix collisions / scale / geometry —
   do not ship the first render),
 - lives in `nff/scripts/figures/plot_*.py`, modular (separable fit / bin / plot helpers).
-- Reference implementation: `nff/scripts/figures/plot_hinge_energy_regimes.py`.
+- Reference implementation: `legacy/experiments/figures/plot_hinge_energy_regimes.py`.
 
 ## Environment split (no import coupling)
 

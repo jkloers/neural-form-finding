@@ -1,0 +1,114 @@
+# Hinge optimization — 2-face, 1-hinge kirigami unit.
+#
+# Optimizes 9 corner-hinge quadratic Bézier parameters:
+#   gap            — rigid face separation along ê_arm [m]
+#   s0_top/s0_bot  — upper/lower endpoint reach on face 0 [m]
+#   s1_top/s1_bot  — upper/lower endpoint reach on face 1 [m]
+#   bcu            — single interior CP for the UPPER (quadratic) arc [m] (absolute XY)
+#   bcl            — single interior CP for the LOWER (quadratic) arc [m] (absolute XY)
+#   Upper and lower arcs have DISTINCT endpoints sliding on the face edges.
+#
+# Objective: a lean hinge that survives MANY closing cycles (low-cycle fatigue),
+# keeping the face gap small.
+#   loss = w_fatigue·ε_plastic/ε_yield + w_mat·area/area₀ + w_gap·(gap/gap₀)²
+# Only PLASTIC strain (ε_max − ε_yield) fatigues; minimising it maximises cycles-
+# to-failure N_f (Coffin-Manson) and pushes the design toward elastic (~unlimited
+# cycles). Tests whether single-material PLA is "manageable for ~100 folds".
+#
+# Run via (Tesseract server must be running in Docker):
+#   docker run -d -p 8000:8000 -e TESSERACT_RUNTIME_SERVE_HOST=0.0.0.0 nff-sofa-oracle:latest serve
+#   conda run -n kgnn_mac python sofa/hinge_optimizer.py \
+#       --config legacy/sofa/configs/hinge_opt_2face.yaml
+
+tessellation:
+  pattern: unit_2face_D
+  width: 1
+  height: 1
+  total_area: 2.0      # 2 diamond faces; each has area = face_size^2 (same as unit_2face)
+
+boundary_conditions:
+  clamped_face: 0      # Face 0 fully clamped (DOFs 0,1,2)
+  loaded_face: 1       # Face 1 driven by SOFA rotation BC
+
+sofa:
+  # Load case — rotation only (shear + tension skipped for speed).
+  #   Start from DEPLOYED state (unit_2face_D natural tessellation, 90° void).
+  #   Apply CCW rotation (+) to CLOSE the upper void toward 0°.
+  #   Objective: minimize E_rot  →  compliant in the closing direction.
+  #   NOTE: 10° keeps bending strain ~8.7% — polar FEM converges cleanly.
+  #   At 60° the hinge strain is ~52% → SOFA diverges for gap=3mm.
+  rotation_angle_deg: +90.0    # TPU full closure (winner target); optimal lands ε≈15% (valid),
+                               # thicker start touches SvK-extrapolation early → active fatigue
+                               # loss that the optimizer drives down (compelling loss story)
+
+  # Secondary loads disabled for speed (rotation-only mode).
+  skip_secondary_modes: true   # 1 SOFA sim per apply() instead of 3 → 3× faster Jacobian
+  shear_displacement_m: 0.0002
+  tension_displacement_m: 0.0002
+
+  sheet_thickness: 0.001       # 1 mm PLA sheet
+  n_z: 2                       # tet prism layers through thickness (gmsh auto-sizes in-plane)
+  face_size_m: 0.100           # physical face side length [m] = 100 mm
+
+  # FEM solver — method='polar' (co-rotational) handles large rotations.
+  fem_method: polar
+  n_steps: 100                 # 100 steps of 0.6° each — fast; method=polar is stable
+
+  # Rotation pivot — use the hinge corner vertex (required for 2-face geometry).
+  rotation_pivot_auto: true
+
+  # Initial hinge design values — 9-param corner-hinge quadratic Bézier.
+  #   gap                  — rigid face separation along ê_arm [m]
+  #   s0_top/s0_bot        — upper/lower endpoint reach on face 0 [m]
+  #   s1_top/s1_bot        — upper/lower endpoint reach on face 1 [m]
+  #   bcu, bcl             — single upper/lower arc interior CP (absolute XY) [m]
+  # Reaches default to gap; CP defaults are auto-derived from the symmetric mesh
+  # geometry at the initial gap (compute_hinge_geometry).  Set keys below to override.
+  # Initial state = best recipe from the overnight search (trial 11, N_f≈2635).
+  gap_initial:   0.00464   # 4.64 mm — face separation [m] (free to grow)
+  reach_initial: 0.00304   # 3.04 mm — endpoint reach (stretched)
+  initial_concave_bow_m: 0.004   # 4 mm — strong concave init (winner recipe). At 90° this
+                                 # starts at ε≈48% (big fatigue loss) and drops to ε≈15%
+                                 # (valid, N_f≈2600): dramatic story AND a good basin. A
+                                 # thinner-concave/thicker start lands in a worse basin (ε≈28%).
+  mesh_refine:   1.5       # finer in-plane elements → smoother stress field / cleaner viz
+  param_floor:   0.0005    # 0.5 mm — min for gap + reaches (positivity + manufacturability)
+  # s0_top_initial / s0_bot_initial / s1_top_initial / s1_bot_initial → default = reach_initial
+  # bcu_x_initial ... bcl_y_initial → default = symmetric mesh CPs at gap_initial
+
+  # Finite-difference perturbation (central differences, 18 calls/gradient)
+  fd_eps: 1.0e-4               # 0.1 mm — appropriate for absolute-coordinate bc params
+
+material:
+  # TPU (flexible) — printed TPU ~95A. Strain field is ~E-independent under
+  # displacement control, but TPU's elastic limit (ε_yield ≈ 14%) is ~10× PLA's,
+  # so strains that fatigue PLA are elastic in TPU → far more cycles.
+  # (PLA reference was E=3.5e9, ν=0.36, σ_y=50e6, ε_frac=0.045, ε_f'=0.05, c=-0.6.)
+  young_modulus:   50.0e6    # TPU elastic modulus ≈ 50 MPa
+  poisson_ratio:   0.45      # near-incompressible (0.45 for tet-FEM stability)
+  yield_strength:  7.0e6     # → ε_yield = σ_y/E ≈ 14% (permanent-set onset)
+  fracture_strain: 4.0       # TPU elongation at break ≈ 400% (very high)
+  # Coffin-Manson low-cycle fatigue (TPU constants UNCERTAIN — ballpark only):
+  fatigue_ductility_coeff: 1.0    # ε_f' (very ductile elastomer)
+  fatigue_ductility_exp:  -0.5    # c (< 0)
+  # yield_strain:  0.14           # optional override of σ_y/E
+
+loss:
+  # loss = w_fatigue·ε_plastic/ε_yield + w_mat·area/area₀ + w_gap·(gap/gap₀)²
+  # Minimise PLASTIC strain → maximise cycles-to-failure N_f (pushes toward an
+  # elastic design = ~unlimited cycles). Material + gap keep it lean and compact.
+  w_fatigue: 9.5             # minimise plastic strain (cyclic durability) — search best
+  w_mat:     3.42            # material (lean hinge) — search best
+  w_gap:     1.0             # keep the face gap small — search best
+  target_cycles: 100         # reporting reference — "manageable for ~100 folds?"
+  min_hinge_area_m2: 20.0e-6 # 20 mm² floor — below this, stop the material pull
+                             # (an over-shrunk hinge is unmanufacturable + hangs SOFA)
+
+optimization:
+  n_epochs: 30
+  learning_rate: 0.0003       # search-best
+  lr_schedule: hold_cosine    # hold full lr (reach deep ε≈15% basin) then cosine-anneal
+                              # to lock it in: dramatic drop + smooth tail, no overshoot.
+                              # cosine | constant | hold_cosine
+  lr_hold_frac: 0.3           # hold full lr ~9 epochs (reach ε≈15% by ~ep8), then anneal
+                              # right after the optimum → minimal overshoot, smooth tail

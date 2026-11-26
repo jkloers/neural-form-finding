@@ -1,0 +1,150 @@
+# sofa/moment_1x1.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+# 1×1 unit_RDQK_0 unit cell — CCW moment on face 1, face 0 clamped.
+#
+# Single source of truth for both the JAX Stage-2 solver and the SOFA 3D FEM.
+# Physical dimensions are derived from target_diameter_m and the tessellation
+# geometry; stiffnesses are derived from the 3D-printable material properties.
+#
+# Physical scale derivation
+# ─────────────────────────
+# scale          = (target_diameter_m / 2) / target.radius
+#                = (0.20 / 2) / 1.0 = 0.10 m / JAX-unit
+# face_size      = scale × sqrt(total_area / n_faces)
+#                = 0.10 × sqrt(4/4) = 0.100 m  (100 mm)
+# arm_width      = arm_width_frac  × face_size = 0.010 m  (10 mm)
+# fold_length    = fold_length_frac × face_size = 0.003 m  (3 mm)
+#
+# Rotational stiffness (in-plane bending of thin corner strip)
+# ─────────────────────────────────────────────────────────────
+# k_rot_phys = E × t × fold_length³ / (12 × arm_width)
+#            = 3.5e9 × 0.001 × (0.003)³ / (12 × 0.010)
+#            = 0.787 N·m / rad  per hinge
+#
+# This value is stored in material.k_rot and used directly by JAX Stage-2.
+# Loads are in N·m; JAX displacement output is in JAX-units (× 0.10 = metres).
+# ─────────────────────────────────────────────────────────────────────────────
+
+tessellation:
+  width: 1
+  height: 1
+  pattern: "unit_RDQK_0"
+  total_area: 4.0
+
+target:
+  type: "circle"
+  center: [0.0, 0.0]
+  radius: 1.0             # JAX normalised units — Stage 0 maps tessellation here
+
+# ── Physical geometry scaling ─────────────────────────────────────────────────
+sofa:
+  target_diameter_m: 0.20   # deployed unit cell fits inside 20 cm circle
+  arm_width_frac:    0.10   # arm_width  = 10 % of face_size
+  fold_length_frac:  0.030  # fold_length =  3 % of face_size
+  sheet_thickness_m: 0.001  # 1 mm (z-dimension of the 3D FEM mesh)
+
+  # SOFA simulation settings
+  loading_mode: "moment"    # "moment" | "rotation"
+  n_simulation_steps: 200
+
+# ── Material — PLA, typical FDM 3D-print values ──────────────────────────────
+material:
+  young_modulus:   3.5e9    # Pa  (3.5 GPa — standard PLA)
+  poisson_ratio:   0.36
+  yield_strength:  50.0e6   # Pa  (50 MPa — conservative PLA tensile yield)
+  density:         1.0      # kg/m³ × normalisation (statics — mass not load-bearing)
+
+  # Derived stiffnesses (pre-computed from the formulas above; update if you
+  # change young_modulus / geometry fractions).
+  k_rot:     0.787          # N·m / rad  — physical hinge rotational stiffness
+  k_stretch: 1000.0         # JAX normalised — keeps face panels rigid  (>> k_rot)
+  k_shear:   1000.0         # JAX normalised — keeps face panels rigid  (>> k_rot)
+
+# ── Boundary conditions and loads (shared by JAX and SOFA) ───────────────────
+boundary_conditions:
+  clamped_faces: [0]         # face 0 fully clamped (all DOFs fixed)
+
+loads:
+  - face: 1
+    dof:   2                 # Mz — negative = CW = opens RDQK voids
+    value: -1.0              # N·m  (physical;  JAX normalises by k_rot automatically)
+
+# ── JAX Stage-1 validity ──────────────────────────────────────────────────────
+optimization_weights:
+  validity_method: alternating_projection
+  n_proj_iters: 20
+  connectivity:       0.0
+  non_intersection:   0.0
+  target:             0.0
+  arm_symmetry:       0.0
+  void_length:        0.0
+  void_collinear:     0.0
+  boundary_rigidity:  0.0
+  face_area:          0.0
+  anchoring:          0.0
+
+# ── JAX Stage-2 physics solver ────────────────────────────────────────────────
+physics:
+  use_contact:        false
+  linearized_strains: true
+  updated_lagrangian: false
+  incremental:        true
+  num_load_steps:     10
+  solver_maxiter:     2000
+  solver_tol:         1.0e-6
+  k_contact:          0.0
+  min_angle:          1.0
+  cutoff_angle:       5.0
+
+# ── JAX mapping (Stage 0) ─────────────────────────────────────────────────────
+# direct_transform: Stage 0 passes the tessellation through unchanged (identity).
+# Stage 1 (alternating projection) then closes hinge gaps → deployed state.
+#
+# Note: conformal_polynomial (Shirley-Chiu) rotates faces ~45° into a disk.
+# This works correctly in JAX Stage-2 but requires a bilinear mesher for SOFA
+# (the current Cartesian breakpoint mesh builder produces degenerate hexes for
+# non-axis-aligned faces).  Switch to conformal_polynomial once the bilinear
+# mesher is implemented (Phase 4).
+mapping:
+  map_type: direct_transform
+  map_params: {}
+  domain_restriction: 1.0
+  use_shirley_chiu: false
+  strict_boundary_fit: false
+  learn_global_scale: false
+
+# ── JAX training (not used for SOFA comparison runs) ─────────────────────────
+training:
+  num_epochs: 200
+  learning_rate: 0.005
+  optimizer: "adam"
+  lr_schedule: "cosine"
+  geometric_loss_type: "boundary_vertices"
+  grad_clip: 1.0
+
+loss_weights:
+  chamfer: 1000.0
+  coverage: 1000.0
+  material_area: 0.0
+  stretching: 100.0
+  shearing: 100.0
+  bending: 0.0
+  contact: 0.0
+  regularization: 0.0
+  hinge_gap: 400.0
+  openness: 0.0
+  deformation: 0.0
+
+# ── Visualisation ─────────────────────────────────────────────────────────────
+visualization:
+  stage0: true
+  stage1: true
+  stage2: true
+  energy_plot: true
+  animation: false
+  show_plots: false
+  save_outputs: true
+  show_hinges: true
+  show_hinge_indices: true
+  show_external_forces: true
+  show_kinematic_blocks: true

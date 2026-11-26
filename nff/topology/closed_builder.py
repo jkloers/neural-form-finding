@@ -4,7 +4,7 @@ Constructs the *undeployed* configuration of an interwoven-cut kirigami from a
 topology matrix, fixed boundary points, and per-cut void aspect ratios, by
 solving the collinearity linear system (LES). It emits a ``Tessellation`` in the
 SAME representation produced by the deployed-state builder
-(``nff.topology.builder.build_tessellation``), so ``CentroidalState`` and every
+(``legacy.gnn.topology_builder.build_tessellation``), so ``CentroidalState`` and every
 downstream stage are reused unchanged.
 
 This is the reverse of the historical workflow: instead of starting from a
@@ -318,7 +318,7 @@ def _detect_voids(tessellation: Tessellation) -> None:
     """Detect voids (opposite hinge pairs) and register them on the tessellation.
 
     Replicates the generic void-discovery walk used by
-    ``nff.topology.builder.build_tessellation`` so the closed-state builder is
+    ``legacy.gnn.topology_builder.build_tessellation`` so the closed-state builder is
     self-contained.
     """
     primary_to_hinges = tessellation.build_primary_to_hinges()

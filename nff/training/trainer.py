@@ -128,7 +128,7 @@ def create_train_step(
     if static_features is not None:
         _static_features = static_features
     elif map_type.startswith('gnn_'):
-        from nff.models.graph_builder import build_static_features
+        from legacy.gnn.models.graph_builder import build_static_features
         _static_features = build_static_features(initial_state, map_type)
     else:
         _static_features = None

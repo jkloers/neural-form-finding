@@ -244,7 +244,7 @@ point in its favour).
 JAX_PLATFORMS=cpu conda run -n kgnn_mac python \
     nff/scripts/diagnostics/cell_family_corpus.py --figmat --grips
 JAX_PLATFORMS=cpu conda run -n kgnn_mac python \
-    nff/scripts/diagnostics/cell_family_map.py --n-perm 20000
+    legacy/experiments/diagnostics/cell_family_map.py --n-perm 20000
 JAX_PLATFORMS=cpu conda run -n kgnn_mac python -m pytest tests/test_cell_families.py -q
 ```
 
@@ -511,7 +511,7 @@ not a change: `paper/` is untouched.
 
 ```bash
 JAX_PLATFORMS=cpu conda run -n kgnn_mac python \
-    nff/scripts/diagnostics/cell_regime_map.py
+    legacy/experiments/diagnostics/cell_regime_map.py
 JAX_PLATFORMS=cpu conda run -n kgnn_mac python -m pytest tests/test_effective_medium.py -q
 ```
 

@@ -135,7 +135,7 @@ def _execute_stage0_mapping(
 
     if map_type.startswith('gnn_'):
         if static_features is None:
-            from nff.models.graph_builder import build_static_graph_features
+            from legacy.gnn.models.graph_builder import build_static_graph_features
             static_features = build_static_graph_features(initial_state)
         mapped_state = apply_gnn_mapping(initial_state, map_params, static_features, map_type=map_type)
         mapping_fn = None

@@ -1,0 +1,149 @@
+# sofa/c001_mpnn_2x2.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+# 2×2 unit_RDQK_D tessellation (16 faces) — c001 problem: face 9 clamped,
+# face 12 driven by CCW moment.  Stage 0 uses a trained MPNN (h32 L3 d1)
+# that maps the initial tessellation toward the target circle while closing
+# voids.  Stage 1 (alternating projection) closes hinge gaps.
+# Stage 2 (JAX L-BFGS) and SOFA 3D FEM both solve from the Stage-1 geometry.
+#
+# Physical scale derivation
+# ─────────────────────────
+# jax_scale      = (target_diameter_m / 2) / target.radius
+#                = (0.20 / 2) / 1.0 = 0.10 m / JAX-unit
+# face_size      = jax_scale × sqrt(total_area / n_faces)
+#                = 0.10 × sqrt(3.0 / 16)  ≈  0.0433 m  (43 mm)
+# arm_width      = arm_width_frac  × face_size ≈ 0.0043 m  (4.3 mm)
+# fold_length    = fold_length_frac × face_size ≈ 0.0022 m  (2.2 mm)
+#
+# Rotational stiffness
+# k_rot_phys = E × t × fold_length³ / (12 × arm_width)
+#            ≈ 3.5e9 × 0.001 × (0.0022)³ / (12 × 0.0043)
+#            ≈ 7.2e-4 N·m / rad  per hinge
+# ─────────────────────────────────────────────────────────────────────────────
+
+tessellation:
+  width: 2
+  height: 2
+  pattern: "unit_RDQK_D"
+  total_area: 3.0
+
+target:
+  type: "circle"
+  center: [0.0, 0.0]
+  radius: 1.0
+
+# ── Physical geometry scaling ─────────────────────────────────────────────────
+sofa:
+  target_diameter_m: 0.20
+  arm_width_frac:    0.10    # arm_width  = 10 % of face_size ≈ 4.3 mm
+  fold_length_frac:  0.050   # fold_length =  5 % of face_size ≈ 2.2 mm
+  sheet_thickness_m: 0.010   # 10 mm z-thickness → aspect ratio ≈ 2:1 (was 21:1 at 1mm) → no z-buckling
+
+  # SOFA simulation settings
+  # Rotation loading: prescribed in-plane rotation of the loaded face about its centroid.
+  # Displacement-controlled → inherently stable, no buckling risk.
+  # rotation_angle_deg=5.0 gives ~2° of response in neighboring faces (elastic regime).
+  loading_mode: "rotation"
+  rotation_angle_deg: 5.0
+  n_simulation_steps: 500   # informational only — simulate_cell.py uses N_STEPS from scene_builder.py
+  applied_moment: 0.05       # unused in rotation mode, kept for reference
+
+# ── Material — PLA ────────────────────────────────────────────────────────────
+material:
+  young_modulus:  3.5e9
+  poisson_ratio:  0.36
+  yield_strength: 50.0e6
+  density:        1.0       # statics — mass not load-bearing
+
+  # JAX-normalized stiffnesses (c001 training values; k_rot matches PLA for 43mm face)
+  k_rot:     0.5
+  k_stretch: 1000.0
+  k_shear:   1000.0
+
+# ── Boundary conditions (c001: face 9 clamped) ────────────────────────────────
+boundary_conditions:
+  clamped_faces: [9]
+
+# ── Loads: JAX training force (normalized) ───────────────────────────────────
+# For SOFA the physical moment is in sofa.applied_moment above.
+loads:
+  - face: 12
+    dof: 2
+    type: global_frame      # global-frame moment for training
+    value: 15.0             # JAX-normalized force, closes voids during training
+
+# ── JAX Stage-1 validity ─────────────────────────────────────────────────────
+optimization_weights:
+  validity_method: alternating_projection
+  n_proj_iters: 100
+
+# ── JAX Stage-2 physics ──────────────────────────────────────────────────────
+physics:
+  use_contact:        true
+  linearized_strains: true
+  updated_lagrangian: false
+  incremental:        true
+  num_load_steps:     5
+  solver_maxiter:     1000
+  solver_tol:         1.0e-5
+  k_contact:          5000.0
+  min_angle:          1.0
+  cutoff_angle:       5.0
+
+# ── JAX mapping (Stage 0: MPNN) ───────────────────────────────────────────────
+# Canonical architecture from c001 Run 3 random search (t187, validated best).
+# Weights are loaded from a pre-trained checkpoint (best_params.pkl) — the
+# model must be trained via train.py before running compare_jax_sofa.py:
+#   python train.py --arch architectures/mpnn_best_2x2 --suite problems/suite_compressive_t187
+# (or any single-problem run with this arch config).
+mapping:
+  map_type: gnn_mpnn
+  map_params:
+    hidden_dim: 32
+    num_layers: 3
+    inner_depth: 1
+    seed: 187
+  domain_restriction: 1.0
+  use_shirley_chiu: false
+  strict_boundary_fit: false
+  learn_global_scale: false
+
+# ── JAX training ─────────────────────────────────────────────────────────────
+training:
+  num_epochs: 500
+  learning_rate: 0.005
+  optimizer: "adam"
+  lr_schedule: "cosine"
+  geometric_loss_type: "boundary_vertices"
+  grad_clip: 1.0
+
+# ── Loss weights (canonical c001 t187) ───────────────────────────────────────
+loss_weights:
+  chamfer:       6406.0
+  coverage:      0.5
+  material_area: 0.0
+  stretching:    1.0
+  shearing:      10.0
+  bending:       0.0
+  contact:       0.0
+  regularization: 0.0001
+  hinge_gap:     226.8
+  openness:      0.0
+  deformation:   0.0
+  void_closure:  270.3
+  closure_delta: 66.5
+
+# ── Visualisation ─────────────────────────────────────────────────────────────
+visualization:
+  stage0: true
+  stage1: true
+  stage2: true
+  energy_plot: true
+  animation: false
+  show_plots: false
+  save_outputs: true
+  show_hinges: true
+  show_hinge_indices: false
+  show_face_indices: false
+  show_external_forces: true
+  show_kinematic_blocks: true

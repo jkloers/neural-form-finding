@@ -1,0 +1,82 @@
+# Sandbox config: 1×1 unit_RDQK_0 tessellation
+#
+# Purpose: minimal geometry for SOFA validation and unit-cell-level experiments.
+# 4 faces in a ring (F0–F1–F2–F3–F0) connected by 4 internal filament hinges.
+# Use this to run the JAX pipeline on a single unit cell before cross-checking
+# with simulate_cell.py.
+#
+# Face layout (4 faces, unit_RDQK_0, axis-aligned squares):
+#
+#   F3 | F2
+#   ───┼───
+#   F0 | F1
+#
+# Hinge ring: F0↔F1 (right), F1↔F2 (top-right), F2↔F3 (top-left), F3↔F0 (left)
+#
+# Geometry note: with total_area=4.0 the faces are unit squares (1×1 each).
+# SOFA script uses the same convention so energies are directly comparable.
+
+tessellation:
+  width: 1
+  height: 1
+  pattern: "unit_RDQK_0"
+  total_area: 4.0
+
+target:
+  type: "circle"
+  center: [0.0, 0.0]
+  radius: 0.8
+
+mapping:
+  map_type: direct_transform
+  domain_restriction: 1.0
+  use_shirley_chiu: false
+  strict_boundary_fit: false
+  learn_global_scale: false
+
+optimization_weights:
+  validity_method: alternating_projection
+  n_proj_iters: 20
+  connectivity: 0.0
+  non_intersection: 0.0
+  target: 0.0
+  arm_symmetry: 0.0
+  void_length: 0.0
+  void_collinear: 0.0
+  boundary_rigidity: 0.0
+  face_area: 0.0
+  anchoring: 0.0
+
+training:
+  num_epochs: 200
+  learning_rate: 0.005
+  optimizer: "adam"
+  lr_schedule: "cosine"
+  geometric_loss_type: "boundary_vertices"
+  grad_clip: 1.0
+
+loss_weights:
+  chamfer: 1000.0
+  coverage: 1000.0
+  material_area: 0.0
+  stretching: 100.0
+  shearing: 100.0
+  bending: 0.0
+  contact: 0.0
+  regularization: 0.0
+  hinge_gap: 400.0
+  openness: 0.0
+  deformation: 1.0
+
+visualization:
+  stage0: true
+  stage1: true
+  stage2: true
+  energy_plot: true
+  animation: true
+  show_plots: false
+  save_outputs: true
+  show_hinges: true
+  show_hinge_indices: true
+  show_external_forces: true
+  show_kinematic_blocks: true

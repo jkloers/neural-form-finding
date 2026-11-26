@@ -58,7 +58,7 @@ energy **2.65% val / 1.70% test**, force 11.93/14.00% (per-component), damage 12
   `f128x128` 11.71%, **`f256x256` 10.46%**.
 
 Details: `memory/project_surrogate_architecture.md`. Figure:
-`nff/scripts/figures/plot_surrogate_capacity.py`.
+`legacy/experiments/figures/plot_surrogate_capacity.py`.
 
 ### 1.3 The pipeline runs
 

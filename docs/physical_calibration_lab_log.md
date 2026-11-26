@@ -419,7 +419,7 @@ sweep: 5/10/25/50/100mm).
   proxy — rigorous number = the out-of-plane HANDLE reaction, not extracted yet.) w_lig=100 rotation FAILED
   (mesh aspect 190:1); wide shear diverged at 1st increment — **wide solid mesh numerically hard** (needs
   finer thru-thick or a better mesh; user said NO membrane/shell). Figure `data/experiments/processed/
-  pet_gravity_check.png` (`nff/scripts/figures/plot_gravity_check.py`).
+  pet_gravity_check.png` (`legacy/experiments/figures/plot_gravity_check.py`).
 
 ## ★ EXPERIMENT 1 (hinge shear) DESIGN LOCKED (2026-07-24): w_lig = 15 mm
 Best shear-validation coupon given Instron(5kN)+physics+sim: **w_lig=15mm, α=90°, fillet_ratio=0.16
@@ -690,7 +690,7 @@ at ε_p 0.3-0.8** (the hinge's operating range).
   material golden tests pass; PET deck verified emitting the new *PLASTIC. E=3.0 still lit. placeholder.
 
 ## ★ THREE-MODE SUMMARY FIGURE + calibrated shear prediction (2026-07-26)
-`nff/scripts/figures/plot_pet_three_modes.py` → `data/experiments/processed/pet_w18_three_modes.png`:
+`legacy/experiments/figures/plot_pet_three_modes.py` → `data/experiments/processed/pet_w18_three_modes.png`:
 A buckling (sim+real bh, VALIDATED), B shear (PREDICTION only, no data), C tension (sim 319 + real 287
 crosshead, VALIDATED ~11%). All w=18mm, committed calibrated PET (9-pt *PLASTIC, eps_f0=1.5, E=3.0).
 - **SHEAR PREDICTION (calibrated, r_win=25 = 50mm grip, `pet_w18_shear_calibrated.npz`):** elastic → yield
@@ -770,7 +770,7 @@ the origin, D tangent-E roll-off vs stress).
   sensitivity is tiny (E 3.0→1.2 GPa = −2% force). E is for stiffness reporting; *PLASTIC carries the force.
 
 ## ★★ DAMAGE MEASUREMENT — the fracture ruler vs the FUNCTIONAL one (2026-07-27)
-Figure `nff/scripts/figures/plot_pet_damage_ruler.py` → `pet_damage_ruler.png` (A fold PEEQ/D vs θ,
+Figure `legacy/experiments/figures/plot_pet_damage_ruler.py` → `pet_damage_ruler.png` (A fold PEEQ/D vs θ,
 B all three modes vs deployment fraction, C the "damage ruler" of what experiments actually pin).
 - **Model:** `D = PEEQ/eps_f(η)`, `eps_f = eps_f0 exp(-k(η-1/3))`, p99 over ligament elements. Three
   buried choices: plastic strain only (elastic ignored), **memoryless** (valid only on monotonic
