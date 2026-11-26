@@ -74,7 +74,7 @@ the same energy or the same accumulated damage. A surrogate fitted as a state fu
 `W(a, s, θ)` is therefore only legitimate if it is trained along paths resembling the ones the
 deployed sheet actually rides."
 
-`nff/scripts/calibration/audit_path_dependence.py:11` puts a number on it: an earlier paired sample
+`nff/scripts/surrogate/audit_path_dependence.py:11` puts a number on it: an earlier paired sample
 gave **+65% on `W`** and **3.2× on damage** between a measured polyline and a straight ray to the
 *same endpoint*. That is an order of magnitude above the 5% target.
 
@@ -113,7 +113,7 @@ large campaign.
   recognizes no eigenvalue header, and a mode shape lands in the `.frd` as an extra `DISP` block
   that would break `parse_job`'s time alignment (`ccx_solver.py:511`).
 - **Phase 3 (re-running the job list with more `*STEP`s) is deferred**, not implemented. It is also
-  in tension with a recorded measurement: `run_pet_campaign.sh:23-25` — finer stepping (2.5° → 4.0°)
+  in tension with a recorded measurement: `nff/scripts/surrogate/run_pet_campaign.sh:23-25` — finer stepping (2.5° → 4.0°)
   did *not* cut deep-fold divergence over 46 deep folds (22% vs 26%, indistinguishable).
 
 ### Environment constraint
@@ -131,7 +131,7 @@ On branch `claude/refine-local-plan-dhoqnt`:
 
 | file | state |
 |---|---|
-| `nff/scripts/diagnostics/surrogate_route_audit.py` | **new, working** — classification, family-conditioned σ_pair, oracle-feature probe, per-family signed residual |
+| `nff/scripts/surrogate/surrogate_route_audit.py` | **new, working** — classification, family-conditioned σ_pair, oracle-feature probe, per-family signed residual |
 | `nff/utils/splits.py` | **new** — `split_by_job` moved here (it lived in a module importing jax+optax); the trainer re-exports it, `plot_surrogate_parity.py` unchanged |
 | `tests/test_route_audit.py` | **new** — 8 tests, all passing; suite 217 → 225 |
 
@@ -157,10 +157,10 @@ comes from running it locally.
 
 ```bash
 # steel FIRST -- the control. Must come back ~100% origin_ray.
-conda run -n kgnn_mac python -m nff.scripts.diagnostics.surrogate_route_audit \
+conda run -n kgnn_mac python -m nff.scripts.surrogate.surrogate_route_audit \
     --data data/fea/hinge_dataset
 
-conda run -n kgnn_mac python -m nff.scripts.diagnostics.surrogate_route_audit \
+conda run -n kgnn_mac python -m nff.scripts.surrogate.surrogate_route_audit \
     --data data/fea/hinge_dataset_pet_v2 \
     --surrogate data/surrogates/hinge_surrogate_pet_v2
 ```
@@ -210,11 +210,11 @@ regardless of which branch Phase 0 selects.
 
 ## Phase 0 — Route-family audit (decisive, ~1 h, no training, no FEA)
 
-**New file: `nff/scripts/diagnostics/surrogate_route_audit.py`.** Pure numpy over
+**New file: `nff/scripts/surrogate/surrogate_route_audit.py`.** Pure numpy over
 `<data>.npz` + `<data>.json`. Follows the house diagnostics conventions
 (`argparse(description=__doc__)`, `--out` resolved to a directory in `main`, `os.makedirs(exist_ok=True)`,
 `fig.savefig(..., dpi=150, bbox_inches="tight")`, final `print(f"wrote {out_dir}")` — see
-`nff/scripts/diagnostics/extract_hinge_paths.py:53` and `diagnose_landscape.py:259`).
+`nff/scripts/surrogate/extract_hinge_paths.py:53` and `diagnose_landscape.py:259`).
 
 ### 0.1 Classify each job's route family
 
@@ -462,7 +462,7 @@ Data-derived `θ_crit`, no FEA:
 
 | file | change |
 |---|---|
-| `nff/scripts/diagnostics/surrogate_route_audit.py` | **new** — Phase 0. `origin_ray`/`free_path` classifier, family-conditioned σ_pair (with the steel control), per-family signed bias. |
+| `nff/scripts/surrogate/surrogate_route_audit.py` | **new** — Phase 0. `origin_ray`/`free_path` classifier, family-conditioned σ_pair (with the steel control), per-family signed bias. |
 | `nff/scripts/diagnostics/surrogate_regime_report.py` | **new** — the single scoring harness (per-`uz/t` and per-θ relRMSE bands). Uses the 3-way `split_by_job`. |
 | `nff/scripts/train_hinge_surrogate.py` | `--damage-col none` (Phase 1.1); fix the silent `check_force_sign` false-pass (0.4); write `feat_kind` into `stats` and `meta`; take `feat_dim` from the seam instead of `3 + g.shape[-1]` (`:230`). |
 | `nff/models/hinge_surrogate.py` | `_feature_cols` + explicit `feat_kind` (2.0); route `compute_norm_stats` and `_features` through it; `_features:157` → `_feat6`; extend `_geom_vector` and `HingeGeometry`. |
@@ -485,13 +485,13 @@ Run locally — `conda run -n kgnn_mac`, `JAX_PLATFORMS=cpu` (forced inside the 
 
 ```bash
 # Phase 0 — decisive, no training
-conda run -n kgnn_mac python -m nff.scripts.diagnostics.surrogate_route_audit \
+conda run -n kgnn_mac python -m nff.scripts.surrogate.surrogate_route_audit \
     --data data/fea/hinge_dataset_pet_v2 \
     --surrogate data/surrogates/hinge_surrogate_pet_v2 \
     --prior data/fea/path_priors/envelope_v3_w18
 
 # ... and the steel control: must come back ~100% origin_ray
-conda run -n kgnn_mac python -m nff.scripts.diagnostics.surrogate_route_audit \
+conda run -n kgnn_mac python -m nff.scripts.surrogate.surrogate_route_audit \
     --data data/fea/hinge_dataset
 
 # Phase 1.1 — steel at PET's scale, energy-only, matched budget
@@ -526,7 +526,7 @@ conda run -n kgnn_mac python -m nff.scripts.diagnostics.surrogate_regime_report 
 5. If branch 2B ships: `θ_crit` must **fall with increasing `w_lig`** and be finite-or-explicitly-`inf`
    for every geometry, and any geometry whose `θ_crit` exceeds its sampled range must land in the
    already-good `uz/t < 15` population.
-6. Regenerate parity plots (`nff/scripts/figures/plot_surrogate_parity.py`). Under branch 2A the
+6. Regenerate parity plots (`nff/scripts/surrogate/plot_surrogate_parity.py`). Under branch 2A the
    **signed** under-predicted branch should collapse, not merely thin — that is the falsifiable
    prediction of the path hypothesis, distinct from a general reduction in scatter.
 7. The steel control must classify as ~100% `origin_ray` in Phase 0.1. If it does not, the foliation

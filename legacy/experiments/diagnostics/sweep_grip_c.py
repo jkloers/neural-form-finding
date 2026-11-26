@@ -32,7 +32,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.getcwd())
-from nff.scripts.diagnostics.calibrate_target import _set_in_block   # noqa: E402  (text substitution)
+from nff.scripts.design.calibrate_target import _set_in_block   # noqa: E402  (text substitution)
 
 BASE = "data/configs/closed/gripC_base.yaml"
 CKPT = "data/surrogates/hinge_surrogate_pet_v3"
@@ -147,7 +147,7 @@ def run_arm(arm, every):
         rec["theta_untrained_max"] = grep1(r"hinge angle\s+max ([\d.]+)", cfg_text)
     else:
         print(f"  [{name}] calibrating (load x{scale:g}, pull-in {px:g}/{py:g}) ...")
-        ok, out = sh(PY + ["nff/scripts/diagnostics/calibrate_target.py", "--config", BASE,
+        ok, out = sh(PY + ["nff/scripts/design/calibrate_target.py", "--config", BASE,
                            "--load-scale", str(scale), "--from-deployed",
                            "--pull-in-x", str(px), "--pull-in-y", str(py),
                            "--init-noise", str(INIT_NOISE), "--init-seed", str(seed),
@@ -212,7 +212,7 @@ def run_arm(arm, every):
     # 4 ── ride the trained design and score it against the checkpoint's own trust box
     paths_out = os.path.join(PATHS_DIR, os.path.basename(run_dir))
     print(f"  [{name}] extracting hinge paths ...")
-    ok, out = sh(PY + ["nff/scripts/diagnostics/extract_hinge_paths.py",
+    ok, out = sh(PY + ["nff/scripts/surrogate/extract_hinge_paths.py",
                        "--config", os.path.join(run_dir, "config.yaml"),
                        "--params", os.path.join(run_dir, "best_params.pkl"),
                        "--steps", "40", "--out", paths_out], log)
@@ -232,7 +232,7 @@ def run_arm(arm, every):
 
         ood_json = os.path.join(paths_out, "ood_report.json")
         print(f"  [{name}] scoring trust-box coverage ...")
-        ok2, out2 = sh(PY + ["-m", "nff.scripts.diagnostics.score_deployment_ood",
+        ok2, out2 = sh(PY + ["-m", "nff.scripts.surrogate.score_deployment_ood",
                              "--paths", os.path.join(paths_out, "hinge_paths"),
                              "--surrogate", CKPT, "--data", DATA, "--out", ood_json], log)
         if ok2 and os.path.exists(ood_json):

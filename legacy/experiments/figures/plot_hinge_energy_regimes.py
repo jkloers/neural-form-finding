@@ -1,7 +1,7 @@
 """Strain energy W vs each kinematic (theta, shear s, stretch a), with the recalibrated
 linear ROM overlaid and the elastic / plastic / fracture regimes shaded from the data.
 
-Follows the project charter (nff/scripts/diagnostics/validate_hinge.py palette + clean 1x3 style); nothing
+Follows the project charter (nff/scripts/surrogate/validate_hinge.py palette + clean 1x3 style); nothing
 generic is hardcoded. Run in an env with matplotlib (e.g. the ``ccx`` env):
 
     conda run -n ccx python legacy/experiments/figures/plot_hinge_energy_regimes.py \

@@ -56,7 +56,7 @@ def main():
         print(f"  [{name}]")
         if os.path.exists(paths + "/hinge_paths.npz"):
             # --paths takes the DIRECTORY; the script appends the `hinge_paths.npz` stem itself.
-            run(py + ["nff/scripts/figures/plot_hinge_path_distribution.py",
+            run(py + ["nff/scripts/surrogate/plot_hinge_path_distribution.py",
                       "--paths", paths,
                       "--label", name,
                       "--out", os.path.join(args.fig_dir, f"{name}_path_distribution.png")],

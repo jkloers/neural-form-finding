@@ -720,7 +720,7 @@ processed/w18_fillet_seed.png`.
 ## ★★ LOAD-TRAIN COMPLIANCE QUANTIFIED: C = 7.77 µm/N — halves the E gap, doesn't close it (2026-07-27)
 Turned the qualitative "crosshead is inflated" into a **measured constant**, then pushed it back onto the
 coupons. New module `nff/calibration/compliance.py` (`C_HINGE_W18`, `fit_compliance`,
-`correct_displacement`, `modulus_from_slope`) + figure `nff/scripts/figures/plot_machine_compliance.py`
+`correct_displacement`, `modulus_from_slope`) + figure `nff/scripts/calibration/plot_machine_compliance.py`
 → `data/experiments/processed/pet_machine_compliance.png` (A two disp axes, B the C fit, C coupon E at
 the origin, D tangent-E roll-off vs stress).
 - **C = 7.77 µm/N**, offset −15 µm, **residual 63 µm rms** over F=30–278 N ⇒ the excess `x_crosshead −
@@ -753,7 +753,7 @@ the origin, D tangent-E roll-off vs stress).
   (best match at full-frame (1900,1000), MAD 0.51) ⇒ the `scale_960/4` factor is right.
 - Panel C of the three-mode figure now shows **`crosshead − C·F`** (dashed) instead of the raw crosshead,
   alongside the video true-opening curve.
-- **Fit figure:** `nff/scripts/figures/plot_pet_coupon_modulus.py` → `pet_coupon_modulus.png`
+- **Fit figure:** `nff/scripts/calibration/plot_pet_coupon_modulus.py` → `pet_coupon_modulus.png`
   (A the corrected curves + per-specimen tangent fits in the window; B out to yield, showing the
   tangent only holds for the first ~0.17% strain). Cross-check: **ISO 527-1 secant (ε 0.05–0.25%) on
   the corrected axis = 2.64 ± 0.56 GPa** — our 1–5 MPa window IS essentially the ISO window.
@@ -890,7 +890,7 @@ Rate 5 mm/min confirmed. Direction (MD/CD) NOT recorded.
 ## ★★ VIDEO LADDER EXTENSOMETER → E IS ~2.3 GPa, NOT 3.0 (2026-07-27)
 New code: **`nff/calibration/ladder.py`** (`decode_gray` / `track_ladder` / `gauge_strain` /
 `sync_by_grip`; pure numpy + ffmpeg pipe, no OpenCV) and
-**`nff/scripts/figures/plot_pet_video_stress_strain.py`** → `pet_video_stress_strain.png`
+**`nff/scripts/calibration/plot_pet_video_stress_strain.py`** → `pet_video_stress_strain.png`
 (A whole test, B flow curve + its 2 anchors, C elastic region on 3 strain axes, D modulus vs window).
 Tracking cache: `data/experiments/processed/pet_video_ladder.npz`.
 - **Method that works:** 2D template NCC on each ladder tick (digit+tick patch, ±7 px search,

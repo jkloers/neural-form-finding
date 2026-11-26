@@ -38,7 +38,7 @@ from nff.closed import one_dof as OD
 from nff.closed import void_geometry as VG
 from nff.closed.load_paths import (deployed_nodes, extract_force_field, force_budget,
                                    interface_decomposition)
-from nff.closed.shield_kinematics import _checkerboard_signs, build_deploy_plan
+from nff_paper.closed_support.shield_kinematics import _checkerboard_signs, build_deploy_plan
 from nff.stages.pipeline import forward_pipeline
 from nff.topology.closed_builder_jax import (boundary_flat_from_logits, build_boundary_edges,
                                              build_deploy_structure, solve_cut_vertices_jax)

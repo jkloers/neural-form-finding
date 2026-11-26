@@ -30,8 +30,8 @@ jax.config.update("jax_enable_x64", True)
 import numpy as np
 
 from nff.closed.force_stats import energy_split
-from nff.closed.one_dof import fit_one_dof, localisation_ratio, relative_rotations
-from nff.closed.shield_kinematics import _checkerboard_signs
+from nff_paper.closed_support.one_dof import fit_one_dof, localisation_ratio, relative_rotations
+from nff_paper.closed_support.shield_kinematics import _checkerboard_signs
 from legacy.experiments.diagnostics.sweep_localisation import (BASE_CONFIG, build_arm_config, loads_for,
                                                         solve_at)
 from nff.stages.geometry import build_reference_bond_vectors

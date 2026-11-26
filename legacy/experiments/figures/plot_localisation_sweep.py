@@ -150,7 +150,7 @@ def plot_maps(meta, npz, out, scale=1.0, picks=(0, None, -1)):
     import matplotlib.pyplot as plt
     from matplotlib.collections import PolyCollection
 
-    from nff.closed.void_geometry import build_void_index
+    from nff_paper.closed_support.void_geometry import build_void_index
     from nff.topology.closed_builder_jax import build_deploy_structure
 
     rows = meta["rows"]

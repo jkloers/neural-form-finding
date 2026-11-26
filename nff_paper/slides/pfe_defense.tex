@@ -1,0 +1,852 @@
+% !TEX program = xelatex
+%
+% ENGINE. This deck sets EB Garamond and Hiragino Sans through fontspec, which only XeTeX
+% and LuaTeX provide. pdflatex cannot build it at all: it stops at fontspec.sty with
+% "requires either XeTeX or LuaTeX" and writes no PDF. The line above tells an editor or
+% latexmk which engine to use; nff_paper/slides/.latexmkrc says the same to a bare `latexmk` run.
+% Building by hand is `bash nff_paper/slides/build.sh`, which calls xelatex twice.
+%
+% PFE defense, 20 minutes.
+%
+% ORDER. The deck runs in the manuscript's own order and nowhere else: introduction, methods in
+% dependency order, numerical experiments, the polyester sheet. A talk that regroups the paper by
+% theme reads as a different argument from the one being defended, so each part below names the
+% section of paper/sn-article.tex it follows. It ends on the measured sheet: a bulleted recap of
+% what was just shown spends a minute of twenty saying it again.
+%
+% THE CLAIM RULE. \punch is for a slide that asserts a result, and most slides do not. A slide
+% showing what a thing IS takes a \framesubtitle and no rule. Put one on every frame and every
+% frame has to have a thesis, which reads as a deck arguing with the room rather than a person
+% explaining their work, and it costs the plate 17 to 41 pt of height per frame besides.
+%
+% PANEL LETTERS AND FRAMES round a plate are print furniture: a letter is there so running prose
+% can write "see (b)", and a rule groups columns because a page has no one to say which are the
+% baselines. Here there is a speaker. nff_paper/slides/make_slide_figures.sh builds the plates that carry
+% them under NFF_SLIDE_FIGURES=1, read by figstyle.panel_letter, plus --no-boxes where it
+% applies. The paper's own copies in paper/Images are untouched and still lettered.
+%
+% Every number on a slide appears in the LIVE prose of paper/sn-article.tex, not in a comment.
+% A number the manuscript has retired is deleted here rather than updated: a figure that survives
+% only as commented-out bookkeeping has no source. Nothing is rounded up, nothing is carried over
+% from an earlier draft. Credit lines are the exception: a volume, an article number and a year
+% are provenance for a borrowed picture, not a claim this work is making.
+%
+% The vocabulary follows the manuscript's own retirements: sheet material not stock, internal
+% force distribution not force network, training domain not trust region or fitted range, hinge
+% design vector not descriptor, boundary position not boundary slider, panel not tile, path not
+% trajectory, separation not departure. No em dash in rendered text.
+%
+%   bash nff_paper/slides/build.sh
+%
+\documentclass[aspectratio=169,11pt]{beamer}
+\usetheme{charter}
+\usepackage{amsmath}
+\usepackage{bm}
+% Backup frames sit after the closing slide and must not inflate the count the audience reads
+% on the frames that are actually presented: this restarts the frame number at \appendix.
+\usepackage{appendixnumberbeamer}
+
+% EB Garamond carries no CJK, and the craft this work is named after is written in it. Hiragino
+% is the macOS system face; if the deck is ever built elsewhere, drop the \jp uses rather than
+% letting the glyphs fall back silently to tofu.
+% ⚠ NOTHING CALLS THIS any more: the only use was the opening slide's Ise-katagami subtitle,
+% and that slide was deleted 2026-08-24. Kept so the deck can name the craft again in kanji.
+\newfontfamily\jp{Hiragino Sans}[UprightFont={* W3}, BoldFont={* W6}]
+\graphicspath{{figures/}{assets/}{assets/kirigami/}{assets/apps/}{assets/photos/}}
+
+% A caption under one panel of a row: what the panel is, and nothing else.
+\newcommand{\platelabel}[1]{\\[0.9mm]{\scriptsize\color{chartergrey}#1}}
+
+% The three states, and the two charts, cut out of the merged validation plate so each gets the
+% full slide width. The plate is 370.6 x 438.1 bp and the blank bands between its three rows are
+% centred at 164.82 and 292.45 bp from the top, measured on a 150 dpi rasterisation of the build
+% that nff_paper/slides/make_slide_figures.sh produces: --no-boxes, and NFF_SLIDE_FIGURES=1 for the letters.
+% ⚠ These offsets are measured on the LETTERLESS build and do not transfer to the paper's own
+%   plate. With letters the bands sat some 8 bp higher, because a letter is drawn above its row.
+% Cutting is trim/clip, not a raster crop: the vector content is untouched.
+% ── Symbols, colour-keyed to the plates ────────────────────────────────────────────────────
+% A symbol set on a slide carries the SAME colour it carries inside the drawings, so the symbol
+% read in a sentence and the symbol found in a figure are visibly one thing. The keys are the
+% generators' own, not chosen here: r is R_SLIDER = PURPLE and tau is TAU_SLIDER = GREEN in
+% plot_pipeline_overview.py, hinges are teal throughout, loads and targets are red.
+% ⚠ Do not recolour these to taste. They are the legend for every plate in the deck.
+\newcommand{\symcut}[1]{\textcolor{charterpurple}{$#1$}}
+\newcommand{\symbnd}[1]{\textcolor{chartergreen}{$#1$}}
+\newcommand{\symhng}[1]{\textcolor{charterteal}{$#1$}}
+\newcommand{\symtgt}[1]{\textcolor{charterred}{$#1$}}
+
+\newcommand{\physstates}[1][\charterplatew]{%
+  \includegraphics[trim=0 145.63bp 0 164.82bp,clip,width=#1]{physical_validation_slide.pdf}}
+\newcommand{\physcharts}[1][\charterplatew]{%
+  \includegraphics[trim=0 0 0 292.45bp,clip,width=#1]{physical_validation_slide.pdf}}
+% The top row of the same plate: the deployed sheet in plan, and the one hinge photographed alone
+% against its prediction. Cut from the merged plate rather than staged as the standalone
+% hinge_buckle.pdf that plot_hinge_buckle_figure.py still builds: that generator is the pre-merge
+% half, and its panel (a) predates the unmirroring, the squaring of the taped target and the
+% 500 mm bar. Everything the manuscript publishes for this content is in the row below.
+% The cut is the blank band at 164.82 bp, the same one \physstates starts from: 438.1 - 164.82 =
+% 273.26. On the lettered plate it could not be, because the letters of the next row are drawn
+% above that band and a cut through it handed this row the next row's labels. Without them the
+% band is simply the row boundary, and this row gains the 8 bp the dodge used to cost it.
+% Unlike the two above this one takes a HEIGHT fraction, as \wideplate does: the row is 2.25
+% wide to 1 tall, so at full slide width it is the height that binds, not the width.
+\newcommand{\physhinge}[1][0.82]{%
+  \charterplateheight
+  \begin{center}%
+    \includegraphics[trim=0 273.26bp 0 0,clip,%
+                     width=\charterplatew,height=#1\charterbodyht,keepaspectratio]%
+                    {physical_validation_slide.pdf}%
+  \end{center}%
+}
+
+% The two rows of the hinge-path plate, cut apart so each gets the full body width. The plate is
+% a 2 x 2 grid -- rows are the two designs, columns are hinge activation and the strain
+% trajectory -- over a shared bottom strip carrying the key and the activation colour bar. In a
+% plateside column the plate printed at 30 per cent of the size it was authored at: that column is
+% 207 pt wide against a plate authored 525.6 bp wide. A row is 2.4 wide to 1 tall, so cut apart
+% each row is width-bound on the full body instead.
+%
+% The plate is 525.6 x 430.992 bp and the cut is at 217.42 bp from the top, measured by scanning a
+% 150 dpi rasterisation of figures/hinge_path_design.pdf for blank rows.
+% ⚠ The cut is NOT the widest blank band, which is at 201.10. Row 1's x-axis LABEL sits BELOW its
+%   tick labels, so a cut at 201.10 strands eta_a = a / w_lig at the top of row 2 and leaves row 1
+%   without it. 217.42 is the band underneath that label.
+% ⚠ Row 1 cannot carry the activation colour bar. It is drawn once, in the bottom strip, and a
+%   single rectangular trim cannot hold row 1 and that strip while dropping row 2. Row 1's claim
+%   line names the shading in words instead.
+% ⚠ The two fractions are NOT equal. The rows are 217.42 and 213.58 bp tall and both are
+%   height-bound here, so equal fractions would print row 2 two per cent larger and the click
+%   between them would read as a zoom. 0.76 x 213.58 / 217.42 = 0.7466 puts both at one scale.
+\newcommand{\hpdrowone}[1][0.76]{%
+  \charterplateheight
+  \begin{center}%
+    \includegraphics[trim=0 213.58bp 0 0,clip,%
+                     width=\charterplatew,height=#1\charterbodyht,keepaspectratio]%
+                    {hinge_path_design.pdf}%
+  \end{center}%
+}
+\newcommand{\hpdrowtwo}[1][0.7466]{%
+  \charterplateheight
+  \begin{center}%
+    \includegraphics[trim=0 0 0 217.42bp,clip,%
+                     width=\charterplatew,height=#1\charterbodyht,keepaspectratio]%
+                    {hinge_path_design.pdf}%
+  \end{center}%
+}
+
+% Card (c) of the manuscript's Figure 1: the deployed sheet, the clamped centre, the applied
+% moment, and every hinge coloured by the energy it stores. Both terms of Pi on a real sheet.
+% The card BORDER is left out on purpose. Its ink runs at 313.1-314.1 and 426.8-428.7 bp, and the
+% crop stops short of both: a cut that keeps three sides of a rounded box leaves it open-ended.
+% Measured on a 150 dpi rasterisation of the 437.31 x 424.57 bp plate, not derived from the
+% generator's constants: the leaders are drawn OUTSIDE the axes box, so the declared band
+% (314.9 to 394.3) shaves the top of "applied moment M". Ink is 337.1-422.9 x 319.5-396.7.
+\newcommand{\pipec}[1][0.62]{%
+  \includegraphics[trim=334.0bp 314.5bp 12.31bp 27.17bp,clip,%
+                   width=\linewidth,height=#1\charterbodyht,keepaspectratio]{pipeline_overview.pdf}}
+
+% Crops of the five-case build. matrix_all.pdf is 432 x 456.04 bp under --no-headers and
+% --no-row-labels, and its five case rows and its legend are separated by blank bands. The
+% optimised cut pattern is the second drawn column and spans 96.9 to 172.6 bp. All of it measured by scanning a 150 dpi rasterisation
+% of THAT file: the label gutter is sized to the longest case name in a build, so a build with
+% fewer cases puts its columns somewhere else and these numbers do not transfer.
+% ⚠ These are the --no-headers numbers. With the header band the canvas is 437.26 tall and every
+%   row boundary below it sits some 60 bp lower, so the two sets are not interchangeable. The
+%   row labels move them again: the gutter is sized from them and panel_w takes what it leaves,
+%   so without them panel_h goes from 63.8 bp to 79.6 and every boundary moves.
+% The row pitch is 79.6 bp, which is panel_h in plot_inverse_design_matrix.py. The boundary
+% between rows 1 and 2 has ink crossing it and shows no blank band, so it is taken as the measured
+% 164.48 less one pitch.
+%
+% Cutting with trim/clip rather than re-running the generator five times keeps every case at one
+% scale and one type size, which is the whole point of a walk-through: only the row changes.
+\newcommand{\mlegend}{\includegraphics[trim=0 0 0 410.0bp,clip,width=\charterplatew]{matrix_all.pdf}}
+\newcommand{\mrow}[2]{\includegraphics[trim=0 #2 0 #1,clip,width=\charterplatew]{matrix_all.pdf}}
+\newcommand{\mthumb}[2]{%
+  \includegraphics[trim=97.5bp #2 260.0bp #1,clip,width=\linewidth]{matrix_all.pdf}}
+% A plate wider than the text block has to be shifted left by half its overhang or it runs off
+% the right edge. \fullplate does this for a whole plate; these are cut plates placed by hand, so
+% they take the same shift through \bled.
+\newcommand{\bled}[1]{%
+  \par
+  \moveleft\charterbleed\vbox{\hsize=\charterplatew\centering #1\par}%
+  \par}
+
+% One case already walked through, kept small so the current one is the only large thing.
+\newcommand{\mseen}[3]{%
+  \begin{minipage}[t]{0.095\textwidth}\centering
+    \mthumb{#1}{#2}\\[0.3mm]{\tiny\color{chartergrey}#3}
+  \end{minipage}}
+
+% One row of the two-column detail build: the loading diagram and the force transmission, alone.
+% matrix_detail.pdf is 432 x 947.44 bp under --columns ad --no-headers --no-row-labels. With two
+% columns sharing the whole measure the force panel is 245.7 bp wide against 110 in the
+% four-column build, and ws inside the generator is tied to panel_w, so its load-path weights are
+% drawn for that width rather than blown up from a narrower one.
+% Boundaries measured by scanning a 110 dpi rasterisation: pitch 177.86, four of the five taken
+% from the blank band centres and the first extrapolated back one pitch.
+% ⚠ These are matrix_detail's numbers. matrix_all is a different canvas and a different pitch.
+\newcommand{\mdrow}[3][0.87]{%
+  \includegraphics[trim=0 #3 0 #2,clip,%
+                   width=\charterplatew,height=#1\charterbodyht,keepaspectratio]{matrix_detail.pdf}}
+
+% What the force plates draw, in their own colours. Hand-set rather than cropped from the plate's
+% own key band: that band is 52 bp tall and shrinking it to a readout would take its 6.6 pt type
+% under 2 pt.
+\newcommand{\forcekey}{%
+  \tikz[baseline=-0.55ex]{\draw[charterorange,line width=1.5pt] (0,0) -- (4.5mm,0);}\,tension route
+  \quad
+  \tikz[baseline=-0.55ex]{\fill[charterteal] (0,-0.9mm) rectangle (3.4mm,1.1mm);}\,compression
+  \quad
+  \tikz[baseline=-0.55ex]{\fill[chartershear] (0,0.1mm) circle (0.85mm);}\,shear interface}
+
+\title{Multiscale Differentiable Physics for the Inverse Design of Kirigami Sheets}
+\author{Julien Kloers}
+\charterinstitute{Projet de Fin d'\'Etudes~\textperiodcentered~\'Ecole Nationale des Ponts et Chauss\'ees\\[1.2mm]
+Form-Finding Lab, Princeton University\\[1.2mm]
+\footnotesize S.~Adriaenssens \quad R.~Pastrana \quad I.~Moreira de Oliveira \quad R.~Oval}
+
+\begin{document}
+
+\chartertitlepage
+
+% No standalone contents frame. Every section divider IS the contents, with the section being
+% entered picked out of it, so a separate outline right after the title page shows it twice.
+
+% ═══════════════════════════════════════════════════════════════════════════════════════════
+\section{Two scales in a cut sheet}
+% ═══════════════════════════════════════════════════════════════════════════════════════════
+\sectionslide{}
+
+% ⚠⚠ (a) IS NOT A CUT SHEET. It is 3D-printed PLA units joined by separate polyester shims, so
+% its hinge is a COMPONENT, not a remainder. That is the distinction this slide is standing on,
+% which is why the title and the claim line below no longer assert that all three are cut, and
+% why the claim now names the contrast instead. Added on the author's instruction 2026-08-24.
+%
+% ⚠⚠ (a) IS ALSO NOT CC BY. Nature Materials is closed access and the arXiv preprint carries the
+% arXiv non-exclusive licence, which is not a reuse grant. It is reproduced here under the
+% quotation/teaching exception for an academic defense, with attribution, and MUST NOT be carried
+% into the manuscript or any public posting without written permission from Springer Nature.
+% Panel (d) of its Figure 1 is used WHOLE, header chip excluded: cutting through the source's own
+% labels is not acceptable.
+%
+% Three images at ONE printed height. With only three the HEIGHT CAP binds rather than the width
+% sum, so each box is aspect_k x 0.78\charterbodyht (= 147.6 pt) with a little slack, and
+% keepaspectratio settles it. geom 1.025, units 1.093, robot 0.992.
+% ⚠⚠ THIS SLIDE CARRIES NO CREDIT LINE, AND THAT IS A DECISION ABOUT A LIVE TALK ONLY.
+%   A citation set in italics and bold beside three plain grey plate labels did not belong to the
+%   same typography as the rest of the frame, and it read as a paragraph rather than as a caption.
+%   The three \platelabel lines are the caption; the borrowed-source record is assets/SOURCES.md.
+%   ⛔ Two of these three images carry obligations that a spoken defense discharges and a shared
+%   file does not. app_robot.png is CC BY 4.0, whose attribution requirement travels with the
+%   work wherever it goes. app_units.png is closed access, shown under the teaching and quotation
+%   exception, and SOURCES.md already forbids it in any public posting. If this deck is ever
+%   handed out, posted or exported rather than presented, the credits go back on before it goes.
+%
+% The katagami stencil opens the row. It is the one image kept from the deleted opening slide, and
+% it is here rather than there because it belongs with the others: a sheet whose remaining material
+% is the whole of what holds it together. Its credit moved with it, as SOURCES.md requires.
+%
+% ⚠ The credits name the objects rather than lettering them. Adding an image renumbers every
+% letter after it, and a credit that says "(b)" then attributes the wrong picture.
+\begin{frame}{What cut sheets are used for}
+  \centering
+  \begin{minipage}[t]{0.288\textwidth}\centering
+    \includegraphics[width=\linewidth,height=0.78\charterbodyht,keepaspectratio]{geom.jpg}
+    \platelabel{kimono dyeing stencil}
+  \end{minipage}\hfill
+  \begin{minipage}[t]{0.307\textwidth}\centering
+    \includegraphics[width=\linewidth,height=0.78\charterbodyht,keepaspectratio]{app_units.png}
+    \platelabel{impact absorber}
+  \end{minipage}\hfill
+  \begin{minipage}[t]{0.279\textwidth}\centering
+    \includegraphics[width=\linewidth,height=0.78\charterbodyht,keepaspectratio]{app_robot.png}
+    \platelabel{crawling robot}
+  \end{minipage}
+\end{frame}
+
+\begin{frame}{The model and the material}
+  \fullplate[0.94]{two_scales_question.pdf}
+\end{frame}
+
+% What the method is handed and what it is allowed to suppose, before any of it is built. Every
+% line is the manuscript's own: the goal is the abstract's closing sentence
+% (paper/sn-article.tex:637), what is fixed comes from "The sheet material, the outline, the
+% topology and the actuation are fixed before the design begins" and what is free from "Two
+% choices remain: where the cuts fall, and how wide the ligament left between them is", and the
+% five assumptions are the \begin{hypotheses} list at paper/sn-article.tex:1621 in its own order.
+%
+% ⚠ THE ORDER OF THE FIVE IS THE MANUSCRIPT'S AND IS LOAD-BEARING. Coplanarity is second because
+%   the Gamma criterion later on the deck is what discharges it, and the state-function assumption
+%   is fourth because the annex's path-dependence figure is what measures its error. Renumbering
+%   here silently renumbers what those two slides refer back to.
+% ⚠ No numbers on this slide, deliberately. It is the one frame that states the problem rather
+%   than a result, and a figure quoted here would have to be defended twice.
+% ⚠ The three design freedoms are named here SEPARATELY and are not collected into theta. The
+%   assembled design vector is drawn once, on the hinge frame, and stating it here as well would
+%   be the same definition on two slides.
+\begin{frame}{The problem}
+  \punch{Given a target \symtgt{\mathcal{T}} and an actuation \symtgt{\zeta}, find where to cut
+         the sheet so that it opens onto that target, while limiting hinge damage and the
+         compression and shear that drive it.}
+  \vspace{3mm}
+  \begin{columns}[t,onlytextwidth]
+    \begin{column}{0.40\textwidth}
+      {\footnotesize\color{chartergrey}fixed before the design}
+      \begin{itemize}\setlength{\itemsep}{1.2mm}
+        \item the sheet material
+        \item the outline and the topology
+        \item the actuation, \symtgt{\zeta}
+      \end{itemize}
+      \vspace{3mm}
+      {\footnotesize\color{chartergrey}left to the design}
+      \begin{itemize}\setlength{\itemsep}{1.2mm}
+        \item where the cuts fall, \symcut{r} and \symbnd{\tau}
+        \item how wide the ligaments are, \symhng{w_{\mathrm{lig},h}}
+      \end{itemize}
+    \end{column}\hfill
+    \begin{column}{0.56\textwidth}
+      {\footnotesize\color{chartergrey}assumed}
+      \begin{enumerate}\setlength{\itemsep}{1.2mm}
+        \item The panels are rigid. All deformation localises in the hinges,
+              \symhng{\bm\varepsilon_h}.
+        \item The panels remain coplanar throughout deployment.
+        \item Hinge energy is local:
+              \symhng{\mathcal{W}=\textstyle\sum_h\mathcal{W}(\bm\varepsilon_h;\bm g_h)}.
+        \item \symhng{\mathcal{W}} and damage are single-valued in
+              \symhng{\bm\varepsilon_h}, not in the path taken to it.
+        \item Deployment is quasi-static.
+      \end{enumerate}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ═══════════════════════════════════════════════════════════════════════════════════════════
+\section{A differentiable design chain}
+% ═══════════════════════════════════════════════════════════════════════════════════════════
+\sectionslide{}
+
+% The manuscript's Figure 1, recomposed for a screen: the cards in one row rather than two, built
+% by the plate's own generator under --slide so there is one source of truth for the drawings.
+%
+% FOUR cards here, not five. This is the first sight of the pipeline and nothing in it has been
+% explained, so the hinge energy has no card yet and the deployment is drawn as what it is at this
+% point in the talk, a mechanism opening: no energy field on the hinges and no applied moment.
+% --kinematic is what collapses the two. The full five-card row, with the energy field and its
+% colour key, returns on the objective frame once every stage has been through.
+% ⚠ The row always fills 408 bp, so the dropped card is absorbed by the other four rather than
+%   leaving a hole: each is 81.8 bp wide here against 63.4 on the five-card row, and the two
+%   plates are therefore NOT at one scale. They are never side by side, so that is the right
+%   trade, but do not crop one and show it beside the other. The page arrangement cannot be shown here at all -- it is 437 x 425 bp against a
+% 410 x 188 pt body, so it prints at 47 per cent and takes its 7 pt type to 3.3.
+% The plate is 408 x 128 bp and \textwidth is 409.7 pt, so at [0.62] the WIDTH binds and it prints
+% at 1.004 of the size it was authored at.
+\begin{frame}{The pipeline}
+  \fullplate[0.94]{pipeline_row_kin.pdf}
+\end{frame}
+
+% The deck showed WHAT is computed and never stated it. Every symbol here is the manuscript's
+% own: Pi and the inner problem from eq:equilibrium, the outer problem from eq:objective, the
+% implicit function theorem from eq:ift. The Introduction's own compact display pairs the two
+% argmins the same way.
+%
+% \epsh is a paper macro (\bm{\varepsilon}) and does not exist here, so it is written out. There is
+% no amssymb in this deck. Display skips are set locally and length is paid for in words: a
+% negative \vspace big enough to buy a line pulls the next paragraph on top of the one above it
+% and TeX reports ZERO overfull boxes.
+\begin{frame}{From flat sheet to deployed shape}
+  \fullplate[0.90]{shield_pipeline.pdf}
+\end{frame}
+
+% What the parameterisation gives, next to what sets it. Left: card (a) of the manuscript's
+% Figure 1 in TWO crops, the sheet with its r and tau knobs above the zoom of one cut with rL and
+% (1-r)L. Right: the same kind of sheet cut and then opened, PURELY KINEMATICALLY.
+%
+% The design-vector band that sits between those two crops in the source is dropped here and shown
+% on the hinge frame instead, where g_h is defined and theta = (r, tau, {g_h}) can be read.
+%
+% Each crop is cut to its OWN content, not to a shared window, and the two are sized separately.
+% There is no scale to hold between them: the lower box is labelled "zoom" in the source and is a
+% magnified detail of one cut, so the sheet is free to be the larger of the two, which is the order
+% they should be read in. A shared window would instead hold the sheet down to the width the wider
+% zoom box needs, and leave the card's cream ground standing either side of it as a cut band.
+% Content boxes, off a 300 dpi rasterisation of the 437.31 x 424.57 bp plate with 1.5 bp of air:
+% sheet 76.44 x 76.20 bp (the orange square, its edge tabs and the tau label's overhang), zoom
+% 104.04 x 49.32 bp (its own rounded border). At 113 pt and 93 pt the sheet prints 112.6 pt tall
+% against the 69.9 pt it reached inside the shared window.
+% ⚠ Rows with no pixel below 200 give the breaks. A lighter threshold catches the card's cream
+%   ground and its container border and runs all three bands together.
+%
+% The kinematic pair is the 'chart' rung of the deployability harvest built on its own
+% (--arms chart --one-scale). That rung is the closed chart with no equilibrium anywhere in it, so
+% its flat sheet and its deployed sheet are a mechanism opening and nothing more.
+%
+% ⚠ THE TWO CELLS ARE AT ONE SCALE AND MUST STAY THERE. --one-scale draws them on one window, so
+%   the sheet growing as it opens is a change of size and not two drawings each fitted to its own
+%   cell: the ink measures 53.04 bp square flat and 85.68 bp square deployed, a linear expansion
+%   of 1.615. Each is cropped to its own ink and then shown at 1.70 pt per bp, so 57.04 bp of crop
+%   becomes 96.97 pt and 89.68 becomes 152.46. Equal WIDTHS or equal HEIGHTS here would both throw
+%   the scale away; what has to be equal is pt per bp.
+% Boxes measured by scanning a 300 dpi rasterisation of the 130.08 x 288.96 bp build with 2 bp of
+% air added around each. Both come out square to three decimals, which is the check that the crop
+% is on the sheet and not on something beside it.
+% ⚠ SKIP THE LEFT GUTTER AT x < 25 bp WHEN MEASURING. The rotated row labels "flat sheet" and
+%   "deployed" sit there. Included, they carry the ink box out to x = 12 and the trims that follow
+%   cut the left edge off both sheets.
+% ⚠ RE-MEASURE THESE FOUR TRIMS WHENEVER kinematic_pair IS REBUILT. The generator's left margin
+%   moves with its readout layout, which slides both sheets, and a stale trim shows as a sheet with
+%   a straight edge sliced off it rather than as any kind of build error.
+%
+% \mbox around the row: it cannot break. The row came to 431.6 pt against a 432.4 pt measure once
+% and TeX silently wrapped it onto a second line, which surfaced as a 117 pt overfull vbox and said
+% nothing about the cause. Unbreakable, an overrun names the width instead.
+\begin{frame}{The cut pattern}
+  \bled{\mbox{%
+    \begin{minipage}[b]{113pt}\centering
+      \includegraphics[trim={22.00bp 316.53bp 338.87bp 31.84bp},clip,%
+                       width=\linewidth]{pipeline_overview.pdf}\\[1.6mm]
+      \includegraphics[trim={8.08bp 236.37bp 325.19bp 138.88bp},clip,%
+                       width=93pt]{pipeline_overview.pdf}
+    \end{minipage}%
+    \hspace{20pt}%
+    \begin{minipage}[b]{96.97pt}\centering
+      \includegraphics[trim=45.32bp 208.48bp 27.72bp 23.44bp,clip,%
+                       width=\linewidth]{kinematic_pair.pdf}\\[1.4mm]
+      {\scriptsize\color{chartergrey}flat sheet}
+    \end{minipage}%
+    \hspace{13pt}\raisebox{50pt}{\color{chartergrey}\large$\rightarrow$}\hspace{13pt}%
+    \begin{minipage}[b]{152.46pt}\centering
+      \includegraphics[trim=29.00bp 84.64bp 11.40bp 114.64bp,clip,%
+                       width=\linewidth]{kinematic_pair.pdf}\\[1.4mm]
+      {\scriptsize\color{chartergrey}deployed}
+    \end{minipage}%
+  }}
+  \punch{$r$ void aspect ratio.\quad $\tau$ boundary position.\quad
+         $\bm g_h$ hinge design vector.}
+\end{frame}
+
+% The author's own photograph. Rotation is baked into the pixels and the EXIF tag stripped:
+% \includegraphics does not read EXIF, and straight off the phone this lands a quarter turn
+% over. See assets/SOURCES.md for the conversion and the crop.
+% This is where the talk turns from geometry to mechanics. A rigid-panel pattern assumes its panels
+% stay flat and coplanar. Cut in PAPER at this panel size they do not: the panels themselves buckle
+% out of plane, which is the coplanarity assumption failing rather than the hinges tearing.
+% ⚠ NOT card, and NOT a hinge failure. Corrected on the author's instruction: the sheet is paper and
+%   what is visible is out-of-plane buckling of the panels. This is the same phenomenon the Gamma
+%   ladder measures deliberately, Gamma = (L/L*)^3 below one, where the paper puts the panels
+%   tilting out of plane with their ligaments (sec:buckling-locality).
+% 1312 x 678 px, aspect 1.94, against a body of 2.29, so the height binds.
+% No band and no title: the picture and one line, and nothing else. It is meant to land as a pause
+% before the mechanics starts. [plain] drops the headline and the footline; giving no frametitle is
+% what stops the band, since the band is the frametitle template. The frame still advances the
+% counter, so every number after it is unchanged.
+\begin{frame}[plain]
+  \photoplate[0.86]{whynottakingmaterialintoaccountfails.jpg}
+  \punch{Cut in paper, the panels buckle out of plane.}
+\end{frame}
+
+% The design vector spelled out, in the manuscript's own order and words (its glossary entry at
+% paper/sn-article.tex:921).
+% ⚠ alpha carries (kappa) on purpose. The cut angle is NOT free: it follows from the cut pattern,
+%   so of the five only the ligament width is set per hinge, and the fillet ratio, the kerf and the
+%   window radius are shared. Dropping the argument would assert five independent knobs per hinge.
+%
+% The design-vector band beside the plate is the manuscript's own, cropped out of card (a) of
+% Figure 1 rather than set again here, so there is one drawing of theta = (r, tau, {g_h}) and not
+% two. It reads here and not on the parametrisation frame because g_h is what this frame defines:
+% the braces are the whole set of hinge descriptors, and the punch line under it says what one
+% descriptor holds.
+% Geometry: the band's ink is 76.24 x 30.64 bp with 2 bp of air, shown 100 pt wide, so it prints
+% at 1.31 of the size it was authored at. The plate is 370.6 x 188.12 bp, so at the 0.81 height cap
+% the HEIGHT binds and it comes out 302 pt wide: 302 + 18 + 100 = 420 on the 432.4 pt bled measure.
+% The raisebox centres the band on the plate rather than dropping it to the plate's baseline.
+\begin{frame}{The hinge}
+  \bled{\mbox{%
+    \includegraphics[width=\charterplatew,height=0.81\charterbodyht,keepaspectratio]%
+                    {hinge_layout_slide.pdf}%
+    \hspace{18pt}%
+    \raisebox{56.5pt}{\includegraphics[trim={21.98bp 284.59bp 339.09bp 109.34bp},clip,%
+                                       width=100pt]{pipeline_overview.pdf}}%
+  }}
+  \punch{$\bm g_h = (w_{\mathrm{lig},h},\ \alpha_h(\bm\kappa),\ \rho_f,\ w_c,\ r_{\mathrm{win}})$:
+         ligament width, cut angle, fillet ratio, kerf, window radius.}
+\end{frame}
+
+% The author's own photograph. Rotation is baked into the pixels and the EXIF tag stripped:
+% \includegraphics does not read EXIF, and straight off the phone this lands a quarter turn
+% over. See assets/SOURCES.md for the conversion and the crop.
+% Two measurements, one per photograph: the coupons the material law is fitted to, and one ligament
+% opened through a prescribed rotation with the buckle visible. Both portrait, so both are set to a
+% common HEIGHT and centred, with a bare label under each.
+% Only pictures, so no band and no title. The two captions say what each one is, which is all the
+% frame needs. Heights are against \textheight for the same reason as the frame above.
+\begin{frame}[plain]
+  \bled{\mbox{%
+    \begin{minipage}[b]{196pt}\centering
+      \includegraphics[height=0.90\textheight,keepaspectratio]{meusingtheinstron.jpg}\\[1.4mm]
+      {\scriptsize\color{chartergrey}tensile coupons, force and extension}
+    \end{minipage}%
+    \hspace{22pt}%
+    \begin{minipage}[b]{196pt}\centering
+      \includegraphics[height=0.90\textheight,keepaspectratio]{measuringoutofplanedeformation.jpg}\\[1.4mm]
+      {\scriptsize\color{chartergrey}one ligament, through a prescribed rotation}
+    \end{minipage}%
+  }}
+\end{frame}
+
+% One PET ligament in pure relative rotation, across the range of widths solved. That reading
+% is in the claim line rather than a subtitle: the plate is 370.6 x 220.3 bp against a body
+% 398.3 x 196.3, so it is height-bound, and a subtitle costs it seven per cent of its size.
+\begin{frame}{The learned hinge law}
+  \fullplate[0.86]{energy_landscape.pdf}
+  \punch{Past $40^\circ$: median deflection \textbf{53.8} sheet thicknesses.}
+\end{frame}
+
+\begin{frame}{Equilibrium}
+  \begin{columns}[c,onlytextwidth]
+    \begin{column}{0.27\textwidth}
+      \centering
+      \pipec[0.45]
+    \end{column}\hfill
+    \begin{column}{0.69\textwidth}
+      \small
+      % Displays, not \vspace: a negative skew big enough to buy a line pulls the NEXT paragraph
+      % on top of the one above it, and TeX reports no overfull box because the space it was
+      % given back makes the column "fit". Set the display skips and pay for length in words.
+      \setlength{\abovedisplayskip}{1.5mm}\setlength{\belowdisplayskip}{1.5mm}%
+      \setlength{\abovedisplayshortskip}{1.1mm}\setlength{\belowdisplayshortskip}{1.1mm}%
+      At load factor $\zeta$ the sheet minimises
+      \[
+        \Pi(\bm q;\bm\theta,\zeta)=
+        \underbrace{\sum_{h}\mathcal{W}\bigl(\bm\varepsilon_h(\bm q);\bm g_h\bigr)}
+                   _{\text{stored in the hinges}}
+        \;-\;\zeta\,\underbrace{\sum_{k}\bigl(\bm F_k\!\cdot\!\bm u_k+M_k\phi_k\bigr)}
+                   _{\text{work of the applied loads}}
+      \]
+      Inner problem, the deployed state:
+      \[ \bm q^\star(\zeta;\bm\theta)=\arg\min_{\bm q\in\mathcal{C}}\ \Pi(\bm q;\bm\theta,\zeta) \]
+      Outer problem, the design:
+      \[ \bm\theta^\star=\arg\min_{\bm\theta\in\Theta}\ \mathcal{L}(\bm\theta),
+         \qquad \mathcal{L}=\mathcal{L}_{\mathrm{geom}}+\mathcal{L}_{\mathrm{phys}} \]
+      Design gradient, from the converged state:
+      \[ \partial\bm q^\star\!/\partial\bm\theta
+         =-H^{-1}\,\partial^2\Pi/\partial\bm q\,\partial\bm\theta,
+         \qquad H=\nabla^2_{\bm q}\Pi \]
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% The pipeline reduced, with what the loop is actually minimising written under it. It closes the
+% methods part: the plate is the one the deck opened the section with, and by here every stage of
+% it has been explained.
+%
+% \epsh is a paper macro and does not exist in this deck, so the hinge deformation measure is
+% written out as \bm\varepsilon_h, which is what the equilibrium frame uses. Every symbol and both
+% sums are the manuscript's own, from eq:objective at paper/sn-article.tex:2478.
+% ⚠ The asymmetry between the two terms is the point of the slide and is stated: the shape term is
+%   evaluated on the LAST state alone, the physical term over the WHOLE path.
+\begin{frame}{The objective}
+  \fullplate[0.46]{pipeline_row.pdf}
+  \setlength{\abovedisplayskip}{1.2mm}\setlength{\belowdisplayskip}{1.2mm}%
+  \setlength{\abovedisplayshortskip}{0.9mm}\setlength{\belowdisplayshortskip}{0.9mm}%
+  {\small
+   \[ \mathcal{L}(\bm\theta)
+      = \mathcal{L}_{\mathrm{geom}}\bigl(\mathcal{P}(\bm q^\star_N);\,\mathcal{T}\bigr)
+      + \mathcal{L}_{\mathrm{phys}}\bigl[\{\bm\varepsilon_h(\bm q^\star_i)\}_{i,h}\bigr] \]}
+  \begin{columns}[t,onlytextwidth]
+    \begin{column}{0.55\textwidth}
+      {\footnotesize
+       $\mathcal{L}_{\mathrm{geom}}$, bidirectional Chamfer, on the deployed outline alone
+       \[ \tfrac{1}{|\mathcal{P}|}\textstyle\sum_{\bm p}\min_{\bm t}\lVert\bm p-\bm t\rVert^{2}
+          \;+\; w_{\mathrm{cov}}\,\tfrac{1}{|\mathcal{T}|}
+          \textstyle\sum_{\bm t}\min_{\bm p}\lVert\bm t-\bm p\rVert^{2} \]
+       \vspace{-1mm}
+       precision, then coverage}
+    \end{column}\hfill
+    \begin{column}{0.41\textwidth}
+      {\footnotesize
+       $\mathcal{L}_{\mathrm{phys}}=\sum_j w_j\Phi_j$, over the whole path
+       \[ \Phi_{\mathrm{damage}},\quad \Phi_{\mathrm{comp}},\quad \Phi_{\mathrm{shear}} \]
+       \vspace{-1mm}
+       already returned by the incremental solve}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ═══════════════════════════════════════════════════════════════════════════════════════════
+\section{Results and validation}
+% ═══════════════════════════════════════════════════════════════════════════════════════════
+\sectionslide{}
+\subsection{Numerical experiments}
+
+% The five problems side by side, one column each, with the three visuals that set them up: the
+% loading diagram, the optimised cut pattern flat, and the deployed sheet against its target. The
+% force transmission is NOT here. Each problem gets its own frame for that.
+%
+% Transposed in LaTeX rather than authored transposed in the generator. Every cell is a trim/clip
+% out of the SAME matrix_all.pdf, so all fifteen sit at one scale and one type size and there is no
+% second composition to keep in step with the first. Cells print at about 0.78 of authored size,
+% which thins the strokes: that is the safe direction for a plate meant to be scanned before the
+% five frames that read it closely.
+%
+% Geometry from the generator's own layout: gutter 12, panel_w 109.94, schem_w 68.17, head 6,
+% row pitch 79.61, on the 432 x 456.04 bp canvas.
+% ⚠ These are the --no-headers --no-row-labels numbers and transfer to no other build.
+\begin{frame}{Five problems, one sheet}
+  \bled{%
+    \begin{tabular}{@{}*{5}{c@{\hspace{7pt}}}@{}}
+      \includegraphics[trim=12.00bp 370.43bp 351.83bp 6.00bp,clip,height=0.242\charterbodyht]{matrix_all.pdf} &
+      \includegraphics[trim=12.00bp 290.82bp 351.83bp 85.61bp,clip,height=0.242\charterbodyht]{matrix_all.pdf} &
+      \includegraphics[trim=12.00bp 211.21bp 351.83bp 165.21bp,clip,height=0.242\charterbodyht]{matrix_all.pdf} &
+      \includegraphics[trim=12.00bp 131.61bp 351.83bp 244.82bp,clip,height=0.242\charterbodyht]{matrix_all.pdf} &
+      \includegraphics[trim=12.00bp 52.00bp 351.83bp 324.43bp,clip,height=0.242\charterbodyht]{matrix_all.pdf} \\[1.2mm]
+      \includegraphics[trim=80.17bp 370.43bp 241.89bp 6.00bp,clip,height=0.242\charterbodyht]{matrix_all.pdf} &
+      \includegraphics[trim=80.17bp 290.82bp 241.89bp 85.61bp,clip,height=0.242\charterbodyht]{matrix_all.pdf} &
+      \includegraphics[trim=80.17bp 211.21bp 241.89bp 165.21bp,clip,height=0.242\charterbodyht]{matrix_all.pdf} &
+      \includegraphics[trim=80.17bp 131.61bp 241.89bp 244.82bp,clip,height=0.242\charterbodyht]{matrix_all.pdf} &
+      \includegraphics[trim=80.17bp 52.00bp 241.89bp 324.43bp,clip,height=0.242\charterbodyht]{matrix_all.pdf} \\[1.2mm]
+      \includegraphics[trim=190.11bp 370.43bp 131.94bp 6.00bp,clip,height=0.242\charterbodyht]{matrix_all.pdf} &
+      \includegraphics[trim=190.11bp 290.82bp 131.94bp 85.61bp,clip,height=0.242\charterbodyht]{matrix_all.pdf} &
+      \includegraphics[trim=190.11bp 211.21bp 131.94bp 165.21bp,clip,height=0.242\charterbodyht]{matrix_all.pdf} &
+      \includegraphics[trim=190.11bp 131.61bp 131.94bp 244.82bp,clip,height=0.242\charterbodyht]{matrix_all.pdf} &
+      \includegraphics[trim=190.11bp 52.00bp 131.94bp 324.43bp,clip,height=0.242\charterbodyht]{matrix_all.pdf} \\[1.2mm]
+      {\scriptsize\color{chartergrey}I} & {\scriptsize\color{chartergrey}II} & {\scriptsize\color{chartergrey}III} & {\scriptsize\color{chartergrey}IV} & {\scriptsize\color{chartergrey}V}
+    \end{tabular}}
+  \punch{150 panels, 275 hinges. Identical supports and target throughout.}
+\end{frame}
+
+\begin{frame}{I. Concentrated axial load}
+  \designstrip{1}
+  \bled{\mdrow{6.0bp}{763.94bp}}
+  \punch{\forcekey}
+\end{frame}
+
+\begin{frame}{II. Transverse load, far corner}
+  \designstrip{2}
+  \bled{\mdrow{183.5bp}{586.26bp}}
+  \punch{\forcekey}
+\end{frame}
+
+\begin{frame}{III. Couple on the loaded panel}
+  \designstrip{3}
+  \bled{\mdrow{361.18bp}{410.58bp}}
+  \punch{\forcekey}
+\end{frame}
+
+\begin{frame}{IV. Eccentric axial load}
+  \designstrip{4}
+  \bled{\mdrow{536.86bp}{230.65bp}}
+  \punch{\forcekey}
+\end{frame}
+
+\begin{frame}{V. Self-equilibrated shear couple}
+  \designstrip{5}
+  \bled{\mdrow{716.79bp}{52.67bp}}
+  \punch{\forcekey}
+\end{frame}
+
+% ═══════════════════════════════════════════════════════════════════════════════════════════
+\subsection{Design and validation on polyester sheet}
+% ═══════════════════════════════════════════════════════════════════════════════════════════
+
+% The author's own photograph. Rotation is baked into the pixels and the EXIF tag stripped:
+% \includegraphics does not read EXIF. See assets/SOURCES.md.
+% The turn from simulated actuations to a sheet on the floor. Left: a ligament in the polyester
+% itself. Right: two-panel specimens folded by hand, each annotated with its own hinge width, panel
+% length and Gamma, which is that quantity measured across scales.
+% Gamma is what decides whether the panels stay coplanar, so this is also why the sheet about to be
+% tested can be modelled with rigid panels at all.
+%
+% eq:gamma at paper/sn-article.tex:3738 is a moment balance about the hinge axis of one panel:
+% gravity resisting the tilt against the folded ligament driving it. The RATIO is what the slide
+% states, and nothing more.
+% ⚠ Neither closed form goes on the slide. The expression 6 p L^3 w_lig/(E t^4) with p = rho g t
+%   was tried and cut for being unreadable at a glance, and the reduced form (L/L*)^3 needs L*
+%   defined before it says anything. A ratio of two moments needs neither and is what the quantity
+%   IS. The algebra is in the paper for anyone who asks.
+% ⚠ THE NUMBER IS CONDITIONAL AND THE CONDITIONS ARE PART OF IT. The paper's 3x10^2 is for PET at
+%   w_lig = 18 mm AND a 406.4 mm pitch. Quoting it against the pitch alone leaves out the ligament
+%   width it also depends on.
+% ⚠ Gamma > 1 is the whole point: below it the panels tilt out of plane with their ligaments, which
+%   is what the paper photograph two sections earlier shows happening. Without that the number is
+%   just a magnitude.
+\begin{frame}{The material, by hand}
+  \bled{\mbox{%
+    \begin{minipage}[b]{128pt}\centering
+      \includegraphics[height=0.74\charterbodyht,keepaspectratio]{arealhinge.jpg}\\[1.4mm]
+      {\scriptsize\color{chartergrey}one ligament, in the sheet}
+    \end{minipage}%
+    \hspace{24pt}%
+    \begin{minipage}[b]{123pt}\centering
+      \includegraphics[height=0.74\charterbodyht,keepaspectratio]{calibratingthehingedomain.jpg}\\[1.4mm]
+      {\scriptsize\color{chartergrey}$\Gamma$ by hand, across scales}
+    \end{minipage}%
+  }}
+  \punch{$\Gamma = \mathcal{M}_{\mathrm{grav}}/\mathcal{M}_{\mathrm{el}}$, and the panels stay
+         coplanar for $\Gamma>1$.\quad Polyester, $w_{\mathrm{lig}}=18\,\mathrm{mm}$ at a
+         $406.4\,\mathrm{mm}$ pitch: $\Gamma\approx3\times10^{2}$.}
+\end{frame}
+
+% The two designs one after the other, at one scale, each on the full body width. Clicked rather
+% than set side by side: the comparison is between two rows of the same plate, and half a slide
+% each leaves both at 30 per cent of the size they were authored at. See \hpdrowone above for the
+% measured cut and for why row 1 carries no colour bar.
+\begin{frame}{The design solve}
+  \only<1>{\hpdrowone}
+  \only<2>{%
+    \hpdrowtwo
+    \punch{Inside the training domain $60.2 \to \textbf{95.9\%}$.\quad
+           Damage $0.175 \to \textbf{0.033}\,D_s$.\quad
+           Ligament width $17.4\pm2.4 \to \textbf{21.6}\pm0.7$\,mm.}}
+\end{frame}
+
+\begin{frame}{From cut file to deployed sheet}
+  \begin{columns}[c,onlytextwidth]
+    \begin{column}{0.34\textwidth}
+      \centering
+      \includegraphics[width=\linewidth,height=0.94\charterbodyht,keepaspectratio]{sheet_closed_photo.png}
+    \end{column}\hfill
+    \begin{column}{0.62\textwidth}
+      \setlength{\tabcolsep}{0pt}%
+      \begin{tabular}{@{}p{34mm}l@{}}
+        stock            & 4\,ft $\times$ 8\,ft polyester, $t = 0.5$\,mm\\[3mm]
+        pattern          & $3\times3$, cut by hand\\[3mm]
+        ligaments        & twelve, at the optimised widths\\[3mm]
+        measurement      & photogrammetry, three states\\[3mm]
+        floor            & 7.6\,mm on centres, $0.3^\circ$ on opening
+      \end{tabular}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% The plate here is the top row of the merged validation plate: the deployed sheet in plan, and the
+% one ringed hinge photographed alone against its prediction. It carries the sheet as well as the
+% ligament, so the sheet-level agreement belongs on it. The state-by-state comparison those two
+% numbers come from is in the annex.
+\begin{frame}{Measured on the deployed sheet}
+  \physhinge[0.75]
+  \punch{Out of plane \textbf{23.7\,mm}, 47 sheet thicknesses.}
+\end{frame}
+
+% The agreement itself, moved out of the backup frames and into the talk: the chain is only worth
+% anything if the sheet it predicts is the sheet that was built, and that claim needs its figure
+% rather than a number quoted off one.
+%
+% This band and the hinge band on the frame above are two crops of ONE plate, read top to bottom,
+% so the two frames sit at one scale. The plate's third band, the per-state charts, is a backup
+% frame: the shapes ARE the agreement and carry it visually, and the charts quantify it for
+% anyone who asks.
+% ⚠ 17.1 and 0.70 are on THIS claim line and nowhere else in the talk. They were on the hinge
+%   frame's line until the shapes came out of the annex, and putting them back there would state
+%   both of them twice.
+\begin{frame}{Shape agreement, state by state}
+  \bled{\physstates}
+  \punch{Panel corners \textbf{17.1 $\pm$ 3.6\,mm}, \textbf{0.70\%} of the sheet length.}
+\end{frame}
+
+% The photograph is the author's own; rotation baked into the pixels, EXIF tag stripped, since
+% \includegraphics does not read EXIF. See assets/SOURCES.md.
+%
+% An expanded-metal grate is a steel sheet slit and stretched into a lattice, so it is the paper's
+% own closing outlook already built: a deployable element cut flat from one sheet. What stands
+% between that and this work is whether such a sheet's panels stay coplanar, which is Gamma.
+% ⚠ Gamma is DEFINED on the frame that introduces it, "The material, by hand". It is not restated
+%   here. The 0.79 is the mild-steel value from paper/sn-article.tex:3771, and it is the number
+%   that says a steel sheet does NOT satisfy the assumption the polyester one does.
+% ⚠ At 1.5 mm. The thickness is part of the number: Gamma goes as t^-4 through the elastic moment
+%   and t^1 through the areal weight, so quoting 0.79 for "mild steel" without it is meaningless.
+\begin{frame}{Conclusion}
+  \begin{columns}[c,onlytextwidth]
+    \begin{column}{0.60\textwidth}
+      \begin{itemize}\setlength{\itemsep}{2.8mm}
+        \item One differentiable chain: a material law from tensile coupons, a condensed hinge
+              energy carrying buckling, yielding and damage, the equilibrium of the assembled sheet.
+        \item Valid at both scales by construction. One network evaluation per hinge, about eight
+              orders of magnitude faster than the solve it stands in for.
+        \item Matching through equilibrium halves the boundary error. Penalising the hinge
+              deformations raises the load carried by \textbf{64\%}.
+        \item Cut from polyester and opened by hand: \textbf{0.70\%} of the sheet length.
+      \end{itemize}
+    \end{column}\hfill
+    \begin{column}{0.36\textwidth}
+      \centering
+      \includegraphics[width=\linewidth,height=0.805\charterbodyht,keepaspectratio]%
+                      {realworldkirigami.jpg}\\[1.4mm]
+      {\scriptsize\color{chartergrey}expanded metal.\\
+       mild steel at $1.5\,\mathrm{mm}$: $\Gamma = 0.79$}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+{\setbeamertemplate{footline}{}
+\begin{frame}[plain,noframenumbering]
+  \charterfield
+  \vfill
+  \begin{center}
+    {\color{charterink}\fontsize{30}{34}\selectfont\bfseries Thank you\par}
+    \vskip4mm
+    {\color{charterink}\large\itshape Questions\par}
+  \end{center}
+  \vfill
+\end{frame}}
+
+% ═══════════════════════════════════════════════════════════════════════════════════════════
+% Backup frames, held for questions. They sit after the closing slide, so nothing here is
+% presented unless it is asked for, and appendixnumberbeamer restarts the frame number at 1 so
+% the count printed on a presented frame is the count of presented frames.
+%
+% Ordered as the questions come: why deployability is built into the parameterisation instead of
+% penalised, how closely the hinge openings themselves agree, why the geometric problem is
+% underconstrained, that the design gradient is verified, and that the hinge law the whole chain
+% rests on is checked against the finite-element solutions it was fitted to.
+% ═══════════════════════════════════════════════════════════════════════════════════════════
+\appendix
+
+% Four implementations of one task at equal budget, 49 panels deployed to a circle. The setup is
+% in the claim line rather than a subtitle, for the height: the plate is 370.6 x 274.5 bp on a
+% 398.3 x 196.3 body.
+%
+% Held for questions rather than presented. The talk asserts at the cut pattern that the
+% parameterisation makes every pattern deployable by construction; this is the evidence, and it
+% is the answer to "why not just penalise the invalid ones" rather than a result of its own. It is
+% the first backup frame because that question arises earliest.
+% ⚠ DO NOT crop the numbers row off the bottom to buy more. The two group boxes are anchored at
+%   gs[2,0].y0 + 0.022 in plot_validity_ladder.py, so they enclose all three rows, and a cut
+%   through the numbers leaves both boxes open-ended. That is the same reason
+%   plot_physical_validation.py is run with --no-boxes before its rows are cut.
+\begin{frame}{Four ways to keep a pattern deployable}
+  \fullplate[0.96]{validity_ladder_slide.pdf}
+\end{frame}
+
+% The last band of the physical-validation plate, and the quantitative half of the agreement the
+% talk makes visually two frames earlier. It carries its own title because it is no longer an
+% overlay of the shapes frame, and it holds the RMSE number alone.
+% ⚠ 0.3 degrees is the repeatability FLOOR of the measurement, not a model error. The claim is
+%   that 2.4 is close to the floor, so dropping the floor would leave 2.4 sounding like a
+%   shortfall instead of a limit.
+\begin{frame}{Hinge opening, state by state}
+  \bled{\physcharts}
+  \punch{Hinge opening \textbf{2.4$^\circ$} RMSE, against a $0.3^\circ$ floor.}
+\end{frame}
+
+\begin{frame}{Two hundred optimisations of one target}
+  \fullplate[0.875]{solution_set_slide.pdf}
+  \punch{Two families, $41.5^\circ$ and $54.7^\circ$, \textbf{9.40}$\times$ apart.}
+\end{frame}
+
+\begin{frame}{Gradient checks}
+  \charterplateheight
+  \begin{center}
+    \includegraphics[height=0.80\charterbodyht,keepaspectratio]{path_dependence_slide.pdf}\hspace{7mm}%
+    \includegraphics[height=0.80\charterbodyht,keepaspectratio]{taylor_convergence_slide.pdf}
+  \end{center}
+  \punch{State function: \textbf{0.001\%} at the median hinge. Taylor remainder: order
+         \textbf{2.05} constructed, \textbf{1.00} penalised.}
+\end{frame}
+
+\begin{frame}{Surrogate against finite elements}
+  \fullplate[0.88]{surrogate_validity_slide.pdf}
+  \punch{\textbf{1.70\%} worst, 0.97\% median, per state.}
+\end{frame}
+
+\end{document}

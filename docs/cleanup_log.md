@@ -32,3 +32,21 @@ Tag `pre-cleanup-2026-11` is the last commit where every script (GNN, SOFA, pape
 - **Fixed in passing**: `rom_best_fit.py` used `np` without importing numpy.
 - **Test baseline before any move**: 877 passed (CPU, 8 min 19 s). Smoke baseline (`circle_4x4_surrogate`,
   15 epochs): ROM best loss 2.7544e-01, surrogate 2.7365e-01.
+- **Paper isolation** (`nff_paper/`): figure generators, cited analyses, closed-sheet support modules (shield,
+  katagami, cell families, design ensembles, one-DOF, training film), katagami topology art, lab photo analysis,
+  the deck and the manuscript build scripts. 21 tests that exercise them moved to `tests/paper/`.
+- **Kept in core although the paper also uses them**: `utils/figstyle.py` (house style, imported by core
+  run visualisation), `closed/force_network.py` (load paths), `closed/path_dataset.py` (harvest),
+  `closed/chart_ablation.py` + `closed/gradcheck.py` (gradient verification; `taylor_test` needs them),
+  `calibration/` tensile modules (they fix the PET material law the oracle uses).
+- **Core scripts regrouped**: `scripts/surrogate/` (oracle, harvest, audits, path dependence, campaign control),
+  `scripts/design/` (target calibration, cut export), `scripts/calibration/`, `scripts/diagnostics/`. The three
+  entry points stay at `nff/scripts/`.
+- **`run_pet_campaign.sh`** now runs from the repo it lives in; it pointed at a deleted worktree copy.
+- **Review agents** (`.claude/agents/relecture-*`, local) now read and write `nff_paper/review/`.
+- **README assets**: `closing_mpnn.gif` and the open-pipeline diagram moved to `legacy/gnn/`.
+- **`pyproject.toml`**: entry points `nff-closed`, `nff-train-surrogate`, `nff-hinge-dataset` replace `nff-train`;
+  `jraph`/`flax` moved to a `legacy` extra (core imports neither); `jax-md` (energy.py) and `pillow` added.
+- **Verified after the move**: 218/218 modules import; ROM and surrogate smoke losses identical to the baseline;
+  `validity_ladder` and `taylor_convergence` regenerate with the published numbers.
+- **`nff/rve/sweep.py` archived** to `legacy/experiments/rve_sweep.py`: an orphan batch runner (nothing imported it), superseded by `rve/dataset.py`. The author confirmed: everything SOFA/gmsh/Bézier-hinge goes to legacy. **gmsh stays in core only as the CalculiX RVE mesher** (`rve/ccx_solver.py`), which the surrogate dataset depends on.

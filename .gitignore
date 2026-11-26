@@ -247,19 +247,23 @@ data/configs/*
 data/configs/closed/_*
 
 # Defense deck. The source is versioned; the staged plates are copies of paper/Images
-# (itself ignored) and the LaTeX artefacts are rebuilt by slides/build.sh.
-/slides/figures/
-/slides/*.aux
-/slides/*.log
-/slides/*.nav
-/slides/*.out
-/slides/*.snm
-/slides/*.toc
-/slides/*.pdf
-/slides/*.synctex*
+# (itself ignored) and the LaTeX artefacts are rebuilt by nff_paper/slides/build.sh.
+/nff_paper/slides/figures/
+/nff_paper/slides/*.aux
+/nff_paper/slides/*.log
+/nff_paper/slides/*.nav
+/nff_paper/slides/*.out
+/nff_paper/slides/*.snm
+/nff_paper/slides/*.toc
+/nff_paper/slides/*.pdf
+/nff_paper/slides/*.synctex*
 # Third-party images and lab photographs: kept locally, not published in a public repo.
-/slides/assets/
+/nff_paper/slides/assets/
 
 # Night review agents: eleven regenerated machine reports plus a frozen build.
 # A finding worth keeping is promoted into docs/ by hand.
-/review/
+/nff_paper/review/
+
+# Manuscript editing history (patch scripts, review audits, .tex backups). The repo is public and
+# the article is not, so anything that carries manuscript prose stays on this machine.
+/nff_paper/manuscript/private/

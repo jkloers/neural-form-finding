@@ -42,9 +42,9 @@ jax.config.update("jax_enable_x64", True)
 import numpy as np
 
 from nff.config.experiment import load_and_parse_config
-from nff.closed.one_dof import graph_distance, relative_rotations
-from nff.closed.pocket import decay_ratios, load_specs, scatter_load
-from nff.closed.shield_kinematics import _checkerboard_signs
+from nff_paper.closed_support.one_dof import graph_distance, relative_rotations
+from nff_paper.closed_support.pocket import decay_ratios, load_specs, scatter_load
+from nff_paper.closed_support.shield_kinematics import _checkerboard_signs
 from legacy.experiments.diagnostics.diagnose_conditioning import _build_energy_over_free_dofs
 from legacy.experiments.diagnostics.probe_pocket import (Sheet, build_probe, checkerboard_background,
                                                   resolve_config)

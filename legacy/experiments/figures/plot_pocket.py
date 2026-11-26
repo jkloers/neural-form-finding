@@ -18,7 +18,7 @@ import os
 
 import numpy as np
 
-from nff.closed.one_dof import graph_distance
+from nff_paper.closed_support.one_dof import graph_distance
 from nff.utils import figstyle as FS
 
 

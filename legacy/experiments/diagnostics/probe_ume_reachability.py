@@ -33,11 +33,11 @@ jax.config.update("jax_enable_x64", True)
 import numpy as np                                                          # noqa: E402
 
 from nff.closed.hinge_paths import resolve_length_scale                     # noqa: E402
-from nff.closed.shield_design import ShieldDesignConfig, optimize_shield    # noqa: E402
-from nff.closed.shield_kinematics import build_deploy_plan, pin_residual    # noqa: E402
+from nff_paper.closed_support.shield_design import ShieldDesignConfig, optimize_shield    # noqa: E402
+from nff_paper.closed_support.shield_kinematics import build_deploy_plan, pin_residual    # noqa: E402
 from nff.config.experiment import load_and_parse_config                     # noqa: E402
 from nff.config.targets import get_target_points                            # noqa: E402
-from nff.scripts.diagnostics.design_force_blind import (build_design_config,  # noqa: E402
+from nff_paper.analysis.design_force_blind import (build_design_config,  # noqa: E402
                                                         start_params)
 from nff.topology.closed_builder_jax import (build_boundary_edges,          # noqa: E402
                                              build_deploy_structure)

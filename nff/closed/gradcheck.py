@@ -7,7 +7,7 @@ relative error flat as ``eps`` shrinks, while finite-difference noise grows and 
 shrinks, so a single step size cannot tell the two apart.
 
 Why this exists as a library rather than a figure panel: the same recipe already lived inside
-``nff/scripts/diagnostics/diagnose_chart.py`` (plotted by ``plot_chart_conditioning.py``), but it was
+``nff_paper/analysis/diagnose_chart.py`` (plotted by ``plot_chart_conditioning.py``), but it was
 only ever pointed at the GEOMETRIC loss. It therefore never crossed the Stage-2 solve, and so never
 exercised jaxopt's implicit-diff adjoint — which is exactly where the gradient was silently wrong:
 ``physics.backward_reg = 0`` used to select ``solve_normal_cg``, squaring the tangent-stiffness

@@ -38,8 +38,8 @@ from legacy.experiments.diagnostics.diagnose_conditioning import (_build_energy_
                                                            _spectrum)
 from legacy.experiments.diagnostics.sweep_localisation import (BASE_CONFIG, build_arm_config, loads_for,
                                                         solve_at)
-from nff.closed.one_dof import fit_one_dof
-from nff.closed.shield_kinematics import _checkerboard_signs
+from nff_paper.closed_support.one_dof import fit_one_dof
+from nff_paper.closed_support.shield_kinematics import _checkerboard_signs
 
 
 def critical_mode(energy_free_fn, free_DOF_ids, final_free, n_faces: int):

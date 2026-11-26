@@ -1,6 +1,6 @@
 """SUPERSEDED by `validity_ladder.py` -- kept only to reproduce the 5x5 six-rung numbers.
 
-⚠ Do not run this for new work. `nff/scripts/diagnostics/validity_ladder.py` is the live driver:
+⚠ Do not run this for new work. `nff_paper/analysis/validity_ladder.py` is the live driver:
 it takes `--config`, runs the four rungs the figure now draws, splits voids from overhang, and
 captures the deployment. This file is retained because it is the only record of how the 5x5
 six-rung result was produced -- in particular the soft-penalty rung ("+ hinge-gap penalty",

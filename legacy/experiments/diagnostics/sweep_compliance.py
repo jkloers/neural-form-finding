@@ -33,8 +33,8 @@ import numpy as np
 
 from nff.closed import void_geometry as VG
 from nff.closed.load_paths import deployed_nodes
-from nff.closed.one_dof import fit_one_dof
-from nff.closed.shield_kinematics import _checkerboard_signs
+from nff_paper.closed_support.one_dof import fit_one_dof
+from nff_paper.closed_support.shield_kinematics import _checkerboard_signs
 from legacy.experiments.diagnostics.sweep_localisation import (BASE_CONFIG, build_arm_config, loads_for,
                                                         solve_at)
 from nff.topology.closed_builder_jax import build_deploy_structure

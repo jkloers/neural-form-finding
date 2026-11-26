@@ -145,7 +145,7 @@ def caption_text(plane, radii):
 
 
 def main():
-    from nff.closed.design_ensemble import (build_symmetry, circle_problem, distance_matrix,
+    from nff_paper.closed_support.design_ensemble import (build_symmetry, circle_problem, distance_matrix,
                                             problem_statics, split_families)
 
     ap = argparse.ArgumentParser(description=__doc__,

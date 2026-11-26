@@ -35,14 +35,14 @@ jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp                                                  # noqa: E402
 import numpy as np                                                       # noqa: E402
 
-from nff.closed.cell_families import CellLattice, cell_lattice           # noqa: E402
-from nff.closed.effective_medium import (boundary_cells, build_cell_frame,  # noqa: E402
+from nff_paper.closed_support.cell_families import CellLattice, cell_lattice           # noqa: E402
+from nff_paper.closed_support.effective_medium import (boundary_cells, build_cell_frame,  # noqa: E402
                                          neighbour_mismatch, poisson_ratio,
                                          shape_tensor_drift, shape_tensor_parameters)
 from nff.closed.force_stats import polynomial_detrend                    # noqa: E402
 from nff.closed.setup import init_closed_les_params                      # noqa: E402
-from nff.closed.shield_kinematics import build_deploy_plan               # noqa: E402
-from nff.closed.void_geometry import build_void_index                    # noqa: E402
+from nff_paper.closed_support.shield_kinematics import build_deploy_plan               # noqa: E402
+from nff_paper.closed_support.void_geometry import build_void_index                    # noqa: E402
 from nff.config.experiment import load_and_parse_config                  # noqa: E402
 from legacy.experiments.diagnostics.cell_family_map import _sign_test, _spearman  # noqa: E402
 from nff.topology.closed_builder_jax import (boundary_flat_from_logits,  # noqa: E402
