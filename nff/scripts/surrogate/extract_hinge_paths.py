@@ -26,8 +26,9 @@ jax.config.update("jax_enable_x64", True)
 import numpy as np
 from nff.config.experiment import load_and_parse_config
 from nff.stages.pipeline import forward_pipeline
-from nff.closed.setup import build_closed_initial_state, init_closed_les_params, build_surrogate_energy
-from nff.closed.hinge_paths import (build_hinge_geometry, extract_hinge_paths, path_diagnostics,
+from nff.closed.setup import build_closed_initial_state, init_closed_les_params
+from nff.hinge import build_hinge_model
+from nff.hinge.paths import (build_hinge_geometry, extract_hinge_paths, path_diagnostics,
                                     resolve_length_scale,
                                     fit_deployment_rays, save_paths)
 from nff.models.hinge_surrogate import DOMAIN
@@ -68,7 +69,7 @@ def main():
 
     initial_state, _ = build_closed_initial_state(config)
     params, static_features = init_closed_les_params(config)
-    bond_energy, _, geometry_fn, _, w_lig_logit0 = build_surrogate_energy(
+    bond_energy, _, geometry_fn, _, w_lig_logit0 = build_hinge_model(
         config, static_features, initial_state, params)
     if w_lig_logit0 is not None:
         params = {**params, 'w_lig_logit': w_lig_logit0}
@@ -102,7 +103,7 @@ def main():
     # tension-only, theta<=37.8deg box; the PET net's is eta_a in [-0.140, +0.233], theta<=71.9deg.
     # Scoring a compressive deployment against a 0 floor reports it as wildly out-of-domain when it
     # is not, and blames theta for violations that are actually eta_a.
-    # ⚠ Only under `type: surrogate`. On the ROM branch `build_surrogate_energy` returns (None,)*5
+    # ⚠ Only under `type: surrogate`. On the ROM branch `build_hinge_model` returns (None,)*5
     # WITHOUT reading `checkpoint`, so that field is inert and routinely stale -- the ROM configs
     # still name the dead steel net. Scoring a ROM deployment against a checkpoint the run never
     # touched is exactly the kind of borrowed-constant error this whole diagnostic exists to catch.

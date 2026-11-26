@@ -17,7 +17,7 @@ until 2026-08-19, and a reader with only the two colorbars to tell them apart re
 field.
 
 The unit of column 2 is the DISJOINT unit cell -- the four panels around one void, called a 2x2
-motif by the helpers in nff/closed/force_stats.py -- and
+motif by the helpers in nff/analysis/force_stats.py -- and
 three facts fix that choice. A panel on its own carries almost no spatial signal: per-panel aspect
 ratio classifies into families at 0.89 to 1.32 times chance contiguity, because deployment
 counter-rotates neighbouring panels. Overlapping 2x2 windows share two panels with each neighbour,
@@ -81,8 +81,8 @@ from nff_paper.closed_support.cell_families import (cell_descriptors, cell_latti
                                       family_map, fit_families)
 from nff_paper.closed_support.void_geometry import build_void_index                    # noqa: E402
 from nff.topology.closed_builder_jax import build_deploy_structure       # noqa: E402
-from nff.closed.load_path_viz import COMPRESSION_FILL, draw_load_path    # noqa: E402
-from nff.closed.load_paths import load_field, solve_deployed_state       # noqa: E402
+from nff.analysis.load_path_viz import COMPRESSION_FILL, draw_load_path    # noqa: E402
+from nff.analysis.load_paths import load_field, solve_deployed_state       # noqa: E402
 from nff.stages.geometry import (compute_face_areas, deformed_vertices,  # noqa: E402
                                  reconstruct_vertices)
 from nff.utils.visualization import draw_loading_schematic, plot_tessellation  # noqa: E402

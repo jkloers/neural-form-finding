@@ -33,8 +33,8 @@ from typing import List, Optional
 
 import numpy as np
 
-from nff.closed.hinge_paths import extract_hinge_paths, build_hinge_geometry_fn
-from nff.closed.hinge_path_ensemble import resolve_length_scale
+from nff.hinge.paths import extract_hinge_paths, build_hinge_geometry_fn
+from nff.hinge.path_ensemble import resolve_length_scale
 
 
 @dataclass
@@ -268,8 +268,8 @@ def harvest_paths(config, *, n_examples: int = 64, noise: float = 0.5, seed0: in
         ``PathDataset``. A design whose solve diverges is recorded in ``.failures`` and skipped
         rather than aborting the harvest.
     """
-    from nff.closed.setup import (build_closed_initial_state, init_closed_les_params,
-                                  build_surrogate_energy)
+    from nff.closed.setup import build_closed_initial_state, init_closed_les_params
+    from nff.hinge import build_hinge_model
     from nff.stages.pipeline import forward_pipeline
     from nff.stages.geometry import deformed_vertices, reconstruct_vertices
     from nff.closed.deploy import _global_verts
@@ -294,7 +294,7 @@ def harvest_paths(config, *, n_examples: int = 64, noise: float = 0.5, seed0: in
     config.topology['init_noise'] = float(noise)
     config.topology['init_seed'] = int(seed0)
     params0, static_features = init_closed_les_params(config)
-    bond_energy, _, geometry_fn_sur, _, w_lig_logit0 = build_surrogate_energy(
+    bond_energy, _, geometry_fn_sur, _, w_lig_logit0 = build_hinge_model(
         config, static_features, ref_state, params0)
     geometry_from_design = build_hinge_geometry_fn(config, static_features, ref_state)
     length_scale = resolve_length_scale(config)

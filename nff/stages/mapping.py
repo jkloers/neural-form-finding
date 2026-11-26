@@ -9,7 +9,7 @@ Mapping engines, all pure JAX with the interface CentroidalState -> CentroidalSt
 
 2. Free vertices (apply_direct_mapping) — the ablation baseline.
    Every panel vertex is a free parameter; validity must be restored by Stage-1 alternating
-   projections. Used only by the chart ablation (nff/closed/chart_ablation.py) that measures what
+   projections. Used only by the chart ablation (nff/analysis/chart_ablation.py) that measures what
    the closed chart buys. The analytic open-pattern maps and direct_transform are archived in
    legacy/open_pipeline/mapping_with_open_maps.py; the GNN engines in legacy/gnn/.
 """

@@ -19,7 +19,7 @@ Three independent readings, none of which a net-force arrow per interface can gi
     that carry load first (Chen et al. 2016).
 
 Interfaces here are POINT hinges, so the frame is the branch vector rather than a contact plane --
-see :func:`nff.closed.load_paths.branch_frame`.
+see :func:`nff.analysis.load_paths.branch_frame`.
 """
 
 from typing import Any, Dict, Optional, Tuple
@@ -27,7 +27,7 @@ from typing import Any, Dict, Optional, Tuple
 import networkx as nx
 import numpy as np
 
-from nff.closed.load_paths import ForceField, _cross, branch_frame, interface_decomposition
+from nff.analysis.load_paths import ForceField, _cross, branch_frame, interface_decomposition
 
 _EPS = 1e-12
 

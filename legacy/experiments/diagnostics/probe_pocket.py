@@ -63,12 +63,12 @@ import numpy as np
 from nff.config.experiment import load_and_parse_config
 from nff_paper.closed_support.one_dof import decay_length, fit_one_dof, graph_distance, relative_rotations
 from nff_paper.closed_support.perturbation import perturbation_radius
-from nff.closed.force_stats import energy_split
+from nff.analysis.force_stats import energy_split
 from nff_paper.closed_support.pocket import (angular_profile, centre_face, decay_ratios, decomposition_precision,
                                energy_decomposition, load_specs, mechanism_split, pocket_shape,
                                rigid_resultants, scatter_hinge_to_tiles, scatter_load,
                                self_equilibrate, subspace_split, tile_adjacency)
-from nff.closed.load_paths import deployed_nodes
+from nff.analysis.load_paths import deployed_nodes
 from nff_paper.closed_support.shield_kinematics import _checkerboard_signs
 from legacy.experiments.diagnostics.diagnose_conditioning import _build_energy_over_free_dofs
 from legacy.experiments.diagnostics.sweep_localisation import solve_at

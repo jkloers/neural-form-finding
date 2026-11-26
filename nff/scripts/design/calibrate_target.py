@@ -41,8 +41,8 @@ jax.config.update("jax_enable_x64", True)
 import numpy as np
 
 from nff.config.experiment import load_and_parse_config
-from nff.closed.setup import (build_closed_initial_state, init_closed_les_params,
-                              build_surrogate_energy)
+from nff.closed.setup import build_closed_initial_state, init_closed_les_params
+from nff.hinge import build_hinge_model
 from nff.closed.deploy import _boundary_cloud
 from nff.stages.pipeline import forward_pipeline
 
@@ -96,7 +96,7 @@ def deploy(config, load_scale: float, n_steps: int = 12, *,
 
     # Same construction as run_closed.py and extract_hinge_paths.py. Returns (None,)*5 on the ROM
     # branch, which is exactly the spring default forward_pipeline already applies.
-    bond_energy, _, geometry_fn, _, w_lig_logit0 = build_surrogate_energy(c, sf, state, params)
+    bond_energy, _, geometry_fn, _, w_lig_logit0 = build_hinge_model(c, sf, state, params)
     if w_lig_logit0 is not None:
         params = {**params, 'w_lig_logit': w_lig_logit0}
     hinge_model_type = getattr(getattr(c, 'hinge_model', None), 'type', 'rom')

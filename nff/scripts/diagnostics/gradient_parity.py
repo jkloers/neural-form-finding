@@ -36,8 +36,8 @@ import numpy as np
 
 from nff.config.experiment import load_and_parse_config, TargetConfig
 from nff.config.targets import get_target_points
-from nff.closed.setup import (build_closed_initial_state, init_closed_les_params,
-                              build_surrogate_energy)
+from nff.closed.setup import build_closed_initial_state, init_closed_les_params
+from nff.hinge import build_hinge_model
 from nff.training.loss import compute_end_to_end_loss, TERMS
 
 
@@ -101,7 +101,7 @@ def grad_norm(cfg_path, term, weight, params_path=None, init_noise=None, init_se
 
     state, _ = build_closed_initial_state(cfg)
     params, static_features = init_closed_les_params(cfg)
-    bond_energy, probe_fn, geometry_fn, _, w_lig_logit0 = build_surrogate_energy(
+    bond_energy, probe_fn, geometry_fn, _, w_lig_logit0 = build_hinge_model(
         cfg, static_features, state, params)
     if w_lig_logit0 is not None:
         params = {**params, 'w_lig_logit': w_lig_logit0}

@@ -37,7 +37,7 @@ from math import comb
 
 import numpy as np
 
-from nff.closed.force_stats import polynomial_detrend
+from nff.analysis.force_stats import polynomial_detrend
 
 PREDICTORS = ["gain", "span_mm", "aspect", "long_mm", "short_mm"]
 

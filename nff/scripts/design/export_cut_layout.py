@@ -26,11 +26,11 @@ jax.config.update("jax_enable_x64", True)
 import numpy as np
 
 from nff.config.experiment import load_and_parse_config
-from nff.closed.cut_export import reconstruct_run_geometry
-from nff.closed.cut_layout import build_layout_schedule, write_layout_csv, verify_schedule
-from nff.closed.cut_layout_render import render_overview_a3, render_tables_a4, render_detail_a4
-from nff.topology.cut_dxf import export_cut_geometry_dxf
-from nff.topology.cut_pattern import measure_cut_geometry
+from nff.fabrication.cut_export import reconstruct_run_geometry
+from nff.fabrication.cut_layout import build_layout_schedule, write_layout_csv, verify_schedule
+from nff.fabrication.cut_layout_render import render_overview_a3, render_tables_a4, render_detail_a4
+from nff.fabrication.cut_dxf import export_cut_geometry_dxf
+from nff.fabrication.cut_pattern import measure_cut_geometry
 
 
 def _design_grip(config):

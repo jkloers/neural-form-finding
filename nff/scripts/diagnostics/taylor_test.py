@@ -43,11 +43,12 @@ import jax.numpy as jnp
 import numpy as np
 from jax.flatten_util import ravel_pytree
 
-from nff.closed.chart_ablation import (arm_extra_loss, arm_training_cfg, arm_validity_cfg,
+from nff.analysis.chart_ablation import (arm_extra_loss, arm_training_cfg, arm_validity_cfg,
                                        build_geom_loss_fn, closed_start_geometry, fixed_target,
                                        geom_shape, hinge_gap_operator, init_direct_from_closed,
                                        project_if_needed)
-from nff.closed.setup import build_surrogate_energy, init_closed_les_params
+from nff.closed.setup import init_closed_les_params
+from nff.hinge import build_hinge_model
 from nff.config.experiment import load_and_parse_config
 from nff.stages.mapping import apply_direct_mapping
 from nff.training.loss import compute_end_to_end_loss
@@ -95,7 +96,7 @@ def shipping_objective(cfg, maxiter=None, tol=None):
     cfg = physics_at(cfg, maxiter, tol)
     params0, sf = init_closed_les_params(cfg)
     state, _ = build_closed_initial_state(cfg)
-    bond_energy, probe_fn, geometry_fn, _, w_lig_logit0 = build_surrogate_energy(
+    bond_energy, probe_fn, geometry_fn, _, w_lig_logit0 = build_hinge_model(
         cfg, sf, state, params0)
     if w_lig_logit0 is not None:
         params0 = {**params0, 'w_lig_logit': w_lig_logit0}

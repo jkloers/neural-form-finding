@@ -21,7 +21,7 @@ figure-coordinate band.
 
 **The ligaments are real.** ``learn_w_lig`` makes the per-hinge ligament width a design variable, so
 the film draws the true manufacturing geometry -- kerf slots, fillets, ligament bridges -- from
-:func:`nff.closed.cut_export.build_run_cut_geometry` at each frame's own ``w_lig``. The ligaments
+:func:`nff.fabrication.cut_export.build_run_cut_geometry` at each frame's own ``w_lig``. The ligaments
 visibly thicken and thin as the optimizer trades shape against damage, which a schematic hides.
 """
 
@@ -270,9 +270,9 @@ def render_training_film(run_dir, out_mp4, *, duration=30.0, fps=60, dpi=150,
     import matplotlib.pyplot as plt
 
     from nff.config.experiment import load_and_parse_config
-    from nff.closed.setup import (build_closed_initial_state, init_closed_les_params,
-                                  build_surrogate_energy)
-    from nff.closed.cut_export import build_run_cut_geometry
+    from nff.closed.setup import build_closed_initial_state, init_closed_les_params
+    from nff.hinge import build_hinge_model
+    from nff.fabrication.cut_export import build_run_cut_geometry
     from nff_paper.closed_support.shield_render import write_mp4
     from nff.topology.closed_builder_jax import solve_cut_vertices_jax, boundary_flat_from_logits
     from nff.utils.figstyle import audit_type
@@ -286,7 +286,7 @@ def render_training_film(run_dir, out_mp4, *, duration=30.0, fps=60, dpi=150,
     config = load_and_parse_config(os.path.join(run_dir, "config.yaml"))
     initial_state, _ = build_closed_initial_state(config)
     params0, static_features = init_closed_les_params(config)
-    _, _, geometry_fn, _, w_lig_logit0 = build_surrogate_energy(
+    _, _, geometry_fn, _, w_lig_logit0 = build_hinge_model(
         config, static_features, initial_state, params0)
     struct, sliders = static_features["struct"], static_features["sliders"]
 

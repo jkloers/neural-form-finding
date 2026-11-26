@@ -39,7 +39,7 @@ from copy import deepcopy
 from shapely.geometry import Polygon, box
 from shapely.ops import unary_union
 
-from nff.closed.chart_ablation import (arm_extra_loss, arm_training_cfg, arm_validity_cfg,
+from nff.analysis.chart_ablation import (arm_extra_loss, arm_training_cfg, arm_validity_cfg,
                                        closed_start_geometry, deploy_validity, fixed_target,
                                        geom_coords, geom_shape, hinge_gap_operator,
                                        init_direct_from_closed, project_if_needed,

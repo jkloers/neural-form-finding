@@ -1,4 +1,4 @@
-"""Observed hinge displacement paths (``nff.closed.hinge_paths``).
+"""Observed hinge displacement paths (``nff.hinge.paths``).
 
 The load-bearing guarantee is that the ROM-side geometry reconstruction is EXACTLY the surrogate's
 own -- otherwise paths extracted from a ROM run would be expressed in a different cut frame than the
@@ -13,7 +13,7 @@ jax.config.update("jax_enable_x64", True)   # the exact-invariance assertions be
 import jax.numpy as jnp
 import pytest
 
-from nff.closed.hinge_paths import (build_hinge_geometry, extract_hinge_paths, straightness,
+from nff.hinge.paths import (build_hinge_geometry, extract_hinge_paths, straightness,
                                     path_diagnostics, save_paths, load_paths, HingePaths)
 
 
@@ -27,8 +27,8 @@ def surrogate_setup():
     if not os.path.exists(CFG):
         pytest.skip(f"{CFG} not present (data/ is gitignored)")
     from nff.config.experiment import load_and_parse_config
-    from nff.closed.setup import (build_closed_initial_state, init_closed_les_params,
-                                  build_surrogate_energy)
+    from nff.closed.setup import build_closed_initial_state, init_closed_les_params
+    from nff.hinge import build_hinge_model
     config = load_and_parse_config(CFG)
     # The YAML is tracked but the surrogate checkpoint it names is not, so guarding on CFG alone
     # turns a clean clone into a FileNotFoundError instead of a skip.
@@ -36,7 +36,7 @@ def surrogate_setup():
         pytest.skip(f"{config.hinge_model.checkpoint} not present (data/ is gitignored)")
     state, _ = build_closed_initial_state(config)
     params, sf = init_closed_les_params(config)
-    bond_energy, _, geometry_fn, _, w0 = build_surrogate_energy(config, sf, state, params)
+    bond_energy, _, geometry_fn, _, w0 = build_hinge_model(config, sf, state, params)
     if w0 is not None:
         params = {**params, 'w_lig_logit': w0}
     return config, state, sf, params, bond_energy, geometry_fn

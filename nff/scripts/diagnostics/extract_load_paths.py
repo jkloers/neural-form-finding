@@ -25,7 +25,7 @@ jax.config.update("jax_enable_x64", True)
 import numpy as np                                                   # noqa: E402
 
 from nff.config.experiment import load_and_parse_config              # noqa: E402
-from nff.closed.load_paths import (extract_force_field, force_budget, format_checks,  # noqa: E402
+from nff.analysis.load_paths import (extract_force_field, force_budget, format_checks,  # noqa: E402
                                    interface_decomposition, orientation_confound, save_field,
                                    solve_deployed_state)
 
@@ -85,7 +85,7 @@ def main():
 
 def _report_network(field, args):
     """The graph-level reading: chains, the interfaces most paths use, and the bottleneck."""
-    from nff.closed import force_network as fnet
+    from nff.analysis import force_network as fnet
 
     dec = interface_decomposition(field)
     summary = fnet.network_summary(field, gamma=args.gamma, seed=args.seed,

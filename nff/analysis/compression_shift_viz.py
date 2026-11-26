@@ -29,7 +29,7 @@ from matplotlib.patches import RegularPolygon                      # noqa: E402
 from matplotlib.collections import LineCollection                  # noqa: E402
 from matplotlib.lines import Line2D                                # noqa: E402
 
-from nff.closed.hinge_path_binning import (PROJECTIONS, densify, trajectories,  # noqa: E402
+from nff.hinge.path_binning import (PROJECTIONS, densify, trajectories,  # noqa: E402
                                            endpoints, n_unique_delta, ID_OFFSET, N_RESAMPLE)
 
 

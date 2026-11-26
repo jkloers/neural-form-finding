@@ -1,8 +1,8 @@
 """Statistics of a deployed sheet's load path -- what the force field looks like, as numbers.
 
-:mod:`nff.closed.load_paths` extracts the force field and :mod:`nff.closed.load_path_viz` draws it.
+:mod:`nff.analysis.load_paths` extracts the force field and :mod:`nff.analysis.load_path_viz` draws it.
 This module is the third reading: the quantities a paragraph can cite. Every function takes an
-extracted :class:`~nff.closed.load_paths.ForceField` and returns plain numbers, so a claim in the
+extracted :class:`~nff.analysis.load_paths.ForceField` and returns plain numbers, so a claim in the
 manuscript and a mark in the figure are traceable to one array.
 
 Two measurement traps are handled here rather than left to the caller, because both silently invert
@@ -21,7 +21,7 @@ import jax.numpy as jnp
 import networkx as nx
 import numpy as np
 
-from nff.closed.load_paths import ForceField, bulk_tiles, edge_modes
+from nff.analysis.load_paths import ForceField, bulk_tiles, edge_modes
 from nff.stages.physics.energy import ligament_energy, ligament_energy_linearized
 from nff.utils.linalg import face_to_node_kinematics_fn
 
@@ -83,11 +83,11 @@ def mode_boundary_shear(field: ForceField, dec, *, n_null: int = 4000,
 
     Four controls, each of which changes the answer when dropped:
 
-    * **Bulk tiles only.** :func:`~nff.closed.load_paths.virial_stress` sums internal interactions,
+    * **Bulk tiles only.** :func:`~nff.analysis.load_paths.virial_stress` sums internal interactions,
       so a clamped or loaded tile reports its reaction and not its state. Interfaces touching one
       are excluded.
-    * **Stratified by cut family.** :func:`~nff.closed.load_paths.edge_modes` is a branch-frame
-      label, and :func:`~nff.closed.load_paths.orientation_confound` measures how much of it is
+    * **Stratified by cut family.** :func:`~nff.analysis.load_paths.edge_modes` is a branch-frame
+      label, and :func:`~nff.analysis.load_paths.orientation_confound` measures how much of it is
       really hinge orientation. ``enrichment_stratified`` and ``per_family`` are the controlled
       readings, and the pooled ``enrichment`` sits beside them because the two differ. On the
       five-actuation matrix the whole excess lives in one family.
@@ -167,7 +167,7 @@ def energy_split(state, displacement, reference_bond_vectors, *, k_stretch, k_sh
                  linearized: bool = True) -> Dict[str, Any]:
     """The stored hinge energy, split into the three springs of the reference model.
 
-    ⚠ This answers a DIFFERENT question from :func:`nff.closed.load_paths.force_budget`, and the two
+    ⚠ This answers a DIFFERENT question from :func:`nff.analysis.load_paths.force_budget`, and the two
     disagree completely on this sheet. The force budget says how load crosses an interface, and it
     sums forces only. This says where the work of deployment ends up. A rotating-tile sheet stores
     almost all of it in the rotational spring while transmitting almost none of it as a couple, and
@@ -333,14 +333,14 @@ def channel_concentration(dec) -> Dict[str, Dict[str, float]]:
 def tension_routes(field: ForceField, dec, keep, *, min_run: int = 3) -> list:
     """The end-to-end spine of every strong-tension run of at least ``min_run`` tiles.
 
-    The component and spine selection are shared with :func:`nff.closed.load_path_viz.
+    The component and spine selection are shared with :func:`nff.analysis.load_path_viz.
     draw_tension_routes`, so the routes a paragraph counts and the routes the figure draws are the
     same objects. ``directness`` is the spine's arc length over the straight line between its ends:
     one means the load travels in a straight line from where it is applied to where it is resisted.
 
     Args:
         field: the extracted force field.
-        dec: its :func:`~nff.closed.load_paths.interface_decomposition`.
+        dec: its :func:`~nff.analysis.load_paths.interface_decomposition`.
         keep: (n_hinges,) bool, the hinges above the drawing threshold.
         min_run: shortest run, in tiles, that counts as a route rather than a fragment.
 

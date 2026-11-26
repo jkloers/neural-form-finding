@@ -17,7 +17,7 @@ Sign conventions, fixed once:
   * ``axial = -(t . unit(c_j - c_i))``, so **positive means TENSION** (the link resists separation).
   * ``sigma`` follows the usual continuum sign: positive normal stress is tension.
 
-Drawn by :mod:`nff.closed.load_path_viz`. Companion to :mod:`nff.closed.hinge_paths`, which reads the
+Drawn by :mod:`nff.analysis.load_path_viz`. Companion to :mod:`nff.hinge.paths`, which reads the
 same solve at the opposite scale -- what each hinge experiences, in its own cut frame.
 """
 
@@ -505,7 +505,7 @@ def extract_force_field(results, physics_cfg, *, bond_energy_fn=None, hinge_geom
         bond_energy_fn: the surrogate bond energy the solve used, or None for the ROM springs.
         hinge_geometry: the ``HingeGeometry`` threaded into the solve, or None for the ROM.
         cut_axis: (n_hinges, 2) reference cut axis in bond order, from
-            ``setup.hinge_cut_axis``. Corotated here. Omit and the branch frame is used instead.
+            ``nff.hinge.frame.hinge_cut_axis``. Corotated here. Omit and the branch frame is used instead.
         step: load step to read; -1 is the deployed final state.
         tol: relative tolerance for the exactness assertions.
 
@@ -747,8 +747,8 @@ def solve_deployed_state(config, params_path: Optional[str] = None):
     """
     import pickle
 
-    from nff.closed.setup import (build_closed_initial_state, build_surrogate_energy,
-                                  init_closed_les_params)
+    from nff.closed.setup import build_closed_initial_state, init_closed_les_params
+    from nff.hinge import build_hinge_model
     from nff.stages.pipeline import forward_pipeline
 
     state, tessellation = build_closed_initial_state(config)
@@ -756,7 +756,7 @@ def solve_deployed_state(config, params_path: Optional[str] = None):
     config.topology.setdefault('init_seed', 0)
     params, static_features = init_closed_les_params(config)
 
-    bond_energy, _, geometry_fn, _, w_lig_logit0 = build_surrogate_energy(
+    bond_energy, _, geometry_fn, _, w_lig_logit0 = build_hinge_model(
         config, static_features, state, params)
     if w_lig_logit0 is not None:
         params = {**params, 'w_lig_logit': w_lig_logit0}
@@ -771,7 +771,7 @@ def solve_deployed_state(config, params_path: Optional[str] = None):
         map_params=params, static_features=static_features, load_specs=config.topology['loads'],
         bond_energy_fn=bond_energy, hinge_geometry=hinge_geometry)
 
-    from nff.closed.setup import hinge_cut_axis
+    from nff.hinge.frame import hinge_cut_axis
     try:
         cut_axis = hinge_cut_axis(config, state, static_features, params)
     except Exception:

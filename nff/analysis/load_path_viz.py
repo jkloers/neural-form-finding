@@ -32,8 +32,8 @@ from typing import Optional
 
 import numpy as np
 
-from nff.closed.force_stats import mode_intensity, tension_routes, tile_pressure
-from nff.closed.load_paths import ForceField, edge_modes, interface_decomposition
+from nff.analysis.force_stats import mode_intensity, tension_routes, tile_pressure
+from nff.analysis.load_paths import ForceField, edge_modes, interface_decomposition
 from nff.utils.figstyle import GREY, INK, ORANGE, TEAL, apply_charter
 
 import matplotlib.pyplot as plt                                       # noqa: E402
@@ -60,7 +60,7 @@ LW_AT = 1.2            # ... this multiple of the applied load
 
 # ── The two channels ──────────────────────────────────────────────────────────────────────────
 
-# ``mode_intensity`` is imported from nff.closed.force_stats, where it now lives with the rest of
+# ``mode_intensity`` is imported from nff.analysis.force_stats, where it now lives with the rest of
 # the per-tile readings. It is re-exported here because this is where callers expect it.
 
 

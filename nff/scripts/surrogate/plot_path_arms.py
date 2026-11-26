@@ -37,7 +37,7 @@ from nff.utils.figstyle import use_agg, apply_charter, INK, GREY, ORANGE, TEAL, 
 use_agg()
 import matplotlib.pyplot as plt                                    # noqa: E402
 
-from nff.closed.hinge_paths import load_paths                      # noqa: E402
+from nff.hinge.paths import load_paths                      # noqa: E402
 from nff.scripts.surrogate.plot_path_shift import (PROJECTIONS, densify, n_unique_delta,  # noqa: E402
                                                  ID_OFFSET, GRIDSIZE, N_RESAMPLE)
 

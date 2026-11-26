@@ -35,7 +35,7 @@ from dataclasses import dataclass
 import numpy as np
 from jaxtyping import Bool, Float, Int
 
-from nff.closed.force_stats import clustered_groups, family_contiguity, motif_families
+from nff.analysis.force_stats import clustered_groups, family_contiguity, motif_families
 from nff_paper.closed_support.void_geometry import VoidIndex, void_quads, void_sides
 
 
@@ -188,7 +188,7 @@ def fit_families(sides: Float[np.ndarray, "n_cells 2"],
     to be compared before calling this: a per-sheet fit makes a family mean a different shape in
     every sheet, and the comparison stops being one.
 
-    ⚠ Do not enrich ``sides``. The measurement is in :func:`nff.closed.force_stats.motif_families`:
+    ⚠ Do not enrich ``sides``. The measurement is in :func:`nff.analysis.force_stats.motif_families`:
     appending panel-derived features makes the families measurably less coherent, because
     deployment counter-rotates neighbouring panels. ``r`` and ``L`` are safe to derive from these
     two but must not be appended to them -- they are the same two numbers.
@@ -223,7 +223,7 @@ def family_map(labels: Int[np.ndarray, "n_cells"],
     Returns:
         ``grid`` ``(R, C)`` labels, ``mask`` ``(R, C)`` bool, ``groups`` ``(family, size)`` pairs
         large first, ``contiguity`` from
-        :func:`nff.closed.force_stats.family_contiguity`, and ``n_clustered``.
+        :func:`nff.analysis.force_stats.family_contiguity`, and ``n_clustered``.
     """
     grid = np.asarray(labels, dtype=int).reshape(lattice.shape)
     mask, groups = clustered_groups(grid, min_size=min_size)

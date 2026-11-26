@@ -52,8 +52,8 @@ use_agg()
 import matplotlib.pyplot as plt                                    # noqa: E402
 from matplotlib.colors import LogNorm                               # noqa: E402
 
-from nff.closed.hinge_paths import load_paths                      # noqa: E402
-from nff.closed.hinge_path_binning import (PROJECTIONS, densify, trajectories,  # noqa: E402
+from nff.hinge.paths import load_paths                      # noqa: E402
+from nff.hinge.path_binning import (PROJECTIONS, densify, trajectories,  # noqa: E402
                                            n_unique_delta, ID_OFFSET, N_RESAMPLE)
 
 

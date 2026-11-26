@@ -8,7 +8,7 @@ Mapping engines, all pure JAX with the interface CentroidalState -> CentroidalSt
    collinearity LES into a flat closed sheet; valid by construction, so Stage 1 is bypassed.
 
 2. Analytical (apply_mapping) and direct (apply_direct_mapping, apply_direct_transform_mapping).
-   Open-pattern maps kept for the validity-ladder ablation (nff/closed/chart_ablation.py);
+   Open-pattern maps kept for the validity-ladder ablation (nff/analysis/chart_ablation.py);
    they need Stage-1 repair. The GNN engines that used to live here are in legacy/gnn/.
 """
 import jax

@@ -17,7 +17,7 @@ The output feeds back into ``sample_jobs``: ``fit_deployment_rays`` turns observ
 ``(theta1_deg, eta_a, eta_s)`` triples the oracle already understands, and ``path_diagnostics``
 reports how well that straight-ray idealization actually holds (see ``straightness``).
 
-WORKS WITHOUT A SURROGATE -- which is the point. ``build_surrogate_energy`` returns ``(None,)*5`` on
+WORKS WITHOUT A SURROGATE -- which is the point. ``build_hinge_model`` returns ``(None,)*5`` on
 the ROM branch, so a ROM run has no ``HingeGeometry`` and hence no cut frame to project onto.
 ``build_hinge_geometry`` below reconstructs it from the design alone (the three factored helpers in
 ``nff.closed.setup`` are surrogate-independent), so a plain linear-spring ROM deployment -- no
@@ -73,7 +73,7 @@ def build_hinge_geometry_fn(config, static_features, state, w_lig_mm: Optional[f
     returned closure. An ensemble that sweeps hundreds of random starts pays it once instead of
     per sample; ``build_hinge_geometry`` below is the one-shot convenience wrapper.
     """
-    from nff.closed.setup import (_flat_coords_from_design, _bond_order_perm, _alpha_sec_bond_order)
+    from nff.hinge.frame import _flat_coords_from_design, _bond_order_perm, _alpha_sec_bond_order
     from nff.topology.hinge_descriptor import build_hinge_descriptor_structure
     from nff.models.hinge_surrogate import w_lig_from_logit
 
@@ -112,9 +112,9 @@ def build_hinge_geometry(config, static_features, state, map_params,
                          w_lig_mm: Optional[float] = None) -> HingeGeometry:
     """Per-hinge ``HingeGeometry(w_lig, alpha, sec_dir)`` for the CURRENT design.
 
-    This is the ROM-compatible twin of ``setup.build_surrogate_energy``'s inner
+    This is the ROM-compatible twin of ``setup.build_hinge_model``'s inner
     ``hinge_geometry_from_design``: identical construction, but it never touches a surrogate
-    checkpoint, so it also works for ``hinge_model.type: rom`` runs (where ``build_surrogate_energy``
+    checkpoint, so it also works for ``hinge_model.type: rom`` runs (where ``build_hinge_model``
     returns ``(None,)*5``). ``tests/test_hinge_paths.py`` pins the two to agree exactly.
 
     ``w_lig`` comes from the learnable per-hinge logit when the design carries one, else from

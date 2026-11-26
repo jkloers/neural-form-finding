@@ -341,7 +341,7 @@ def _term_compression(ctx: LossContext):
     ⚠ This becomes the ONLY handle on compression once the surrogate's trust box is itself
     compressive (``eta_a_min < 0``, which a checkpoint trained on compressive rows will report),
     because the OOD barrier then sees no violation at all. Metric names mirror
-    ``nff/closed/hinge_paths.py::path_diagnostics`` so the differentiable term and the post-hoc
+    ``nff/hinge/paths.py::path_diagnostics`` so the differentiable term and the post-hoc
     NumPy diagnostic read against each other directly.
     """
     eta_a = ctx.hinge_probe['eta_a']                          # (n_steps, n_hinges)
@@ -420,7 +420,7 @@ def _term_regularization(ctx: LossContext):
 #
 # The fourth field was a bare "needs the probe" boolean, which conflated two different things: does
 # this term read the hinge probe, and does the probe in use actually supply what it reads. The ROM
-# has a KINEMATIC probe (eta_a, eta_s, theta -- see setup.build_rom_probe_fn) but no D and no ood,
+# has a KINEMATIC probe (eta_a, eta_s, theta -- see nff.hinge.rom.build_rom_probe_fn) but no D and no ood,
 # so a boolean would either enable all three terms or none. Naming the key each term needs lets
 # `compression` run under the linear-spring model while `damage` and `ood`, which are surrogate
 # predictions, disable themselves because their key is simply not there.

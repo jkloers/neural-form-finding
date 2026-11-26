@@ -27,9 +27,9 @@ import pytest
 pytestmark = pytest.mark.slow
 
 from nff.config.experiment import load_and_parse_config
-from nff.closed.setup import (build_closed_initial_state, init_closed_les_params,
-                              build_surrogate_energy)
-from nff.closed.gradcheck import directional_gradcheck, worst_relative_error, format_report
+from nff.closed.setup import build_closed_initial_state, init_closed_les_params
+from nff.hinge import build_hinge_model
+from nff.analysis.gradcheck import directional_gradcheck, worst_relative_error, format_report
 from nff.training.loss import compute_end_to_end_loss
 
 
@@ -55,7 +55,7 @@ def _loss_and_params(term, weight, backward_reg):
     cfg.topology['init_noise'] = 0.0
     cfg.topology['init_seed'] = 0
     params, static_features = init_closed_les_params(cfg)
-    bond_energy, probe_fn, geometry_fn, _, _ = build_surrogate_energy(
+    bond_energy, probe_fn, geometry_fn, _, _ = build_hinge_model(
         cfg, static_features, state, params)
 
     def loss_fn(p):

@@ -107,7 +107,7 @@ def _plot_shapely(ax, geom, **kw):
 def render_precise_cut_pattern(geom, filepath=None, title=None, paper="#F58025", ink="#1A1A1A",
                                accent="#2A9D8F"):
     """Render the PRECISE laser-cuttable cut pattern (kerf slots + fillets + ligaments) built by
-    ``nff.topology.cut_pattern.build_cut_geometry`` (mm), with a dimensioned zoom on one hinge.
+    ``nff.fabrication.cut_pattern.build_cut_geometry`` (mm), with a dimensioned zoom on one hinge.
 
     The full sheet shows the actual cut-out part (slits are true kerf-width gaps, hinges are the
     real ``w_lig`` ligament bridges); the inset shows a single hinge's fillet / ligament / kerf.

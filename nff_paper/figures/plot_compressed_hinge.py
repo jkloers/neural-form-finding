@@ -85,12 +85,12 @@ from matplotlib.patches import Patch                               # noqa: E402
 from shapely.geometry import Point as SPoint, Polygon as SPoly     # noqa: E402
 from shapely.ops import unary_union                                # noqa: E402
 
-from nff.closed.hinge_paths import load_paths                      # noqa: E402
-from nff.closed.load_paths import load_field, interface_decomposition  # noqa: E402
-from nff.closed.load_path_viz import (draw_load_path, zone_colours, MODE_COLOUR,  # noqa: E402
+from nff.hinge.paths import load_paths                      # noqa: E402
+from nff.analysis.load_paths import load_field, interface_decomposition  # noqa: E402
+from nff.analysis.load_path_viz import (draw_load_path, zone_colours, MODE_COLOUR,  # noqa: E402
                                       CLAMP_FILL, draw_hinge_marks,
                                       draw_supports_and_loads_safe, _fit_axes)
-from nff.closed.hinge_path_binning import PROJECTIONS, densify, trajectories  # noqa: E402
+from nff.hinge.path_binning import PROJECTIONS, densify, trajectories  # noqa: E402
 from nff.models.hinge_surrogate import (load_hinge_surrogate, apply_hinge_failure,  # noqa: E402
                                         _geom_vector)
 

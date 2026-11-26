@@ -40,8 +40,8 @@ from collections import defaultdict
 import numpy as np
 
 from nff_paper.closed_support.cell_families import cell_lattice
-from nff.closed.force_stats import tension_routes
-from nff.closed.load_paths import interface_decomposition, load_field
+from nff.analysis.force_stats import tension_routes
+from nff.analysis.load_paths import interface_decomposition, load_field
 from nff_paper.closed_support.void_geometry import build_void_index
 from nff.config.experiment import load_and_parse_config
 from nff.topology.closed_builder_jax import build_deploy_structure

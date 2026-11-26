@@ -1,4 +1,4 @@
-"""The ROM's kinematic hinge probe (``nff.closed.setup.build_rom_probe_fn``).
+"""The ROM's kinematic hinge probe (``nff.closed.nff.hinge.rom.build_rom_probe_fn``).
 
 Axial compression is not a surrogate prediction: ``eta_a = a / w_lig`` is read off the corotated
 local hinge frame, so it is available to the linear-spring model too. Before this probe existed the
@@ -18,9 +18,9 @@ jax.config.update("jax_enable_x64", True)   # the exact-agreement assertions bel
 import pytest
 
 from nff.config.experiment import load_and_parse_config
-from nff.closed.setup import (build_closed_initial_state, init_closed_les_params,
-                              build_surrogate_energy)
-from nff.closed.hinge_paths import build_hinge_geometry, extract_hinge_paths, resolve_length_scale
+from nff.closed.setup import build_closed_initial_state, init_closed_les_params
+from nff.hinge import build_hinge_model
+from nff.hinge.paths import build_hinge_geometry, extract_hinge_paths, resolve_length_scale
 from nff.stages.pipeline import forward_pipeline
 
 
@@ -35,7 +35,7 @@ def _deploy(compression):
     c.topology['init_noise'] = 0.0
     c.topology['init_seed'] = 0
     params, static_features = init_closed_les_params(c)
-    bond_energy, probe_fn, geometry_fn, _, _ = build_surrogate_energy(c, static_features, state, params)
+    bond_energy, probe_fn, geometry_fn, _, _ = build_hinge_model(c, static_features, state, params)
     results = forward_pipeline(
         state, c.target, c.validity, c.physics, map_type=c.mapping.type, map_params=params,
         static_features=static_features, load_specs=c.topology['loads'],
@@ -111,4 +111,4 @@ def test_surrogate_only_weights_raise_under_the_rom():
     state, _ = build_closed_initial_state(c)
     params, static_features = init_closed_les_params(c)
     with pytest.raises(ValueError, match="damage"):
-        build_surrogate_energy(c, static_features, state, params)
+        build_hinge_model(c, static_features, state, params)

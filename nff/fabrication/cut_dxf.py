@@ -1,6 +1,6 @@
 """DXF export of the flat kirigami cut pattern — true 1:1, units = mm, for laser cutting.
 
-Consumes the SAME Shapely objects as the PNG / A4 renderers (:func:`nff.topology.cut_pattern.
+Consumes the SAME Shapely objects as the PNG / A4 renderers (:func:`nff.fabrication.cut_pattern.
 build_cut_geometry`), so the DXF is a vector twin of the printed pattern: what we cut == what we
 simulated. Two toolpath conventions:
 
@@ -23,7 +23,7 @@ Pure geometry + ezdxf — no ``nff`` runtime dependencies beyond the sibling ``c
 import numpy as np
 import ezdxf
 
-from nff.topology.cut_pattern import cut_sheet
+from nff.fabrication.cut_pattern import cut_sheet
 
 
 def _iter_polygons(geom):
@@ -73,7 +73,7 @@ def export_cut_geometry_dxf(geom, out_path, *, mode="outline", cut_layer="CUT",
     """Write the flat cut pattern to a 1:1 DXF (units = mm).
 
     Args:
-        geom: output of :func:`nff.topology.cut_pattern.build_cut_geometry` (mm).
+        geom: output of :func:`nff.fabrication.cut_pattern.build_cut_geometry` (mm).
         out_path: destination ``.dxf`` path.
         mode: ``"outline"`` (faithful slot/fillet loops) or ``"centerline"`` (thin-kerf lines +
             relief circles).

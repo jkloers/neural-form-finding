@@ -126,7 +126,7 @@ compressive over 47.4% of path samples.
 ### 2.2 Leads, roughly in order of expected value
 
 1. **Re-aim the FEA campaign at the ridden manifold.** This is the main lead. The tooling to measure
-   the manifold already exists (`nff/closed/hinge_paths.py`, `hinge_path_ensemble.py`,
+   the manifold already exists (`nff/hinge/paths.py`, `hinge_path_ensemble.py`,
    `sampling_spec()` emits `sample_jobs` kwargs verbatim). ⚠ `memory/project_path_harvest_dataset.md`
    says the harvested priors are **STALE** (harvested at the wrong contact angle) — re-harvest first.
    The specific gap is **compressive `eta_a`**, which `dataset.py::sample_jobs` does not sample.

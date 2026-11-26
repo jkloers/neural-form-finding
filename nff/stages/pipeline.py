@@ -133,7 +133,7 @@ def _execute_stage0_mapping(
         # Stage 1 is bypassed (validity_method: none); Stage 2 deploys via physics.
         mapped_state = apply_closed_les_mapping(initial_state, map_params, static_features)
     elif map_type == 'direct_vertices':
-        # Free-vertex ablation baseline (nff/closed/chart_ablation.py); needs Stage-1 projection.
+        # Free-vertex ablation baseline (nff/analysis/chart_ablation.py); needs Stage-1 projection.
         mapped_state = apply_direct_mapping(initial_state, map_params)
     else:
         raise ValueError(

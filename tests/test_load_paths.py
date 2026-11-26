@@ -15,11 +15,11 @@ jax.config.update("jax_enable_x64", True)
 
 import jax.numpy as jnp  # noqa: E402
 
-from nff.closed.load_paths import (ForceField, _gini, branch_frame, corotate_axis,  # noqa: E402
+from nff.analysis.load_paths import (ForceField, _gini, branch_frame, corotate_axis,  # noqa: E402
                                    deployed_nodes, edge_modes, interface_decomposition,
                                    ligament_pair_forces, orientation_confound,
                                    polygon_areas, resolve_frame, virial_stress)
-from nff.closed.load_path_viz import (chaikin, mode_intensity,  # noqa: E402
+from nff.analysis.load_path_viz import (chaikin, mode_intensity,  # noqa: E402
                                       shear_planes, zone_colours)
 from nff.stages.physics.energy import ligament_energy_linearized  # noqa: E402
 

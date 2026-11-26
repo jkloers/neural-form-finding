@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import jax                                                            # noqa: E402
 jax.config.update("jax_enable_x64", True)
 
-from nff.closed.force_stats import (bipartite_parity, channel_concentration,  # noqa: E402
+from nff.analysis.force_stats import (bipartite_parity, channel_concentration,  # noqa: E402
                                     checkerboard_amplitude, cut_family_split,
                                     elongation_alternation, energy_split, lattice_autocorrelation,
                                     mode_boundary_shear, neighbour_correlation, polynomial_detrend,
@@ -20,7 +20,7 @@ from nff.closed.force_stats import (bipartite_parity, channel_concentration,  # 
                                     clustered_groups, family_contiguity,
                                     motif_families, patch_labels, tile_pressure,
                                     tile_shape)
-from nff.closed.load_paths import ForceField, interface_decomposition, virial_stress  # noqa: E402
+from nff.analysis.load_paths import ForceField, interface_decomposition, virial_stress  # noqa: E402
 
 
 # ── fixtures ──────────────────────────────────────────────────────────────────

@@ -101,7 +101,7 @@ def panel_c_gap(ax, p0):
 
 def panel_d_scaling(ax):
     """Analytic dimension scaling -- free, no physics."""
-    from nff.closed.chart_ablation import chart_dims
+    from nff.analysis.chart_ablation import chart_dims
     grids = [(m, m) for m in (3, 4, 5, 6, 8, 10, 14, 20)]
     d = [chart_dims(m, n) for m, n in grids]
     x = [m for m, _ in grids]

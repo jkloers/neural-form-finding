@@ -30,7 +30,7 @@ def build_grid_figure(ds, out_png: str, side=None, *, order: str = "aspect",
     """Draw a ``side x side`` contact sheet of deployed tessellations.
 
     Args:
-        ds: a ``PathDataset`` from ``nff.closed.path_dataset``.
+        ds: a ``PathDataset`` from ``nff.hinge.path_dataset``.
         out_png: output path.
         side: grid side length; ``None`` -> the largest square that fits the harvest.
         order: 'aspect' (deployed height/width), 'theta' (max hinge rotation) or 'seed'.
@@ -90,7 +90,7 @@ def build_grid_figure(ds, out_png: str, side=None, *, order: str = "aspect",
 
 def main():
     import argparse
-    from nff.closed.path_dataset import load_dataset
+    from nff.hinge.path_dataset import load_dataset
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--dataset", required=True, help="a harvest directory (holds paths.npz)")

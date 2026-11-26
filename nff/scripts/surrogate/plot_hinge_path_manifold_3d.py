@@ -81,7 +81,7 @@ def _draw_boxes(ax, cur, new, lims):
 def build_manifold_3d_figure(ens, out_png: str, label: str = "", max_points: int = 14000,
                              n_traj_designs: int = 4, seed: int = 0) -> str:
     """Render the four-panel 3D view of the ridden manifold for a ``PathEnsemble``."""
-    from nff.closed.hinge_path_ensemble import ensemble_statistics, sampling_spec
+    from nff.hinge.path_ensemble import ensemble_statistics, sampling_spec
 
     st = ensemble_statistics(ens)
     spec = sampling_spec(ens)['sample_jobs_kwargs']
@@ -156,7 +156,7 @@ def build_spin_gif(ens, out_gif: str, n_frames: int = 60, max_points: int = 9000
                    seed: int = 0) -> str:
     """A rotating single-panel view. The sheet's curvature is only really readable in motion."""
     from matplotlib.animation import FuncAnimation, PillowWriter
-    from nff.closed.hinge_path_ensemble import sampling_spec
+    from nff.hinge.path_ensemble import sampling_spec
 
     spec = sampling_spec(ens)['sample_jobs_kwargs']
     P = ens.all_points()
@@ -201,7 +201,7 @@ def main():
     p.add_argument("--max-points", type=int, default=14000)
     args = p.parse_args()
 
-    from nff.closed.hinge_path_ensemble import load_ensemble
+    from nff.hinge.path_ensemble import load_ensemble
     ens = load_ensemble(args.ensemble)
     out = args.out or os.path.join(args.ensemble, "manifold_3d.png")
     print(f"  wrote {build_manifold_3d_figure(ens, out, label=os.path.basename(args.ensemble), max_points=args.max_points)}")

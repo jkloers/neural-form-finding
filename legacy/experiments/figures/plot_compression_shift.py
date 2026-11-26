@@ -14,8 +14,8 @@ import os
 
 import numpy as np
 
-from nff.closed.hinge_paths import load_paths
-from nff.closed.compression_shift_viz import (build_figure, GRIDSIZE, GRIDSIZE_ENDPOINTS,
+from nff.hinge.paths import load_paths
+from nff.analysis.compression_shift_viz import (build_figure, GRIDSIZE, GRIDSIZE_ENDPOINTS,
                                               N_RESAMPLE)
 
 

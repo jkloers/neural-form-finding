@@ -36,7 +36,7 @@ jax.config.update("jax_enable_x64", True)
 
 import numpy as np                                                          # noqa: E402
 
-from nff.closed.hinge_paths import resolve_length_scale                     # noqa: E402
+from nff.hinge.paths import resolve_length_scale                     # noqa: E402
 from nff.closed.setup import init_closed_les_params                         # noqa: E402
 from nff_paper.closed_support.shield_design import ShieldDesignConfig, init_params, optimize_shield  # noqa: E402
 from nff_paper.closed_support.shield_kinematics import build_deploy_plan, pin_residual    # noqa: E402

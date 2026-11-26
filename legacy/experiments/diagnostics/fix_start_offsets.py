@@ -18,8 +18,8 @@ jax.config.update("jax_enable_x64", True)
 import numpy as np
 
 from nff.config.experiment import load_and_parse_config
-from nff.closed.chart_ablation import (closed_start_geometry, geom_shape, rms_displacement)
-from nff.closed.hinge_path_ensemble import resolve_length_scale
+from nff.analysis.chart_ablation import (closed_start_geometry, geom_shape, rms_displacement)
+from nff.hinge.path_ensemble import resolve_length_scale
 
 START_OFFSET_COL = 6      # see ensemble_charts.py 'cols'
 

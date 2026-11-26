@@ -32,7 +32,7 @@ jax.config.update("jax_enable_x64", True)
 import numpy as np
 
 from nff.closed import void_geometry as VG
-from nff.closed.load_paths import deployed_nodes
+from nff.analysis.load_paths import deployed_nodes
 from nff_paper.closed_support.one_dof import fit_one_dof
 from nff_paper.closed_support.shield_kinematics import _checkerboard_signs
 from legacy.experiments.diagnostics.sweep_localisation import (BASE_CONFIG, build_arm_config, loads_for,

@@ -39,7 +39,7 @@ from nff_paper.closed_support.cell_families import CellLattice, cell_lattice    
 from nff_paper.closed_support.effective_medium import (boundary_cells, build_cell_frame,  # noqa: E402
                                          neighbour_mismatch, poisson_ratio,
                                          shape_tensor_drift, shape_tensor_parameters)
-from nff.closed.force_stats import polynomial_detrend                    # noqa: E402
+from nff.analysis.force_stats import polynomial_detrend                    # noqa: E402
 from nff.closed.setup import init_closed_les_params                      # noqa: E402
 from nff_paper.closed_support.shield_kinematics import build_deploy_plan               # noqa: E402
 from nff_paper.closed_support.void_geometry import build_void_index                    # noqa: E402

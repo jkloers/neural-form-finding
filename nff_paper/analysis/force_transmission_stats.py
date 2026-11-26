@@ -4,7 +4,7 @@ Reads the ``load_path.npz`` already written into each run directory, so nothing 
 the statistics describe exactly the force field the figure draws. A run without one is skipped and
 named.
 
-Every quantity printed here is defined in :mod:`nff.closed.force_stats`. Two are easy to get
+Every quantity printed here is defined in :mod:`nff.analysis.force_stats`. Two are easy to get
 backwards and both are computed the safe way there: the checkerboard amplitude is measured on the
 DETRENDED tile field, and the cut-field autocorrelation is reported for a sub-block as well as the
 whole lattice.
@@ -27,13 +27,13 @@ jax.config.update("jax_enable_x64", True)   # before any solve; float32 shifts t
 
 import numpy as np                                                   # noqa: E402
 
-from nff.closed.force_stats import (channel_concentration, checkerboard_amplitude,
+from nff.analysis.force_stats import (channel_concentration, checkerboard_amplitude,
                                     cut_family_split, elongation_alternation, energy_split,
                                     force_clustering, lattice_autocorrelation, mode_boundary_shear,
                                     mode_intensity, pressure_profile, region_mask,
                                     rotation_departure, route_directness, support_band_pressure,
                                     tile_pressure, tile_shape)
-from nff.closed.load_paths import interface_decomposition, load_field
+from nff.analysis.load_paths import interface_decomposition, load_field
 
 
 def _energy_split(run_dir, field):
@@ -44,7 +44,7 @@ def _energy_split(run_dir, field):
     config or parameters have moved on.
     """
     from nff.config.experiment import load_and_parse_config
-    from nff.closed.load_paths import solve_deployed_state
+    from nff.analysis.load_paths import solve_deployed_state
 
     config_path = os.path.join(run_dir, "config.yaml")
     config = load_and_parse_config(config_path)

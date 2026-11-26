@@ -25,7 +25,7 @@ jax.config.update("jax_enable_x64", True)
 import numpy as np                                                   # noqa: E402
 
 from nff.config.experiment import load_and_parse_config              # noqa: E402
-from nff.closed.load_paths import deployed_nodes, solve_deployed_state  # noqa: E402
+from nff.analysis.load_paths import deployed_nodes, solve_deployed_state  # noqa: E402
 
 # Past this multiple of the design load the sheet stops opening its hinges and starts shearing the
 # ligaments, several times outside the surrogate's trained shear range. Measured, not assumed.
@@ -107,7 +107,7 @@ def domain_guard(results, state, hinge_geometry, config, length_scale):
     if hinge_geometry is None:
         return {"available": False, "reason": "no surrogate hinge geometry (ROM springs)"}
     try:
-        from nff.closed.hinge_paths import extract_hinge_paths, path_diagnostics
+        from nff.hinge.paths import extract_hinge_paths, path_diagnostics
         from nff.models.hinge_surrogate import DOMAIN, load_hinge_surrogate
         hm = config.hinge_model
         _, stats, _ = load_hinge_surrogate(hm.checkpoint)
@@ -280,7 +280,7 @@ def main():
               f"{r['u_pull_mm']:9.1f} {r['grip_sep_mm']:9.1f}")
 
     if args.with_forces:
-        from nff.closed.load_paths import extract_force_field, save_field
+        from nff.analysis.load_paths import extract_force_field, save_field
         print("\n  --with-forces: FINAL step only; intermediate steps carry a wrong load scale.")
         field = extract_force_field(results, config.physics, bond_energy_fn=bond_energy,
                                     hinge_geometry=hinge_geometry, cut_axis=cut_axis)
