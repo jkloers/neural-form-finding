@@ -4,7 +4,7 @@ The restructure (core `nff/`, article `nff_paper/`, archive `legacy/`) is done; 
 `docs/cleanup_log.md`. These sessions finish the job. Each runs without the author except where
 marked **(needs the author)**.
 
-## Session 2 — prune `data/` (needs the author: one yes)
+## Session 2 — prune `data/` — DONE 2026-11-27 (author said yes; 128 runs, 475 MB deleted)
 
 `data/` is gitignored (about 3.9 GB), so nothing in it has a git safety net.
 

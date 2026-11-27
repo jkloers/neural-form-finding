@@ -59,8 +59,8 @@ def geom_shape(state) -> tuple:
 def init_direct_from_closed(config, seed=None):
     """Free-vertex design parameters seeded from the closed chart's own starting geometry.
 
-    Deliberately NOT ``init_direct_vertices_params``, which recenters and rescales the sheet
-    to ``target.radius`` and would change its physical size. Pushing the closed init through
+    Deliberately NOT a recentring init (the archived ``init_direct_vertices_params`` rescaled the
+    sheet to ``target.radius`` and so changed its physical size). Pushing the closed init through
     the closed chart instead means every arm starts at bit-identical geometry for a given
     seed, so the arms differ only in what the optimizer may move -- and arms B/C receive a
     valid start they could not have found themselves, which is conservative in their favour.

@@ -125,48 +125,6 @@ def build_reference_bond_vectors(valid_state, hinge_axial_dirs=None, l0_nom=1e-4
     return jnp.where(sq_norms < min_len ** 2, fallback, bond)
 
 
-def hinge_adj_vertex_positions(face_centroids, cnv, hinge_adj_info):
-    """Compute pivot and adjacent vertex positions for non-intersection checks.
-
-    Args:
-        face_centroids: (n_faces, 2)
-        cnv: (n_faces, max_nodes, 2)
-        hinge_adj_info: (n_hinges, 5) — [face_i, face_k, pivot_local_i, adj_local_i, adj_local_k]
-
-    Returns:
-        pivot: (n_hinges, 2) — pivot vertex position (from face_i)
-        p_adj1: (n_hinges, 2) — adjacent vertex in face_i
-        p_adj2: (n_hinges, 2) — adjacent vertex in face_k
-    """
-    fi = hinge_adj_info[:, 0]
-    fk = hinge_adj_info[:, 1]
-    pivot_li = hinge_adj_info[:, 2]
-    adj_li = hinge_adj_info[:, 3]
-    adj_lk = hinge_adj_info[:, 4]
-
-    pivot = face_centroids[fi] + cnv[fi, pivot_li]
-    p_adj1 = face_centroids[fi] + cnv[fi, adj_li]
-    p_adj2 = face_centroids[fk] + cnv[fk, adj_lk]
-
-    return pivot, p_adj1, p_adj2
-
-
-def boundary_vertex_positions(face_centroids, cnv, boundary_face_node_ids):
-    """Compute positions of boundary vertices.
-
-    Args:
-        face_centroids: (n_faces, 2)
-        cnv: (n_faces, max_nodes, 2)
-        boundary_face_node_ids: (n_boundary, 2) — [face_id, local_node_id]
-
-    Returns:
-        (n_boundary, 2) — absolute positions of boundary vertices
-    """
-    fi = boundary_face_node_ids[:, 0]
-    lj = boundary_face_node_ids[:, 1]
-    return face_centroids[fi] + cnv[fi, lj]
-
-
 def compute_polygon_area(vertices):
     """Compute the area of a 2D polygon using the Shoelace formula.
     

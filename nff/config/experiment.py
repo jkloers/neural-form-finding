@@ -528,57 +528,6 @@ def _parse_visualization_config(vis_raw: dict) -> VisualizationConfig:
 
 # ── Public entry points ───────────────────────────────────────────────────────
 
-def load_arch_config(arch_path: str) -> dict:
-    """Load an architecture YAML (no BCs/loads/physics/material) as a raw dict."""
-    with open(arch_path) as f:
-        return yaml.safe_load(f)
-
-
-def load_problem_suite(suite_path: str) -> list[dict]:
-    """Load a problem suite YAML and return a list of fully-resolved problem dicts.
-
-    Each returned dict is ready to be merged with an arch dict via merge_arch_problem().
-    physics and material keys are resolved from per-problem overrides + suite defaults.
-    """
-    with open(suite_path) as f:
-        raw = yaml.safe_load(f)
-
-    physics_defaults = raw.get('physics_defaults', {})
-    material_defaults = raw.get('material_defaults', {})
-
-    problems = []
-    for p in raw.get('problems', []):
-        resolved = dict(p)
-        resolved['physics'] = {**physics_defaults, **p.get('physics', {})}
-        resolved['material'] = {**material_defaults, **p.get('material', {})}
-        problems.append(resolved)
-    return problems
-
-
-def merge_arch_problem(arch_raw: dict, problem: dict) -> dict:
-    """Merge an architecture dict and a resolved problem dict into a single raw dict.
-
-    The problem supplies: boundary_conditions, loads, physics, material.
-    The arch supplies everything else (tessellation, mapping, training, etc.).
-    Problem keys always win on overlap.
-    """
-    merged = dict(arch_raw)
-    merged['boundary_conditions'] = problem.get('boundary_conditions', {})
-    merged['loads'] = problem.get('loads', [])
-    merged['displacement_control'] = problem.get('displacement_control', [])
-    merged['physics'] = problem.get('physics', {})
-    merged['material'] = problem.get('material', {})
-    return merged
-
-
-def load_combined_config(arch_path: str, problem: dict) -> 'ExperimentConfig':
-    """Build an ExperimentConfig from an architecture file + a resolved problem dict."""
-    arch_raw = load_arch_config(arch_path)
-    merged = merge_arch_problem(arch_raw, problem)
-    config_dir = os.path.dirname(arch_path)
-    return _parse_full_raw(merged, config_dir)
-
-
 def _parse_full_raw(raw: dict, config_dir: str) -> 'ExperimentConfig':
     """Parse a fully-merged raw dict into an ExperimentConfig."""
     topo_raw = raw.get("tessellation", {})
